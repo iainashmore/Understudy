@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "abstraction-harness"
 version = "0.1.0"
-description = "Harness for measuring at which level of abstraction an AI agent can complete a task"
+description = "Abstraction-layer harness and the prompt flow recorder/runner"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -15,20 +15,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Authoring-only: rasterizes the harness's golden references. Deliberately a
+# different rasterizer from any environment's, so no layer shares a code path
+# with the reference it is scored against.
+authoring = ["cairosvg>=2.7"]
+dev = ["pytest>=8"]
 web = ["playwright>=1.40"]
 agent = ["anthropic>=1.0"]
 ocr = ["pytesseract>=0.3"]
 
-[project.optional-dependencies]
-# Authoring-only: rasterizes golden references. Deliberately a different
-# rasterizer from any environment's, so no layer shares a code path with the
-# reference it is scored against.
-authoring = ["cairosvg>=2.7"]
-dev = ["pytest>=8"]
-
 [tool.setuptools]
-packages = ["harness", "harness.agents", "harness.environments",
-            "flowrunner", "flowrunner.drivers"]
+packages = [
+    "harness", "harness.agents", "harness.environments",
+    "flowrunner", "flowrunner.drivers", "flowrunner.ui",
+]
+
+[tool.setuptools.package-data]
+"flowrunner" = ["schema/*.json"]
+"flowrunner.ui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

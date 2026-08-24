@@ -15,6 +15,7 @@ from pathlib import Path
 from flowrunner.drivers import build as build_driver
 from flowrunner.flow import FlowError, load_flow
 from flowrunner.prompts import PromptsError, load_prompts
+from flowrunner.report import write_report
 from flowrunner.resolvers import build as build_resolver, credentials_available
 from flowrunner.runner import Runner, Status, run_directory, write_csv
 
@@ -35,6 +36,32 @@ def command_validate(args) -> int:
     print(f"prompts   {len(prompts)} variant(s): "
           f"{', '.join(v.id for v in prompts)}")
     print(f"backend   {args.backend}: ok")
+    return 0
+
+
+def command_ui(args) -> int:
+    from flowrunner.ui import serve
+
+    server = serve(args.workspace, args.host, args.port)
+    url = f"http://{args.host}:{args.port}/"
+    print(f"FlowRunner UI on {url}  (workspace: {Path(args.workspace).resolve()})")
+    print("Ctrl-C to stop.")
+    if not args.no_open:
+        import webbrowser
+
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopping")
+    finally:
+        server.shutdown()
+    return 0
+
+
+def command_report(args) -> int:
+    path = write_report(args.run_dir, embed=args.embed_report)
+    print(f"report -> {path}")
     return 0
 
 
@@ -89,6 +116,8 @@ def command_run(args) -> int:
 
     if args.csv:
         print(f"csv -> {write_csv(results, out_dir / 'results.csv')}")
+    if not args.no_report:
+        print(f"report -> {write_report(out_dir, embed=args.embed_report)}")
     failed = [r for r in results if r.status is not Status.OK]
     print(f"\n{len(results) - len(failed)}/{len(results)} ok -> {runner.results_path}")
     return 1 if failed and args.strict else 0
@@ -97,6 +126,18 @@ def command_run(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="flowrunner", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    ui = sub.add_parser("ui", help="open the local authoring and replay UI")
+    ui.add_argument("--workspace", default=".", help="folder the UI may read and write")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--no-open", action="store_true")
+    ui.set_defaults(handler=command_ui)
+
+    report = sub.add_parser("report", help="rebuild the report for a past run")
+    report.add_argument("run_dir")
+    report.add_argument("--embed-report", action="store_true")
+    report.set_defaults(handler=command_report)
 
     for name, handler in (("run", command_run), ("validate", command_validate)):
         child = sub.add_parser(name)
@@ -120,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
                      "everything else fails. only: let the model resolve "
                      "everything (no deterministic strategies).",
             )
+            child.add_argument("--no-report", action="store_true",
+                               help="skip the markdown report")
+            child.add_argument("--embed-report", action="store_true",
+                               help="inline screenshots as data URIs, so the "
+                                    "report travels as a single file")
             child.add_argument(
                 "--learned-dir", default=None,
                 help="where anchors the agent finds are cached "

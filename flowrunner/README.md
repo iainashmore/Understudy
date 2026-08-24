@@ -24,10 +24,47 @@ erroring, a cookie banner, and a confirm dialog rendered either inline or
 portalled to `<body>`.
 
 ```bash
+python3 -m flowrunner.cli ui                     # the authoring and replay UI
 python3 -m flowrunner.cli validate examples/fixture_chat.yaml examples/prompts.yaml
 python3 -m flowrunner.cli run      examples/fixture_chat.yaml examples/prompts.yaml --csv
 python3 -m flowrunner.cli run flow.yaml prompts.csv --only baseline,terse --repeat 3
+python3 -m flowrunner.cli report   runs/2026-08-24T14-32-00
 ```
+
+## The UI
+
+`flowrunner ui --workspace <folder>` serves a local page on 127.0.0.1 that
+covers the working loop: open a flow and a prompts file, edit either by hand,
+save or save-as, validate, replay with live progress, read the output with the
+screenshots inline, and view the report.
+
+Built on the standard library — no web framework. This has to run on the machine
+that has CATIA on it, which is not necessarily a machine where installing things
+is quick or permitted.
+
+The workspace folder is the boundary: the UI will not read or write outside it,
+and run output under `runs/` is never offered as a source file. Runs execute on
+a worker thread and stream progress as server-sent events, so a fifty-variant
+sweep is not a blank screen.
+
+**Recording is the one part not wired up.** Which recorder to build — a picker
+injected over CDP, or Win32 hooks plus a UIAutomation lookup, or cropping
+anchors from screenshots — is decided by what `tools/probe_native.py` reports
+against the real application. The Record tab says so rather than pretending
+otherwise.
+
+## Reports
+
+Every run writes `report.md` beside its screenshots: what was run, a summary
+table, prompts against responses for scanning, then a section per variant with
+the prompt, the response (or the response *pixels* where there was no text), the
+screenshots inline, and a collapsible step table showing how each target
+resolved.
+
+Paths are relative, so the run folder can be zipped, committed or attached and
+still renders. `--embed-report` inlines the images as data URIs when it has to
+travel as a single file. `flowrunner report <run_dir>` rebuilds one for a past
+run.
 
 ## Driving an embedded web view (WebView2 / CEF)
 

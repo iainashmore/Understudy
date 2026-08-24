@@ -1,0 +1,375 @@
+"""A local web UI for authoring, running and reviewing flows.
+
+Deliberately built on the standard library. This has to run on the machine that
+has CATIA on it, which is not a machine where installing a web framework is
+necessarily quick or permitted, and the UI is a handful of endpoints.
+
+Everything it does is something the CLI already does -- it opens, edits, saves,
+validates, replays and reports. The UI exists because a YAML file with pixel
+regions and anchor paths is not something anyone wants to edit blind, and
+because the person changing the prompts is not necessarily the person who wrote
+the flow.
+"""
+
+from __future__ import annotations
+
+import json
+import queue
+import threading
+import traceback
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
+
+from flowrunner.drivers import build as build_driver
+from flowrunner.flow import FlowError, load_flow
+from flowrunner.prompts import PromptsError, load_prompts
+from flowrunner.report import write_report
+from flowrunner.resolvers import build as build_resolver
+from flowrunner.runner import Runner, Status, run_directory, write_csv
+
+STATIC = Path(__file__).resolve().parent / "static"
+FLOW_SUFFIXES = (".yaml", ".yml")
+PROMPT_SUFFIXES = (".yaml", ".yml", ".csv")
+
+
+class WorkspaceError(ValueError):
+    """A path outside the workspace, or one that does not exist."""
+
+
+@dataclass
+class RunJob:
+    """One replay, executing on a worker thread."""
+
+    id: str
+    flow_path: str
+    prompts_path: str
+    out_dir: Path
+    events: queue.Queue = field(default_factory=queue.Queue)
+    status: str = "starting"
+    results: list[dict[str, Any]] = field(default_factory=list)
+    report: str | None = None
+    error: str | None = None
+
+    def emit(self, kind: str, **payload: Any) -> None:
+        self.events.put({"type": kind, **payload})
+
+
+class Workspace:
+    """Everything the UI may read or write, and nothing else."""
+
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root).resolve()
+        self.runs_root = self.root / "runs"
+
+    def resolve(self, relative: str) -> Path:
+        candidate = (self.root / relative).resolve()
+        # A UI that will be pointed at a work machine has no business reading
+        # outside the folder it was given.
+        if candidate != self.root and self.root not in candidate.parents:
+            raise WorkspaceError(f"path outside the workspace: {relative}")
+        return candidate
+
+    def relative(self, path: Path) -> str:
+        return str(Path(path).resolve().relative_to(self.root)).replace("\\", "/")
+
+    def listing(self) -> dict[str, list[str]]:
+        def find(suffixes: tuple[str, ...]) -> list[str]:
+            found = [
+                self.relative(path)
+                for path in sorted(self.root.rglob("*"))
+                if path.is_file()
+                and path.suffix.lower() in suffixes
+                and "runs" not in path.relative_to(self.root).parts
+            ]
+            return found
+
+        return {
+            "flows": [p for p in find(FLOW_SUFFIXES) if self._looks_like_flow(p)],
+            "prompts": [p for p in find(PROMPT_SUFFIXES) if not self._looks_like_flow(p)],
+            "runs": sorted(
+                (self.relative(d) for d in self.runs_root.glob("*") if d.is_dir()),
+                reverse=True,
+            ) if self.runs_root.exists() else [],
+        }
+
+    def _looks_like_flow(self, relative: str) -> bool:
+        path = self.root / relative
+        try:
+            head = path.read_text(encoding="utf-8", errors="ignore")[:2000]
+        except OSError:
+            return False
+        return "steps:" in head and "targets:" in head
+
+
+class Api:
+    """The verbs the UI needs. Kept apart from HTTP so it can be tested
+    directly."""
+
+    def __init__(self, workspace: Workspace) -> None:
+        self.workspace = workspace
+        self.jobs: dict[str, RunJob] = {}
+        self._counter = 0
+        self._lock = threading.Lock()
+
+    # -- files ----------------------------------------------------------------
+
+    def list_files(self) -> dict[str, Any]:
+        return self.workspace.listing()
+
+    def read_file(self, relative: str) -> dict[str, Any]:
+        path = self.workspace.resolve(relative)
+        if not path.exists():
+            raise WorkspaceError(f"no such file: {relative}")
+        return {"path": relative, "text": path.read_text(encoding="utf-8")}
+
+    def write_file(self, relative: str, text: str) -> dict[str, Any]:
+        """Also covers save-as: the UI just sends a different path."""
+        path = self.workspace.resolve(relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return {"path": relative, "bytes": len(text.encode("utf-8"))}
+
+    # -- validation -----------------------------------------------------------
+
+    def validate(self, flow_path: str, prompts_path: str, backend: str = "web") -> dict[str, Any]:
+        problems: list[str] = []
+        summary: dict[str, Any] = {}
+        try:
+            flow = load_flow(self.workspace.resolve(flow_path))
+            flow.validate_for_backend(backend)
+            summary["flow"] = {
+                "name": flow.name,
+                "steps": len(flow.steps),
+                "reset_steps": len(flow.reset),
+                "targets": sorted(flow.targets),
+                "variables": sorted(flow.variables()),
+            }
+        except FlowError as exc:
+            problems.append(f"flow: {exc}")
+            flow = None
+        except Exception as exc:
+            problems.append(f"flow: {type(exc).__name__}: {exc}")
+            flow = None
+
+        try:
+            prompts = load_prompts(self.workspace.resolve(prompts_path))
+            summary["prompts"] = {
+                "count": len(prompts),
+                "ids": [variant.id for variant in prompts],
+                "variables": sorted(
+                    {key for variant in prompts for key in variant.variables}
+                ),
+            }
+            if flow is not None:
+                prompts.check_provides(flow.variables())
+        except PromptsError as exc:
+            problems.append(f"prompts: {exc}")
+        except Exception as exc:
+            problems.append(f"prompts: {type(exc).__name__}: {exc}")
+
+        return {"ok": not problems, "problems": problems, "summary": summary}
+
+    # -- running --------------------------------------------------------------
+
+    def start_run(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._counter += 1
+            job_id = f"run{self._counter:04d}"
+
+        out_dir = run_directory(self.workspace.runs_root)
+        job = RunJob(
+            id=job_id,
+            flow_path=request["flow"],
+            prompts_path=request["prompts"],
+            out_dir=out_dir,
+        )
+        self.jobs[job_id] = job
+        thread = threading.Thread(
+            target=self._execute, args=(job, request), daemon=True
+        )
+        thread.start()
+        return {"run_id": job_id, "out_dir": self.workspace.relative(out_dir)}
+
+    def _execute(self, job: RunJob, request: dict[str, Any]) -> None:
+        backend = request.get("backend", "web")
+        only = [name for name in (request.get("only") or []) if name]
+        repeats = int(request.get("repeats", 1))
+        agent_mode = request.get("agent", "off")
+
+        driver = None
+        try:
+            flow = load_flow(self.workspace.resolve(job.flow_path))
+            prompts = load_prompts(self.workspace.resolve(job.prompts_path)).select(only or None)
+            flow.validate_for_backend(backend)
+            prompts.check_provides(flow.variables())
+
+            job.status = "running"
+            job.emit("started", variants=len(prompts) * repeats,
+                     out_dir=self.workspace.relative(job.out_dir))
+
+            driver = build_driver(
+                backend,
+                headless=not request.get("headed", False),
+                resolver=build_resolver("claude" if agent_mode != "off" else "off"),
+                agent_mode=agent_mode,
+                learned_dir=str(
+                    self.workspace.resolve(job.flow_path).parent / "learned"
+                ),
+            )
+            driver.start(flow.app_config(backend))
+
+            runner = Runner(flow, driver, job.out_dir)
+            runner.prepare(prompts)
+            results = []
+            for variant in prompts:
+                for repeat in range(repeats):
+                    job.emit("variant_started", prompt_id=variant.id, repeat=repeat)
+                    result = runner.run_variant(variant, repeat, repeats)
+                    runner._append(result)
+                    results.append(result)
+                    job.emit("variant_finished", result=result.as_dict())
+
+            job.results = [result.as_dict() for result in results]
+            write_csv(results, job.out_dir / "results.csv")
+            job.report = self.workspace.relative(write_report(job.out_dir))
+            job.status = "finished"
+            job.emit(
+                "finished",
+                ok=sum(1 for r in results if r.status is Status.OK),
+                total=len(results),
+                report=job.report,
+            )
+        except Exception as exc:
+            job.status = "failed"
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.emit("failed", error=job.error, traceback=traceback.format_exc())
+        finally:
+            if driver is not None:
+                try:
+                    driver.stop()
+                except Exception:
+                    pass
+            job.events.put(None)
+
+    def job(self, run_id: str) -> RunJob:
+        if run_id not in self.jobs:
+            raise WorkspaceError(f"unknown run {run_id}")
+        return self.jobs[run_id]
+
+    def rebuild_report(self, run_dir: str) -> dict[str, Any]:
+        path = write_report(self.workspace.resolve(run_dir))
+        return {"report": self.workspace.relative(path)}
+
+
+class Handler(BaseHTTPRequestHandler):
+    api: Api = None  # set by serve()
+    server_version = "flowrunner"
+
+    def log_message(self, *_args) -> None:  # quiet by default
+        pass
+
+    # -- plumbing -------------------------------------------------------------
+
+    def _send(self, code: int, body: bytes, content_type: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, payload: Any, code: int = 200) -> None:
+        self._send(code, json.dumps(payload).encode("utf-8"), "application/json")
+
+    def _body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    # -- routes ---------------------------------------------------------------
+
+    def do_GET(self) -> None:
+        url = urlparse(self.path)
+        route = url.path
+        params = {k: v[0] for k, v in parse_qs(url.query).items()}
+        try:
+            if route in ("/", "/index.html"):
+                self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            elif route == "/api/files":
+                self._json(self.api.list_files())
+            elif route == "/api/file":
+                self._json(self.api.read_file(params["path"]))
+            elif route.startswith("/api/run/") and route.endswith("/events"):
+                self._stream(route.split("/")[3])
+            elif route.startswith("/files/"):
+                self._serve_file(unquote(route[len("/files/"):]))
+            else:
+                self._json({"error": f"no route {route}"}, 404)
+        except WorkspaceError as exc:
+            self._json({"error": str(exc)}, 400)
+        except KeyError as exc:
+            self._json({"error": f"missing parameter {exc}"}, 400)
+        except Exception as exc:
+            self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+    def do_POST(self) -> None:
+        route = urlparse(self.path).path
+        try:
+            body = self._body()
+            if route == "/api/file":
+                self._json(self.api.write_file(body["path"], body.get("text", "")))
+            elif route == "/api/validate":
+                self._json(self.api.validate(
+                    body["flow"], body["prompts"], body.get("backend", "web")
+                ))
+            elif route == "/api/run":
+                self._json(self.api.start_run(body))
+            elif route == "/api/report":
+                self._json(self.api.rebuild_report(body["run_dir"]))
+            else:
+                self._json({"error": f"no route {route}"}, 404)
+        except WorkspaceError as exc:
+            self._json({"error": str(exc)}, 400)
+        except KeyError as exc:
+            self._json({"error": f"missing field {exc}"}, 400)
+        except Exception as exc:
+            self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+    def _stream(self, run_id: str) -> None:
+        """Server-sent events: progress as each variant finishes, so a long
+        sweep is not a blank screen."""
+        job = self.api.job(run_id)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        while True:
+            event = job.events.get()
+            if event is None:
+                self.wfile.write(b"data: {\"type\": \"end\"}\n\n")
+                self.wfile.flush()
+                return
+            self.wfile.write(f"data: {json.dumps(event)}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+    def _serve_file(self, relative: str) -> None:
+        path = self.api.workspace.resolve(relative)
+        if not path.is_file():
+            self._json({"error": f"no such file: {relative}"}, 404)
+            return
+        types = {
+            ".png": "image/png", ".md": "text/markdown; charset=utf-8",
+            ".json": "application/json", ".jsonl": "application/x-ndjson",
+            ".csv": "text/csv", ".yaml": "text/plain; charset=utf-8",
+            ".yml": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+        }
+        self._send(200, path.read_bytes(),
+                   types.get(path.suffix.lower(), "application/octet-stream"))
+
+
+def serve(workspace: Path | str = ".", host: str = "127.0.0.1", port: int = 8765):
+    """Start the server. Returns it; call serve_forever() or shutdown()."""
+    Handler.api = Api(Workspace(workspace))
+    return ThreadingHTTPServer((host, port), Handler)
