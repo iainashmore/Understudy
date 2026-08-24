@@ -1,3 +1,7 @@
+> **This repository holds two projects.** `flowrunner/` is the Prompt Flow
+> Recorder & Runner — see [flowrunner/README.md](flowrunner/README.md). The rest
+> of this file describes the abstraction-layer harness, paused at step 5 of 7.
+
 # Agent Abstraction-Layer Harness
 
 Measures **at which level of abstraction an AI agent can complete a task**. The

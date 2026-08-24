@@ -1,4 +1,24 @@
-"""Playwright web driver.
+"""Playwright web driver, in two modes.
+
+**Launch** -- start a browser and navigate. The ordinary web case.
+
+**Attach** -- connect over the Chrome DevTools Protocol to a Chromium that is
+already running inside someone else's process. This is the mode that matters
+for an assistant panel embedded in a desktop application: WebView2 and CEF are
+Chromium, and when the host exposes a debugging port the panel is drivable as a
+normal page, with full DOM access, exact text reads and real selectors. That is
+enormously better than clicking at an accessibility tree that may not describe
+the content at all.
+
+Enabling the port is a host-side setting:
+
+    WebView2   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
+    CEF        --remote-debugging-port=9222 on the host executable
+
+Check with http://127.0.0.1:9222/json -- if it lists pages, attach mode works.
+
+In attach mode the browser belongs to the host application, so this driver
+never closes it and cannot offer level-2 reset.
 
 Target resolution walks the strategy list in order and stops at the first one
 that identifies exactly one element. Two rules matter:
@@ -10,10 +30,12 @@ that identifies exactly one element. Two rules matter:
     whitespace-normalised, so a button relabelled "Send " or "send" still
     resolves. That is the fuzzy matching, for free, from the accessibility tree
     rather than the DOM path.
+
 """
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import time
 from pathlib import Path
@@ -57,6 +79,7 @@ class WebDriver:
         self._context = None
         self.page = None
         self._app_config: dict[str, Any] = {}
+        self.attached = False
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -64,10 +87,14 @@ class WebDriver:
         from playwright.sync_api import sync_playwright
 
         self._app_config = dict(app_config)
+        self._playwright = sync_playwright().start()
+
+        if self._app_config.get("cdp_url"):
+            self._attach()
+            return
+
         if not self._app_config.get("url"):
             raise DriverError("flow has no target_app.web.url")
-
-        self._playwright = sync_playwright().start()
         launch: dict[str, Any] = {
             "headless": self.headless,
             "slow_mo": self.slow_mo_ms,
@@ -77,6 +104,51 @@ class WebDriver:
             launch["executable_path"] = executable
         self._browser = self._playwright.chromium.launch(**launch)
         self._open_context()
+
+    def _attach(self) -> None:
+        """Connect to a Chromium already running inside another process."""
+        cdp_url = self._app_config["cdp_url"]
+        try:
+            self._browser = self._playwright.chromium.connect_over_cdp(cdp_url)
+        except Exception as exc:
+            raise DriverError(
+                f"could not attach to {cdp_url}: {exc}. Is the host running with "
+                f"remote debugging enabled? Check {cdp_url.rstrip('/')}/json"
+            ) from None
+
+        self.attached = True
+        contexts = self._browser.contexts
+        if not contexts:
+            raise DriverError(f"attached to {cdp_url} but it has no browser contexts")
+        self._context = contexts[0]
+
+        pages = [page for context in contexts for page in context.pages]
+        if not pages:
+            raise DriverError(f"attached to {cdp_url} but it has no open pages")
+        self.page = self._select_page(pages)
+
+        if self._app_config.get("navigate") and self._app_config.get("url"):
+            self.page.goto(self._app_config["url"])
+
+    def _select_page(self, pages: list):
+        """A host may run several web views; pick the one the flow names."""
+        url_pattern = self._app_config.get("page_url_pattern")
+        title_pattern = self._app_config.get("page_title_pattern")
+
+        for page in pages:
+            if url_pattern and not fnmatch.fnmatch(page.url, url_pattern):
+                continue
+            if title_pattern and not fnmatch.fnmatch(page.title(), title_pattern):
+                continue
+            return page
+
+        if url_pattern or title_pattern:
+            listing = "\n".join(f"    {p.url!r} ({p.title()!r})" for p in pages)
+            raise DriverError(
+                f"no attached page matches "
+                f"url={url_pattern!r} title={title_pattern!r}; available:\n{listing}"
+            )
+        return pages[0]
 
     def _open_context(self) -> None:
         options: dict[str, Any] = {}
@@ -100,12 +172,21 @@ class WebDriver:
 
     def reset(self) -> None:
         """Level-2 isolation: throw the context away and start again."""
+        if self.attached:
+            raise DriverError(
+                "level-2 reset is not available when attached over CDP: the "
+                "browser belongs to the host application. Use level-1 in-app "
+                "reset steps instead."
+            )
         if self._context:
             self._context.close()
         self._open_context()
 
     def stop(self) -> None:
-        for closer in (self._context, self._browser):
+        # Never close a browser we did not launch -- that would take the host
+        # application's panel down with it.
+        closers = [self._browser] if self.attached else [self._context, self._browser]
+        for closer in closers:
             try:
                 if closer:
                     closer.close()

@@ -27,9 +27,6 @@
         "web": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "url"
-          ],
           "properties": {
             "url": {
               "type": "string",
@@ -55,8 +52,36 @@
                   "minimum": 1
                 }
               }
+            },
+            "cdp_url": {
+              "description": "Attach to a Chromium already running in another process (WebView2/CEF) instead of launching one, e.g. http://127.0.0.1:9222",
+              "type": "string"
+            },
+            "page_url_pattern": {
+              "description": "Glob selecting which attached page to drive.",
+              "type": "string"
+            },
+            "page_title_pattern": {
+              "description": "Glob selecting which attached page to drive.",
+              "type": "string"
+            },
+            "navigate": {
+              "description": "In attach mode, navigate the attached page to `url` first. Off by default: the host is usually already where it needs to be.",
+              "type": "boolean"
             }
-          }
+          },
+          "anyOf": [
+            {
+              "required": [
+                "url"
+              ]
+            },
+            {
+              "required": [
+                "cdp_url"
+              ]
+            }
+          ]
         },
         "native": {
           "type": "object",
