@@ -15,16 +15,14 @@ import pytest
 from flowrunner.drivers import build
 from flowrunner.flow import load_flow
 from flowrunner.ocr import available as ocr_available
-from flowrunner.prompts import parse_prompts
+from flowrunner.prompts import prompts_from_entries
 from flowrunner.runner import Runner, Status
 
 pytest.importorskip("playwright", reason="needs playwright")
 
 REPO = Path(__file__).resolve().parents[2]
 FLOW = REPO / "examples" / "cad_blind.yaml"
-PROMPTS = parse_prompts(
-    "- id: baseline\n  prompt: how many pads are in this part\n", "yaml"
-)
+PROMPTS = prompts_from_entries([{'id': 'baseline', 'prompt': 'how many pads are in this part'}])
 
 
 @pytest.fixture(scope="module")
@@ -120,10 +118,10 @@ def test_a_second_variant_is_not_contaminated_by_the_first(tmp_path):
     selecting all and typing an empty string does not clear it.
     """
     flow = load_flow(FLOW)
-    prompts = parse_prompts(
-        "- id: first\n  prompt: alpha alpha\n- id: second\n  prompt: bravo bravo\n",
-        "yaml",
-    )
+    prompts = prompts_from_entries([
+        {"id": "first", "prompt": "alpha alpha"},
+        {"id": "second", "prompt": "bravo bravo"},
+    ])
     driver = build("web")
     driver.start(flow.app_config("web"))
     try:

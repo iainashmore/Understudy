@@ -1,0 +1,19 @@
+# A collection of flows, run and reviewed together.
+#
+# Paths are relative to this file. Each flow is a single self-contained file:
+# steps, targets and prompt variants in one place. An entry may override the
+# flow's own description or tags, or narrow it to a few variants.
+
+version: 1
+name: FlowRunner examples
+description: Everything in examples/, as one pass
+
+flows:
+  - path: fixture_chat.yaml
+    tags: [assistant, smoke]
+
+  - path: cad_blind.yaml
+    tags: [cad, blind]
+
+  - path: cad_rename_and_ask.yaml
+    tags: [cad, dialog]

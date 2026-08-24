@@ -32,7 +32,7 @@ VIEWPORT = {"width": 1100, "height": 700}
 def target(label: str, **fields) -> Target:
     # `label` rather than `name`: `name` is itself a strategy field.
     return parse_flow({
-        "version": 1, "name": "t",
+        "version": 1, "name": "t", "prompts": [{"id": "a", "prompt": "x"}],
         "targets": {label: {"web": [fields]}},
         "steps": [{"action": "click", "target": label}],
     }).target_for(label)
@@ -158,7 +158,7 @@ class TestUnlabelledControls:
     def test_the_ranked_list_falls_through_and_reports_it(self, driver):
         open_app(driver, "?controls=unlabelled&viewport=static")
         ranked = parse_flow({
-            "version": 1, "name": "t",
+            "version": 1, "name": "t", "prompts": [{"id": "a", "prompt": "x"}], "prompts": [{"id": "a", "prompt": "x"}],
             "targets": {"measure": {"web": [
                 {"role": "button", "name": "Measure"},
                 {"css": ".tool[data-index='5']"},

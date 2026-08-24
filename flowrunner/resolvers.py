@@ -186,7 +186,9 @@ class ClaudeResolver:
         if self._client is None:
             import anthropic
 
-            self._client = anthropic.Anthropic()
+            from flowrunner import credentials
+
+            self._client = anthropic.Anthropic(**credentials.client_options())
         return self._client
 
     def locate(
@@ -264,11 +266,16 @@ def build(kind: str, **options: Any) -> Resolver:
 
 
 def credentials_available() -> bool:
-    """Whether a live resolver could run. An unset ANTHROPIC_API_KEY does not
-    mean there are no credentials -- the SDK also reads an `ant auth login`
-    profile."""
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
-        return True
+    """Whether a live resolver could run.
+
+    An unset ANTHROPIC_API_KEY does not mean there are no credentials: there
+    may be a key saved through the UI, or an `ant auth login` profile the SDK
+    reads for itself.
+    """
     from pathlib import Path
 
+    from flowrunner import credentials
+
+    if credentials.active_env_source() or credentials.load().has_key:
+        return True
     return (Path.home() / ".config" / "anthropic").exists()

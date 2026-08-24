@@ -1,6 +1,0 @@
-- id: baseline
-  prompt: "Summarise this in one paragraph."
-- id: terse
-  prompt: "Summarise this in one sentence."
-- id: role-framed
-  prompt: "You are an expert editor. Summarise this in one paragraph."

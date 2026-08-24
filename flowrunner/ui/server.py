@@ -23,16 +23,19 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from flowrunner import credentials
+from flowrunner.authoring import AuthoringError, duplicate_file, slugify
 from flowrunner.drivers import build as build_driver
 from flowrunner.flow import FlowError, load_flow
-from flowrunner.prompts import PromptsError, load_prompts
+from flowrunner.prompts import PromptsError, prompts_for
+from flowrunner.suite import SuiteError, is_suite_file, load_suite
 from flowrunner.report import write_report
 from flowrunner.resolvers import build as build_resolver
 from flowrunner.runner import Runner, Status, run_directory, write_csv
 
 STATIC = Path(__file__).resolve().parent / "static"
 FLOW_SUFFIXES = (".yaml", ".yml")
-PROMPT_SUFFIXES = (".yaml", ".yml", ".csv")
+
 
 
 class WorkspaceError(ValueError):
@@ -45,7 +48,6 @@ class RunJob:
 
     id: str
     flow_path: str
-    prompts_path: str
     out_dir: Path
     events: queue.Queue = field(default_factory=queue.Queue)
     status: str = "starting"
@@ -86,9 +88,12 @@ class Workspace:
             ]
             return found
 
+        candidates = find(FLOW_SUFFIXES)
+        suites = [p for p in candidates if is_suite_file(self.root / p)]
         return {
-            "flows": [p for p in find(FLOW_SUFFIXES) if self._looks_like_flow(p)],
-            "prompts": [p for p in find(PROMPT_SUFFIXES) if not self._looks_like_flow(p)],
+            "flows": [p for p in candidates if self._looks_like_flow(p)],
+            "suites": suites,
+
             "runs": sorted(
                 (self.relative(d) for d in self.runs_root.glob("*") if d.is_dir()),
                 reverse=True,
@@ -96,12 +101,24 @@ class Workspace:
         }
 
     def _looks_like_flow(self, relative: str) -> bool:
+        """Whether this YAML file is a flow.
+
+        Matched on top-level keys anywhere in the file, not in a fixed-size
+        window: a well-commented flow easily pushes `steps:` past the first few
+        thousand characters, and a sniff that reads only the head silently drops
+        the file from every listing.
+        """
         path = self.root / relative
         try:
-            head = path.read_text(encoding="utf-8", errors="ignore")[:2000]
+            text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             return False
-        return "steps:" in head and "targets:" in head
+        keys = {
+            line.split(":", 1)[0]
+            for line in text.splitlines()
+            if line[:1].isalpha() and ":" in line
+        }
+        return "steps" in keys and bool({"targets", "prompts"} & keys)
 
 
 class Api:
@@ -119,6 +136,160 @@ class Api:
     def list_files(self) -> dict[str, Any]:
         return self.workspace.listing()
 
+    def describe_flows(self) -> list[dict[str, Any]]:
+        """Title, description and variant count for every flow, so the picker
+        shows something a person can choose between."""
+        described = []
+        for relative in self.workspace.listing()["flows"]:
+            entry: dict[str, Any] = {"path": relative, "title": relative,
+                                     "description": "", "tags": [],
+                                     "variants": 0, "embedded": False, "error": None}
+            try:
+                flow = load_flow(self.workspace.resolve(relative))
+                entry.update(
+                    title=flow.title or flow.name, description=flow.description,
+                    tags=list(flow.tags), steps=len(flow.steps),
+                    variants=len(flow.embedded_prompts),
+                    embedded=bool(flow.embedded_prompts),
+                )
+            except Exception as exc:
+                entry["error"] = str(exc)
+            described.append(entry)
+        return described
+
+    def describe_suites(self) -> list[dict[str, Any]]:
+        described = []
+        for relative in self.workspace.listing()["suites"]:
+            try:
+                suite = load_suite(self.workspace.resolve(relative))
+                described.append({
+                    "path": relative, "name": suite.name,
+                    "description": suite.description,
+                    "flows": [
+                        {**entry.summary(),
+                         "path": self.workspace.relative(entry.flow_path)}
+                        for entry in suite
+                    ],
+                })
+            except (SuiteError, OSError) as exc:
+                described.append({"path": relative, "name": relative,
+                                  "description": "", "flows": [], "error": str(exc)})
+        return described
+
+    def duplicate(self, source: str, destination: str, name: str | None = None,
+                  title: str | None = None, description: str | None = None) -> dict[str, Any]:
+        path = duplicate_file(
+            self.workspace.resolve(source), self.workspace.resolve(destination),
+            name=name or slugify(Path(destination).stem),
+            title=title, description=description,
+        )
+        return {"path": self.workspace.relative(path)}
+
+    NEW_FLOW = """version: 1
+name: {name}
+title: {title}
+description: {description}
+tags: []
+
+target_app:
+  web:
+    url: "https://example.com/"
+
+defaults: {{timeout_ms: 10000, stable_for_ms: 1500}}
+
+# Named elements. Strategies are tried in order, most stable first.
+targets:
+  prompt_box:
+    intent: the main text input
+    web:
+      - testid: prompt-input
+      - role: textbox
+
+  send_button:
+    intent: submits the prompt
+    web:
+      - testid: send
+      - role: button
+        name: Send
+
+  response_area:
+    intent: where the reply appears
+    web:
+      - testid: response
+
+# One entry per variant. Any key besides `id` is a variable the steps can use.
+prompts:
+  - id: baseline
+    prompt: Replace this with the prompt to test.
+
+steps:
+  - action: capture
+    label: before-prompt
+  - action: type
+    target: prompt_box
+    text: "{{{{prompt}}}}"
+  - action: click
+    target: send_button
+  - action: wait_for_stable
+    target: response_area
+    stable_for_ms: 1500
+    timeout_ms: 120000
+  - action: capture
+    label: after-response
+  - action: read
+    target: response_area
+    store_as: response
+"""
+
+    NEW_SUITE = """version: 1
+name: {name}
+description: {description}
+
+flows: []
+"""
+
+    def create(self, kind: str, relative: str, title: str = "",
+               description: str = "") -> dict[str, Any]:
+        path = self.workspace.resolve(relative)
+        if path.exists():
+            raise WorkspaceError(f"{relative} already exists")
+        template = self.NEW_FLOW if kind == "flow" else self.NEW_SUITE
+        name = slugify(title or Path(relative).stem)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            template.format(
+                name=name,
+                title=title or Path(relative).stem,
+                description=description or "TODO: what this checks",
+            ),
+            encoding="utf-8",
+        )
+        return {"path": self.workspace.relative(path)}
+
+    def delete(self, relative: str, with_contents: bool = False) -> dict[str, Any]:
+        """Remove a flow, or a collection and optionally the flows it lists.
+
+        Deleting a collection alone leaves its flows on disk: a collection is a
+        list, and throwing away the list should not throw away the work unless
+        that is what was asked for.
+        """
+        path = self.workspace.resolve(relative)
+        if not path.is_file():
+            raise WorkspaceError(f"no such file: {relative}")
+
+        removed = []
+        if with_contents and is_suite_file(path):
+            try:
+                for entry in load_suite(path):
+                    if entry.flow_path.is_file():
+                        entry.flow_path.unlink()
+                        removed.append(self.workspace.relative(entry.flow_path))
+            except SuiteError:
+                pass
+        path.unlink()
+        removed.append(relative)
+        return {"deleted": removed}
+
     def read_file(self, relative: str) -> dict[str, Any]:
         path = self.workspace.resolve(relative)
         if not path.exists():
@@ -134,7 +305,7 @@ class Api:
 
     # -- validation -----------------------------------------------------------
 
-    def validate(self, flow_path: str, prompts_path: str, backend: str = "web") -> dict[str, Any]:
+    def validate(self, flow_path: str, backend: str = "web") -> dict[str, Any]:
         problems: list[str] = []
         summary: dict[str, Any] = {}
         try:
@@ -155,7 +326,9 @@ class Api:
             flow = None
 
         try:
-            prompts = load_prompts(self.workspace.resolve(prompts_path))
+            if flow is None:
+                raise PromptsError("the flow did not load")
+            prompts = prompts_for(flow)
             summary["prompts"] = {
                 "count": len(prompts),
                 "ids": [variant.id for variant in prompts],
@@ -183,7 +356,6 @@ class Api:
         job = RunJob(
             id=job_id,
             flow_path=request["flow"],
-            prompts_path=request["prompts"],
             out_dir=out_dir,
         )
         self.jobs[job_id] = job
@@ -202,7 +374,7 @@ class Api:
         driver = None
         try:
             flow = load_flow(self.workspace.resolve(job.flow_path))
-            prompts = load_prompts(self.workspace.resolve(job.prompts_path)).select(only or None)
+            prompts = prompts_for(flow).select(only or None)
             flow.validate_for_backend(backend)
             prompts.check_provides(flow.variables())
 
@@ -221,7 +393,8 @@ class Api:
             )
             driver.start(flow.app_config(backend))
 
-            runner = Runner(flow, driver, job.out_dir)
+            runner = Runner(flow, driver, job.out_dir,
+                            capture_steps=bool(request.get("capture_steps")))
             runner.prepare(prompts)
             results = []
             for variant in prompts:
@@ -258,6 +431,25 @@ class Api:
         if run_id not in self.jobs:
             raise WorkspaceError(f"unknown run {run_id}")
         return self.jobs[run_id]
+
+    # -- credentials ----------------------------------------------------------
+    #
+    # Only ever the masked shape leaves this process. The raw key is not sent
+    # to the browser, so it cannot be read off a screenshot of the UI or a
+    # browser cache.
+
+    def read_credentials(self) -> dict[str, Any]:
+        return credentials.load().public()
+
+    def save_credentials(self, values: dict[str, Any]) -> dict[str, Any]:
+        # A blank api_key means "clear it", not "leave what was there".
+        return credentials.save(values).public()
+
+    def clear_credentials(self) -> dict[str, Any]:
+        return credentials.clear().public()
+
+    def test_credentials(self) -> dict[str, Any]:
+        return credentials.check()
 
     def rebuild_report(self, run_dir: str) -> dict[str, Any]:
         path = write_report(self.workspace.resolve(run_dir))
@@ -299,6 +491,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif route == "/api/files":
                 self._json(self.api.list_files())
+            elif route == "/api/credentials":
+                self._json(self.api.read_credentials())
+            elif route == "/api/flows":
+                self._json({"flows": self.api.describe_flows()})
+            elif route == "/api/suites":
+                self._json({"suites": self.api.describe_suites()})
             elif route == "/api/file":
                 self._json(self.api.read_file(params["path"]))
             elif route.startswith("/api/run/") and route.endswith("/events"):
@@ -321,16 +519,34 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/file":
                 self._json(self.api.write_file(body["path"], body.get("text", "")))
             elif route == "/api/validate":
-                self._json(self.api.validate(
-                    body["flow"], body["prompts"], body.get("backend", "web")
+                self._json(self.api.validate(body["flow"], body.get("backend", "web")))
+            elif route == "/api/new":
+                self._json(self.api.create(
+                    body.get("kind", "flow"), body["path"],
+                    body.get("title", ""), body.get("description", ""),
+                ))
+            elif route == "/api/delete":
+                self._json(self.api.delete(
+                    body["path"], bool(body.get("with_contents", False))
+                ))
+            elif route == "/api/duplicate":
+                self._json(self.api.duplicate(
+                    body["source"], body["destination"], body.get("name"),
+                    body.get("title"), body.get("description"),
                 ))
             elif route == "/api/run":
                 self._json(self.api.start_run(body))
             elif route == "/api/report":
                 self._json(self.api.rebuild_report(body["run_dir"]))
+            elif route == "/api/credentials":
+                self._json(self.api.save_credentials(body))
+            elif route == "/api/credentials/clear":
+                self._json(self.api.clear_credentials())
+            elif route == "/api/credentials/test":
+                self._json(self.api.test_credentials())
             else:
                 self._json({"error": f"no route {route}"}, 404)
-        except WorkspaceError as exc:
+        except (WorkspaceError, AuthoringError, FlowError, PromptsError) as exc:
             self._json({"error": str(exc)}, 400)
         except KeyError as exc:
             self._json({"error": f"missing field {exc}"}, 400)

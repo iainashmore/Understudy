@@ -23,7 +23,7 @@ import pytest
 from flowrunner.drivers.base import DriverError
 from flowrunner.drivers.web import WebDriver, find_chromium
 from flowrunner.flow import load_flow
-from flowrunner.prompts import parse_prompts
+from flowrunner.prompts import prompts_from_entries
 from flowrunner.runner import Runner, Status
 
 pytest.importorskip("playwright", reason="needs playwright")
@@ -31,7 +31,7 @@ pytest.importorskip("playwright", reason="needs playwright")
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = (REPO / "fixtures" / "chat_app" / "index.html").resolve()
 FLOW_TEMPLATE = (REPO / "examples" / "fixture_chat.yaml").read_text()
-PROMPTS = parse_prompts("- id: baseline\n  prompt: hello there\n", "yaml")
+PROMPTS = prompts_from_entries([{'id': 'baseline', 'prompt': 'hello there'}])
 PORT = 9411
 
 

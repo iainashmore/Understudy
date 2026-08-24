@@ -9,33 +9,128 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from flowrunner.drivers import build as build_driver
 from flowrunner.flow import FlowError, load_flow
-from flowrunner.prompts import PromptsError, load_prompts
-from flowrunner.report import write_report
+from flowrunner.authoring import AuthoringError, duplicate_file
+from flowrunner.narrate import ClaudeNarrator, narrate_run
+from flowrunner.prompts import PromptsError, prompts_for
+from flowrunner.report import write_report, write_suite_index
 from flowrunner.resolvers import build as build_resolver, credentials_available
 from flowrunner.runner import Runner, Status, run_directory, write_csv
+from flowrunner.suite import SuiteError, load_suite
 
 
-def _load(flow_path: str, prompts_path: str, backend: str):
+def _load(flow_path: str, backend: str):
     flow = load_flow(flow_path)
-    prompts = load_prompts(prompts_path)
+    prompts = prompts_for(flow)
     flow.validate_for_backend(backend)
     prompts.check_provides(flow.variables())
     return flow, prompts
 
 
 def command_validate(args) -> int:
-    flow, prompts = _load(args.flow, args.prompts, args.backend)
-    print(f"flow      {flow.name}: {len(flow.steps)} step(s), "
+    flow, prompts = _load(args.flow, args.backend)
+    print(f"flow      {flow.title} ({flow.name}): {len(flow.steps)} step(s), "
           f"{len(flow.reset)} reset step(s), {len(flow.targets)} target(s)")
     print(f"variables {', '.join(sorted(flow.variables())) or 'none'}")
     print(f"prompts   {len(prompts)} variant(s): "
           f"{', '.join(v.id for v in prompts)}")
     print(f"backend   {args.backend}: ok")
+    return 0
+
+
+def command_duplicate(args) -> int:
+    path = duplicate_file(
+        args.flow, args.destination, name=args.name, title=args.title,
+        description=args.description, overwrite=args.force,
+    )
+    print(f"copied {args.flow} -> {path}")
+    return 0
+
+
+def command_narrate(args) -> int:
+    narration = narrate_run(
+        args.run_dir, ClaudeNarrator(), cache_path=args.cache, force=args.force
+    )
+    for key, description in narration.items():
+        print(f"  {key:<28} {description}")
+    print(f"\n{len(narration)} step(s) -> {Path(args.run_dir) / 'narration.json'}")
+    print(f"report -> {write_report(args.run_dir)}")
+    return 0
+
+
+def command_suite(args) -> int:
+    suite = load_suite(args.path).select(args.flows, args.tag)
+
+    if not args.run:
+        print(f"{suite.name}: {len(suite)} flow(s)")
+        if suite.description:
+            print(f"  {suite.description}\n")
+        for entry in suite:
+            summary = entry.summary()
+            marks = []
+            if summary["skip"]:
+                marks.append("SKIPPED")
+            if summary["error"]:
+                marks.append(f"BROKEN: {summary['error'][:60]}")
+            print(
+                f"  {summary['title'][:28]:<28} {summary['steps']:>3} steps  "
+                f"{summary['variants']:>3} variants  "
+                f"{'[' + ','.join(summary['tags']) + ']' if summary['tags'] else '':<20} "
+                f"{summary['description'][:44]} {' '.join(marks)}"
+            )
+        problems = suite.problems()
+        if problems:
+            print(f"\n{len(problems)} flow(s) could not be loaded:")
+            for problem in problems:
+                print(f"  {problem}")
+        return 1 if problems else 0
+
+    out_dir = Path(args.out) if args.out else run_directory(args.runs_root)
+    print(f"{suite.name}: running {len(suite.runnable)} flow(s) -> {out_dir}")
+    index: list[dict] = []
+
+    for entry in suite:
+        if entry.skip or entry.error:
+            index.append({"name": entry.name, "description": entry.description,
+                          "tags": list(entry.tags),
+                          "error": entry.error or "skipped", "dir": ""})
+            print(f"  {entry.name}: {'skipped' if entry.skip else entry.error}")
+            continue
+
+        child = argparse.Namespace(
+            flow=str(entry.flow_path),
+            backend=args.backend, only=",".join(entry.only) if entry.only else None,
+            repeat=1, out=str(out_dir / entry.slug), runs_root=args.runs_root,
+            headed=args.headed, csv=True, reset_level=1, strict=False,
+            agent="off", learned_dir=None, no_report=False, embed_report=False,
+            narrate=False, capture_steps=False,
+        )
+        print(f"\n--- {entry.name}")
+        try:
+            command_run(child)
+            results = [
+                json.loads(line) for line in
+                (out_dir / entry.slug / "results.jsonl").read_text().splitlines() if line.strip()
+            ]
+            index.append({
+                "name": entry.name, "description": entry.description,
+                "tags": list(entry.tags), "dir": entry.slug,
+                "ok": sum(1 for r in results if r["status"] == "ok"),
+                "total": len(results),
+            })
+        except Exception as exc:
+            # One broken flow must not end the suite.
+            index.append({"name": entry.name, "description": entry.description,
+                          "tags": list(entry.tags), "dir": entry.slug,
+                          "error": f"{type(exc).__name__}: {exc}"})
+            print(f"  failed: {exc}", file=sys.stderr)
+
+    print(f"\nindex -> {write_suite_index(out_dir, index)}")
     return 0
 
 
@@ -66,7 +161,7 @@ def command_report(args) -> int:
 
 
 def command_run(args) -> int:
-    flow, prompts = _load(args.flow, args.prompts, args.backend)
+    flow, prompts = _load(args.flow, args.backend)
     only = args.only.split(",") if args.only else None
     prompts = prompts.select([name.strip() for name in only] if only else None)
 
@@ -90,7 +185,8 @@ def command_run(args) -> int:
     print(f"{flow.name}: {len(prompts)} variant(s) x {args.repeat} -> {out_dir}")
     driver.start(flow.app_config(args.backend))
     try:
-        runner = Runner(flow, driver, out_dir, reset_level=args.reset_level)
+        runner = Runner(flow, driver, out_dir, reset_level=args.reset_level,
+                        capture_steps=args.narrate or args.capture_steps)
         results = []
         runner.prepare(prompts)
         for variant in prompts:
@@ -116,6 +212,13 @@ def command_run(args) -> int:
 
     if args.csv:
         print(f"csv -> {write_csv(results, out_dir / 'results.csv')}")
+    if args.narrate:
+        try:
+            cache = Path(args.flow).parent / "narration" / f"{Path(args.flow).stem}.json"
+            narration = narrate_run(out_dir, ClaudeNarrator(), cache_path=cache)
+            print(f"narrated {len(narration)} step(s) (cached in {cache})")
+        except Exception as exc:
+            print(f"narration skipped: {exc}", file=sys.stderr)
     if not args.no_report:
         print(f"report -> {write_report(out_dir, embed=args.embed_report)}")
     failed = [r for r in results if r.status is not Status.OK]
@@ -139,10 +242,35 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("--embed-report", action="store_true")
     report.set_defaults(handler=command_report)
 
+    copy = sub.add_parser("duplicate", help="copy a flow under a new identity")
+    copy.add_argument("flow")
+    copy.add_argument("destination")
+    copy.add_argument("--name", default=None, help="defaults to the new filename")
+    copy.add_argument("--title", default=None)
+    copy.add_argument("--description", default=None)
+    copy.add_argument("--force", action="store_true")
+    copy.set_defaults(handler=command_duplicate)
+
+    narrate = sub.add_parser("narrate", help="describe a past run's steps")
+    narrate.add_argument("run_dir")
+    narrate.add_argument("--cache", default=None)
+    narrate.add_argument("--force", action="store_true")
+    narrate.set_defaults(handler=command_narrate)
+
+    suite = sub.add_parser("suite", help="list or run a collection of flows")
+    suite.add_argument("path")
+    suite.add_argument("--run", action="store_true", help="run every flow in the suite")
+    suite.add_argument("--tag", action="append", default=None)
+    suite.add_argument("--flow", action="append", default=None, dest="flows")
+    suite.add_argument("--backend", default="web", choices=["web", "native"])
+    suite.add_argument("--out", default=None)
+    suite.add_argument("--runs-root", default="runs")
+    suite.add_argument("--headed", action="store_true")
+    suite.set_defaults(handler=command_suite)
+
     for name, handler in (("run", command_run), ("validate", command_validate)):
         child = sub.add_parser(name)
         child.add_argument("flow")
-        child.add_argument("prompts")
         child.add_argument("--backend", default="web", choices=["web", "native"])
         child.set_defaults(handler=handler)
         if name == "run":
@@ -161,6 +289,13 @@ def main(argv: list[str] | None = None) -> int:
                      "everything else fails. only: let the model resolve "
                      "everything (no deterministic strategies).",
             )
+            child.add_argument(
+                "--narrate", action="store_true",
+                help="capture every step and have a model describe each one in "
+                     "the report; cached per flow, so it costs once",
+            )
+            child.add_argument("--capture-steps", action="store_true",
+                               help="screenshot after every step, without narrating")
             child.add_argument("--no-report", action="store_true",
                                help="skip the markdown report")
             child.add_argument("--embed-report", action="store_true",
@@ -175,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.handler(args)
-    except (FlowError, PromptsError) as exc:
+    except (FlowError, PromptsError, SuiteError, AuthoringError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

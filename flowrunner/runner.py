@@ -160,11 +160,16 @@ class Runner:
         driver: Driver,
         out_dir: Path | str,
         reset_level: int = 1,
+        capture_steps: bool = False,
     ) -> None:
         self.flow = flow
         self.driver = driver
         self.out_dir = Path(out_dir)
         self.reset_level = reset_level
+        #: A screenshot after every step, not just the deliberate captures.
+        #: Kept apart from `screenshots` because these are evidence for
+        #: narration and debugging, not part of what the flow asked for.
+        self.capture_steps = capture_steps
         self.results_path = self.out_dir / "results.jsonl"
 
     # -- setup ----------------------------------------------------------------
@@ -274,6 +279,9 @@ class Runner:
             status.status = Status.ERROR
             status.error = f"{type(exc).__name__}: {exc}"
             self._capture_failure(step, result, folder, counter)
+
+        if self.capture_steps:
+            status.detail["step_image"] = self._step_image(step, folder, len(result.step_statuses))
 
         status.duration_ms = int((time.monotonic() - started) * 1000)
         result.step_statuses.append(status)
@@ -394,6 +402,16 @@ class Runner:
             # a row and its screenshots.
             status.status = Status.TIMEOUT
             status.error = f"still changing after {timeout_ms}ms"
+
+    def _step_image(self, step: Step, folder: str, sequence: int) -> str | None:
+        relative = f"{folder}/steps/{sequence + 1:02d}-{step.phase}-{step.action}.png"
+        path = self.out_dir / relative
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.driver.screenshot())
+        except Exception:
+            return None
+        return relative
 
     def _dismiss_interstitials(self) -> None:
         """Cookie banners and 'what's new' modals: not part of the flow, and

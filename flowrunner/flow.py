@@ -121,9 +121,18 @@ class Defaults:
 @dataclass(frozen=True)
 class Flow:
     version: int
+    #: Identifier: appears in run ids, paths and results.
     name: str
-    targets: dict[str, Target]
-    steps: tuple[Step, ...]
+    #: What a person reads. Falls back to the name when not given.
+    title: str = ""
+    description: str = ""
+    tags: tuple[str, ...] = ()
+    #: Prompt variants written into the flow itself. The original spec kept
+    #: prompts in their own file, for the good reason that they change far more
+    #: often than the steps do -- so both work, and an external file wins.
+    embedded_prompts: tuple[dict[str, Any], ...] = ()
+    targets: dict[str, Target] = field(default_factory=dict)
+    steps: tuple[Step, ...] = ()
     reset: tuple[Step, ...] = ()
     interstitials: tuple[str, ...] = ()
     target_app: dict[str, Any] = field(default_factory=dict)
@@ -284,6 +293,10 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
     flow = Flow(
         version=data["version"],
         name=data["name"],
+        title=str(data.get("title", "") or data["name"]),
+        description=str(data.get("description", "")),
+        tags=tuple(data.get("tags") or ()),
+        embedded_prompts=tuple(data.get("prompts") or ()),
         targets=targets,
         steps=_steps(data["steps"], "steps"),
         reset=_steps(data.get("reset") or [], "reset"),

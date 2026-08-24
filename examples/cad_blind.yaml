@@ -11,6 +11,9 @@
 
 version: 1
 name: cad-blind-flow
+title: CAD assistant — no DOM, no accessibility
+description: "Opaque canvas surface: visual anchors, pixel-stability waiting, OCR read"
+tags: [cad, blind]
 target_app:
   web:
     url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=30"
@@ -40,6 +43,12 @@ targets:
       - image: anchors/send_button.png
         threshold: 0.95
         region: {x: 800, y: 40, width: 300, height: 200}
+
+prompts:
+  - id: count-pads
+    prompt: how many pads are in this part
+  - id: role-framed
+    prompt: You are a CAD expert. Describe the part tree.
 
 steps:
   - action: capture

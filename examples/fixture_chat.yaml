@@ -1,5 +1,8 @@
 version: 1
 name: fixture-chat-flow
+title: Chat assistant — three phrasings
+description: Ask the fixture chat app the same thing three ways and compare the replies
+tags: [assistant, smoke]
 target_app:
   web:
     url: "file:///home/user/harness/fixtures/chat_app/index.html?mode=stream&delay=25&dialog=portal&banner=1"
@@ -67,6 +70,14 @@ interstitials:
 reset:
   - action: click
     target: new_chat
+
+prompts:
+  - id: baseline
+    prompt: Summarise this in one paragraph.
+  - id: terse
+    prompt: Summarise this in one sentence.
+  - id: role-framed
+    prompt: You are an expert editor. Summarise this in one paragraph.
 
 steps:
   - action: capture

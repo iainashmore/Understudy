@@ -1,7 +1,13 @@
 """Prompt flow recorder and runner."""
 
 from flowrunner.flow import Flow, FlowError, Step, Strategy, Target, load_flow, parse_flow
-from flowrunner.prompts import PromptSet, PromptsError, PromptVariant, load_prompts
+from flowrunner.prompts import (
+    PromptSet,
+    PromptsError,
+    PromptVariant,
+    prompts_for,
+    prompts_from_entries,
+)
 
 __all__ = [
     "Flow",
@@ -13,6 +19,7 @@ __all__ = [
     "Strategy",
     "Target",
     "load_flow",
-    "load_prompts",
     "parse_flow",
+    "prompts_for",
+    "prompts_from_entries",
 ]

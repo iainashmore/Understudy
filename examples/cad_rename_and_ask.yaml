@@ -12,6 +12,9 @@
 
 version: 1
 name: cad-rename-and-ask
+title: CAD — select, rename, then ask
+description: Select a tree node, rename it through a dialog that moves between runs, then query the assistant
+tags: [cad, dialog]
 target_app:
   web:
     url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=25&dialogpos=a"
@@ -67,6 +70,11 @@ targets:
       - image: anchors/send_button.png
         threshold: 0.95
         region: {x: 800, y: 40, width: 300, height: 200}
+
+prompts:
+  - id: bracket
+    new_name: MountingBracket
+    prompt: what is the purpose of the selected feature
 
 steps:
   - action: capture

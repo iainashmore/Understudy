@@ -5,3 +5,14 @@ __pycache__/
 .venv/
 traces/
 results/
+
+# Credentials. The real file lives in ~/.flowrunner by default; these patterns
+# cover the case where someone points the UI at a path inside the repository.
+credentials.json
+.flowrunner/
+**/credentials.json
+!credentials.example.json
+
+# Anchors the agent learned, and cached step narration: run artefacts, not source.
+learned/
+narration/

@@ -23,6 +23,11 @@ FIXTURE = (REPO / "fixtures" / "chat_app" / "index.html").resolve()
 
 FLOW = f"""version: 1
 name: ui-test-flow
+title: UI test flow
+description: Used by the UI tests
+prompts:
+  - id: alpha
+    prompt: first prompt
 target_app:
   web:
     url: "file://{FIXTURE}?mode=instant&dialog=none"
@@ -45,13 +50,13 @@ steps:
     target: response_area
     store_as: response
 """
-PROMPTS = "- id: alpha\n  prompt: first prompt\n"
+SUITE = "version: 1\nname: examples\nflows:\n  - path: flow.yaml\n"
 
 
 @pytest.fixture
 def workspace(tmp_path):
     (tmp_path / "flow.yaml").write_text(FLOW)
-    (tmp_path / "prompts.yaml").write_text(PROMPTS)
+    (tmp_path / "suite.yaml").write_text(SUITE)
     return tmp_path
 
 
@@ -61,22 +66,36 @@ def api(workspace):
 
 
 class TestFiles:
-    def test_flows_and_prompts_are_told_apart(self, api):
+    def test_flows_and_suites_are_told_apart(self, api):
         listing = api.list_files()
         assert listing["flows"] == ["flow.yaml"]
-        assert listing["prompts"] == ["prompts.yaml"]
+        assert listing["suites"] == ["suite.yaml"]
 
     def test_a_file_can_be_opened(self, api):
         assert "ui-test-flow" in api.read_file("flow.yaml")["text"]
 
     def test_saving_writes_through(self, api, workspace):
-        api.write_file("prompts.yaml", "- id: b\n  prompt: changed\n")
-        assert "changed" in (workspace / "prompts.yaml").read_text()
+        api.write_file("flow.yaml", FLOW.replace("first prompt", "changed"))
+        assert "changed" in (workspace / "flow.yaml").read_text()
 
     def test_save_as_creates_a_new_file_and_directories(self, api, workspace):
-        api.write_file("variants/short.yaml", "- id: s\n  prompt: short\n")
+        api.write_file("variants/short.yaml", FLOW.replace("ui-test-flow", "short"))
         assert (workspace / "variants" / "short.yaml").exists()
-        assert "variants/short.yaml" in api.list_files()["prompts"]
+        assert "variants/short.yaml" in api.list_files()["flows"]
+
+    def test_a_heavily_commented_flow_is_still_recognised(self, api, workspace):
+        """The type sniff used to read a fixed-size head. A real flow with a
+        comment block at the top pushed `steps:` past it and the file vanished
+        from every listing -- present on disk, invisible in the UI."""
+        padded = "# explanation\n" * 400 + FLOW
+        api.write_file("commented.yaml", padded)
+        assert "commented.yaml" in api.list_files()["flows"]
+        assert any(f["path"] == "commented.yaml" for f in api.describe_flows())
+
+    def test_a_suite_is_not_mistaken_for_a_flow(self, api):
+        listing = api.list_files()
+        assert "suite.yaml" in listing["suites"]
+        assert "suite.yaml" not in listing["flows"]
 
     def test_run_output_is_not_offered_as_source(self, api, workspace):
         (workspace / "runs" / "old").mkdir(parents=True)
@@ -99,9 +118,81 @@ class TestFiles:
             api.read_file("absent.yaml")
 
 
+class TestAuthoring:
+    def test_a_new_flow_is_a_working_template(self, api):
+        from flowrunner.flow import load_flow
+        from flowrunner.prompts import prompts_for
+
+        made = api.create("flow", "checks/new.yaml", "My check", "does a thing")
+        flow = load_flow(api.workspace.resolve(made["path"]))
+        assert flow.title == "My check"
+        assert flow.steps and [v.id for v in prompts_for(flow)] == ["baseline"]
+
+    def test_creating_over_an_existing_file_is_refused(self, api):
+        with pytest.raises(WorkspaceError, match="already exists"):
+            api.create("flow", "flow.yaml", "Clash")
+
+    def test_duplicating_keeps_the_comments_and_changes_the_identity(self, api):
+        api.write_file("flow.yaml", "# a comment worth keeping\n" + FLOW)
+        api.duplicate("flow.yaml", "copy.yaml", title="A copy")
+        text = api.read_file("copy.yaml")["text"]
+        assert "# a comment worth keeping" in text
+        assert "title: A copy" in text
+        assert "name: copy" in text
+
+    def test_deleting_a_flow_removes_it(self, api, workspace):
+        api.delete("flow.yaml")
+        assert not (workspace / "flow.yaml").exists()
+
+    def test_deleting_a_collection_keeps_its_flows_by_default(self, api, workspace):
+        """A collection is a list. Throwing away the list should not throw away
+        the work unless that is what was asked for."""
+        result = api.delete("suite.yaml")
+        assert result["deleted"] == ["suite.yaml"]
+        assert (workspace / "flow.yaml").exists()
+
+    def test_deleting_a_collection_with_contents_removes_the_flows_too(self, api, workspace):
+        result = api.delete("suite.yaml", with_contents=True)
+        assert set(result["deleted"]) == {"suite.yaml", "flow.yaml"}
+        assert not (workspace / "flow.yaml").exists()
+
+    def test_deleting_outside_the_workspace_is_refused(self, api):
+        with pytest.raises(WorkspaceError, match="outside the workspace"):
+            api.delete("../something.yaml")
+
+
+class TestCredentials:
+    def test_the_raw_key_never_leaves_the_process(self, api, tmp_path, monkeypatch):
+        from flowrunner import credentials
+
+        monkeypatch.setattr(credentials, "DEFAULT_PATH", tmp_path / "creds.json")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        public = api.save_credentials({"api_key": "sk-ant-api03-secretvalue1234"})
+
+        assert public["configured"] is True
+        assert "secretvalue" not in str(public)
+        assert public["masked_key"].endswith("1234")
+
+    def test_clearing_removes_the_file(self, api, tmp_path, monkeypatch):
+        from flowrunner import credentials
+
+        monkeypatch.setattr(credentials, "DEFAULT_PATH", tmp_path / "creds.json")
+        api.save_credentials({"api_key": "sk-ant-api03-secretvalue1234"})
+        assert not api.clear_credentials()["configured"]
+        assert not (tmp_path / "creds.json").exists()
+
+    def test_an_environment_key_is_reported_as_taking_precedence(self, api, tmp_path, monkeypatch):
+        from flowrunner import credentials
+
+        monkeypatch.setattr(credentials, "DEFAULT_PATH", tmp_path / "creds.json")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+        assert api.read_credentials()["env_override"] == "ANTHROPIC_API_KEY"
+        assert credentials.client_options(tmp_path / "creds.json") == {}
+
+
 class TestValidation:
-    def test_a_good_pair_validates_with_a_summary(self, api):
-        result = api.validate("flow.yaml", "prompts.yaml")
+    def test_a_flow_validates_with_a_summary(self, api):
+        result = api.validate("flow.yaml")
         assert result["ok"] and result["problems"] == []
         assert result["summary"]["flow"]["name"] == "ui-test-flow"
         assert result["summary"]["flow"]["variables"] == ["prompt"]
@@ -109,20 +200,19 @@ class TestValidation:
 
     def test_a_broken_flow_is_reported_not_raised(self, api):
         api.write_file("flow.yaml", "version: 1\nname: x\nsteps: []\n")
-        result = api.validate("flow.yaml", "prompts.yaml")
+        result = api.validate("flow.yaml")
         assert not result["ok"]
         assert any("flow:" in problem for problem in result["problems"])
 
-    def test_a_prompts_file_missing_a_variable_is_caught(self, api):
-        api.write_file("prompts.yaml", "- id: alpha\n  something_else: x\n")
-        result = api.validate("flow.yaml", "prompts.yaml")
+    def test_a_variant_missing_a_variable_is_caught(self, api):
+        api.write_file("flow.yaml", FLOW.replace("prompt: first prompt", "other: x"))
+        result = api.validate("flow.yaml")
         assert not result["ok"]
         assert any("missing prompt" in problem for problem in result["problems"])
 
-    def test_both_files_are_reported_on_together(self, api):
+    def test_a_flow_that_will_not_parse_reports_both_halves(self, api):
         api.write_file("flow.yaml", "nonsense: true\n")
-        api.write_file("prompts.yaml", "not a list\n")
-        result = api.validate("flow.yaml", "prompts.yaml")
+        result = api.validate("flow.yaml")
         assert len(result["problems"]) == 2
 
 
@@ -139,7 +229,7 @@ class TestRunning:
 
     def test_a_run_streams_progress_and_finishes(self, api):
         pytest.importorskip("playwright")
-        started = api.start_run({"flow": "flow.yaml", "prompts": "prompts.yaml"})
+        started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         kinds = [event["type"] for event in self.drain(job)]
 
@@ -150,7 +240,7 @@ class TestRunning:
 
     def test_the_result_carries_the_response_and_a_report(self, api):
         pytest.importorskip("playwright")
-        started = api.start_run({"flow": "flow.yaml", "prompts": "prompts.yaml"})
+        started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
 
@@ -160,7 +250,7 @@ class TestRunning:
 
     def test_a_broken_flow_fails_the_job_without_taking_the_server_down(self, api):
         api.write_file("flow.yaml", "version: 1\nname: x\nsteps: []\n")
-        started = api.start_run({"flow": "flow.yaml", "prompts": "prompts.yaml"})
+        started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         events = self.drain(job, timeout=30)
 
@@ -192,11 +282,11 @@ class TestHttp:
         assert status == 200 and b"FlowRunner" in body
 
     def test_the_file_api_returns_json(self, server):
-        _, body = self.get(server + "/api/file?path=prompts.yaml")
-        assert json.loads(body)["text"] == PROMPTS
+        _, body = self.get(server + "/api/file?path=flow.yaml")
+        assert json.loads(body)["text"] == FLOW
 
     def test_workspace_files_are_served_for_the_output_view(self, server):
-        status, body = self.get(server + "/files/prompts.yaml")
+        status, body = self.get(server + "/files/flow.yaml")
         assert status == 200 and b"alpha" in body
 
     def test_path_traversal_over_http_is_refused(self, server):

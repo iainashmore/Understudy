@@ -16,13 +16,13 @@ import pytest
 from flowrunner.drivers import build
 from flowrunner.drivers.base import TargetNotFound
 from flowrunner.flow import load_flow
-from flowrunner.prompts import parse_prompts
+from flowrunner.prompts import prompts_from_entries
 from flowrunner.runner import Runner, Status, write_csv
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = (REPO / "fixtures" / "chat_app" / "index.html").resolve()
 FLOW_TEMPLATE = (REPO / "examples" / "fixture_chat.yaml").read_text()
-PROMPTS = parse_prompts("- id: baseline\n  prompt: hello there\n", "yaml")
+PROMPTS = prompts_from_entries([{'id': 'baseline', 'prompt': 'hello there'}])
 
 pytest.importorskip("playwright", reason="web driver needs playwright")
 
@@ -96,10 +96,12 @@ class TestHappyPath:
         wait = next(s for s in result.step_statuses if s.action == "wait_for_stable")
         assert wait.detail["signal"] == "signal+stable"
 
-    def test_the_flow_and_prompts_as_executed_are_copied_in(self, outcome):
+    def test_the_flow_as_executed_is_copied_in(self, outcome):
+        """One file holds the steps and the variants, so copying it in captures
+        everything that ran."""
         _, _, tmp_path = outcome
-        assert (tmp_path / "out" / "flow.yaml").exists()
-        assert (tmp_path / "out" / "prompts.yaml").exists()
+        copied = (tmp_path / "out" / "flow.yaml").read_text()
+        assert "prompts:" in copied and "steps:" in copied
 
     def test_results_stream_to_jsonl(self, outcome):
         _, runner, _ = outcome
@@ -177,9 +179,7 @@ def test_repeats_get_their_own_directories(tmp_path):
 
 
 def test_multiple_variants_all_run_and_export(tmp_path):
-    prompts = parse_prompts(
-        "- id: a\n  prompt: first\n- id: b\n  prompt: second\n", "yaml"
-    )
+    prompts = prompts_from_entries([{'id': 'a', 'prompt': 'first'}, {'id': 'b', 'prompt': 'second'}])
     results, _ = execute(tmp_path, "?mode=instant&dialog=none", prompts=prompts)
 
     assert [r.response for r in results] == ["Echo: first", "Echo: second"]

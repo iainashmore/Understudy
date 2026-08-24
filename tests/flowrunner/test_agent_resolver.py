@@ -39,7 +39,7 @@ def target(label: str, intent: str | None, *strategies) -> Target:
     if intent is not None:
         spec["intent"] = intent
     return parse_flow({
-        "version": 1, "name": "t",
+        "version": 1, "name": "t", "prompts": [{"id": "a", "prompt": "x"}],
         "targets": {label: spec},
         "steps": [{"action": "click", "target": label}],
     }).target_for(label)

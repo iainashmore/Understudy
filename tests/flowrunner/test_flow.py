@@ -11,6 +11,7 @@ from flowrunner.flow import Flow, FlowError, load_flow, parse_flow, render_step,
 MINIMAL = {
     "version": 1,
     "name": "demo",
+    "prompts": [{"id": "a", "prompt": "hello"}],
     "targets": {"box": {"web": "textarea"}},
     "steps": [{"action": "click", "target": "box"}],
 }
@@ -183,6 +184,11 @@ def test_a_realistic_flow_round_trips(tmp_path):
     path.write_text(textwrap.dedent("""
         version: 1
         name: chat-app-basic-flow
+        title: Chat app basic flow
+        description: A worked example
+        prompts:
+          - id: baseline
+            prompt: Summarise this.
         target_app:
           web:
             url: https://example.com/chat
@@ -222,6 +228,8 @@ def test_a_realistic_flow_round_trips(tmp_path):
 
     parsed = load_flow(path)
     assert parsed.name == "chat-app-basic-flow"
+    assert parsed.title == "Chat app basic flow"
+    assert [dict(entry)["id"] for entry in parsed.embedded_prompts] == ["baseline"]
     assert parsed.variables() == {"prompt"}
     assert len(parsed.steps) == 5
     assert parsed.source_text
