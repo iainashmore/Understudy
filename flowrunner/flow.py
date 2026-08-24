@@ -37,8 +37,9 @@ WEB_MODIFIER_KEYS = {"name", "exact", "nth", "threshold", "region", "offset"}
 #: backend has, and it is the only thing left when a surface exposes nothing.
 NATIVE_STRATEGY_KEYS = {
     "automation_id", "name", "control_type", "class_name", "image", "agent",
+    "path",
 }
-NATIVE_MODIFIER_KEYS = {"threshold", "region", "offset"}
+NATIVE_MODIFIER_KEYS = {"threshold", "region", "offset", "exact", "nth"}
 
 DEFAULT_TIMEOUT_MS = 10_000
 DEFAULT_POLL_INTERVAL_MS = 250

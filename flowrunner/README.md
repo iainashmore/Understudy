@@ -15,8 +15,8 @@ click; no scoring. The human authors the steps, the tool repeats them reliably.
 | — | Visual anchoring + OCR reads, for surfaces with no DOM | done |
 | — | Agent fallback rung (vision model, cached) | done |
 | 5 | Web recorder (`playwright codegen` wrapper) | not started |
-| 6 | Native driver (UIAutomation) | blocked on a Windows machine |
-| 7 | Native recorder (Win32 hooks + UIA) | blocked on a Windows machine |
+| 6 | Native driver (UIAutomation) | matching done and tested; pywinauto contact unexercised |
+| 7 | Native recorder (Win32 hooks + UIA) | blocked on the probe results |
 
 Everything marked done is tested offline against `fixtures/chat_app`, a fake
 streaming chat app with switchable behaviour — streaming, instant, stalling,
@@ -289,12 +289,48 @@ A failing variant never stops the sweep, and the moment it broke is captured as
 `NN-FAILED-<action>.png`. Repeats get `baseline-01/`, `baseline-02/` — the
 spec's layout collides otherwise.
 
-## Not built yet
+## The native backend
 
-The native (UIAutomation) driver. Writing an untested Win32 hook layer would be
-worse than not shipping one, so it waits on a machine to exercise it against.
-The pure part — matching strategies against element descriptors — can be written
-and unit-tested ahead of that; only the thin pywinauto adapter needs hardware.
+Split so that everything decidable is decided in tested code, and only the
+pywinauto contact waits for hardware.
+
+`flowrunner/native_match.py` — **tested**, against synthetic trees shaped like a
+CAD window. It owns which strategy means which element, what happens when
+several match, and how a Win32 name folds:
+
+```
+&File            -> file          (mnemonic stripped)
+Save\tCtrl+S     -> save          (accelerator dropped)
+Properties...    -> properties    (trailing ellipsis dropped)
+Search && Replace-> search & replace
+```
+
+So a flow says `name: Properties` and matches `Properties...`, rather than
+making the author copy the punctuation. AutomationIds are compared exactly —
+they are developer-chosen identifiers and folding them would merge controls
+someone deliberately kept apart.
+
+`path` is a **subsequence** of the ancestor chain, not the full thing: a real
+tree is full of anonymous wrappers, and a flow naming every level breaks the
+first time a layout gains a container. `path: [Window, Filters]` means "inside
+something called Filters, inside a Window".
+
+The rules match the web driver's deliberately — ranked strategies, ambiguity is
+not resolution, `nth` for a deliberate choice — because a flow that behaves
+differently per backend is worse than no flow.
+
+`flowrunner/drivers/native.py` — **unexercised**. The adapter: walk the tree,
+click, type, read, screenshot. Reading follows a chain, because a CAD
+application answers "what does this say" three different ways: the UIA value
+(exact), then the clipboard via select-all-and-copy (exact, and often the only
+thing that works on a legacy custom-drawn panel), then OCR (approximate, last
+resort). The visual-anchor and agent rungs work exactly as on the web, because
+both operate on pixels.
+
+What is testable offline is tested: the tree walk against wrappers that throw
+and containers that refuse to enumerate, the walk bounds, the anchor-point
+arithmetic, and that every unavailable path fails with a message saying what to
+install or do.
 
 Containerising native CAD clients is not viable: Windows containers have no
 desktop session and no usable GPU path. Windows VMs with vGPU are the route, and

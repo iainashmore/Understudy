@@ -13,9 +13,12 @@ def build(backend: str, **options):
 
         return WebDriver(**options)
     if backend == "native":
-        raise NotImplementedError(
-            "the native (UIAutomation) driver is not built yet; available: web"
-        )
+        # Registered, but never yet run against a real application: there was
+        # no Windows machine to exercise it on. The matching logic underneath
+        # it is tested; the pywinauto contact is not.
+        from flowrunner.drivers.native import NativeDriver
+
+        return NativeDriver(**options)
     raise KeyError(f"unknown backend {backend!r}; expected one of {BACKENDS}")
 
 

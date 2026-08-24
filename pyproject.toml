@@ -23,6 +23,7 @@ dev = ["pytest>=8"]
 web = ["playwright>=1.40"]
 agent = ["anthropic>=1.0"]
 ocr = ["pytesseract>=0.3"]
+native = ["pywinauto>=0.6", "pyperclip>=1.8"]
 
 [tool.setuptools]
 packages = [
