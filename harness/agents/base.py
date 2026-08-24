@@ -8,10 +8,39 @@ the model-backed one that comes later.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from harness.interaction import Action, Interface, Observation
 from harness.task import TaskBrief
+
+
+@dataclass(frozen=True)
+class Usage:
+    """Tokens consumed by one agent call.
+
+    Optimising cost is a non-goal, but recording it is nearly free and
+    impossible to backfill. Mock agents leave it at zero.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __add__(self, other: "Usage") -> "Usage":
+        return Usage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+        )
+
+    @property
+    def total(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+        }
 
 
 @runtime_checkable
@@ -34,6 +63,9 @@ class Agent(Protocol):
         """Start a fresh run. Must clear any state from the previous one."""
         ...
 
+    #: Tokens used by the most recent `act`, if the implementation knows.
+    last_usage: Usage | None
+
     def act(self, observation: Observation) -> Action:
         """Choose the next action given what the environment just returned."""
         ...
@@ -52,6 +84,7 @@ class BaseAgent:
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self.last_usage: Usage | None = None
         self.brief: TaskBrief | None = None
         self.interface: Interface | None = None
         self.observations: list[Observation] = []

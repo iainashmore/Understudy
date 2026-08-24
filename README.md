@@ -11,15 +11,16 @@ See `HARNESS_SPEC.md` for the full design.
 
 ## Status
 
-Build steps 1 and 2 are done: **task definitions, the scorer, and the mock
-agents**. There is no environment yet, so nothing runs end to end.
+Build steps 1–3 are done: **tasks, scorer, mock agents, and the runner loop**.
+The loop runs end to end against a stub environment; no real layer exists yet,
+so there are no capability results.
 
 | # | Component | State |
 |---|-----------|-------|
 | 1 | Task definitions + scorer | done |
 | 2 | MockAgent | done |
-| 3 | Runner loop | next |
-| 4 | APIEnvironment | |
+| 3 | Runner loop | done |
+| 4 | APIEnvironment | next |
 | 5 | KernelEnvironment | |
 | 6 | UIEnvironment | |
 | 7 | ModelAgent | |
@@ -31,7 +32,10 @@ harness/task.py        Task, TaskBrief, Canvas, Difficulty, ScoringConfig
 harness/scorer.py      Scorer protocol + PixelScorer
 harness/image.py       artifact normalisation (PNG -> RGB array), blur
 harness/interaction.py Layer, Action, Observation, Operation, Interface
+harness/environment.py Environment protocol (no implementations yet)
 harness/agents/        Agent protocol + the mocks
+harness/runner.py      the loop, RunResult, trace writing
+harness/results.py     results CSV + success-rate-by-layer summary
 harness/reference.py   golden recipe -> SVG -> PNG   (authoring only)
 tasks/*.json           the task set, one file each
 references/*.png       generated golden images
@@ -43,7 +47,7 @@ tests/                 unit tests plus the threshold calibration
 
 ```bash
 pip install -r requirements.txt
-pytest                                        # 182 tests
+pytest                                        # 223 tests
 python3 tools/generate_references.py --check  # references current?
 python3 tools/generate_references.py          # regenerate after a recipe edit
 ```
@@ -121,6 +125,66 @@ The `Interface` an environment hands over describes the operations available at
 that layer and nothing else. Its preamble must never mention the task: the
 moment one layer's framing carries a hint the others lack, the comparison stops
 being about abstraction.
+
+## The runner
+
+`Runner.run(task, environment, agent)` drives one agent through one task at one
+layer: reset both, ask for an action, execute it, feed the observation back,
+repeat until the agent says `done` or the budget runs out. Then score whatever
+came out and write the trace.
+
+The runner is the only component that sees both sides — the agent and the
+environment get a `TaskBrief`, the scorer gets the reference, the runner holds
+the `Task` that joins them.
+
+**Outcomes are orthogonal to pass/fail.** A run ends `completed`, `turn_limit`,
+`agent_error` or `environment_error`, and is scored either way. An agent that
+drew the right thing and never declared completion is a different failure from
+one that drew the wrong thing, and collapsing the two loses the distinction.
+`passed` is the scorer's verdict and stays the headline number.
+
+**A rejected action is not the end of a run.** Malformed or unsupported actions
+come back as an observation carrying an error, and the agent gets to read it and
+try again; environments raise only when they are actually broken. Error
+legibility is one of the things being measured, so it has to be reachable.
+
+**Turn budgets are per-layer** (`api` 20, `kernel` 40, `ui` 60 — provisional
+until each environment has run). One UI click accomplishes far less than one API
+call, so a single shared budget would hand the lower layers a handicap that
+reads as incapability. For the same reason mean turn counts are reported
+within-layer only and the summary says so.
+
+An agent crash fails that run, not the sweep. Timeouts and malformed model
+responses are expected, and the trace is what makes them readable afterwards.
+
+### Traces
+
+JSONL, one record per turn, written to `traces/<run_id>.jsonl` as the run
+happens rather than assembled at the end — the run worth reading is usually the
+one that fell over, and it should not take its own transcript with it.
+
+```
+run_start   task, layer, agent, turn limit, prompt, canvas
+interface   the operation signatures the agent was shown
+turn        action, observation, cumulative timings, token usage
+run_end     outcome, turns used, pass/fail, metrics, scoring details
+```
+
+Images are never inlined — an observation records its byte count and a digest,
+and the canvas is saved beside the trace (`final.png`, plus `turn_NNN.png` when
+`capture_turn_images` is on). A trace with a base64 PNG per turn is not one
+anyone will read.
+
+## Results
+
+`write_csv()` emits one row per run; `format_summary()` prints success rate by
+layer and by difficulty tier. Where a layer stops working is more informative
+than whether it works — a layer that handles single shapes and collapses on
+occlusion is a different finding from one that fails everywhere.
+
+Oracle runs are written to the CSV, flagged, and excluded from every rate. They
+were handed the answer; counting them would inflate the one number this whole
+exercise turns on.
 
 ## Scoring
 
