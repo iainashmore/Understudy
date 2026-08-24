@@ -29,7 +29,14 @@ import time
 from typing import Any
 
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
+from flowrunner.cursor import MouseStyle, move as move_pointer
 from flowrunner.flow import Strategy, Target
+from flowrunner.geometry import (
+    WindowGeometry,
+    enumerate_monitors,
+    make_dpi_aware,
+    monitor_for,
+)
 from flowrunner.learned import LearnedAnchors
 from flowrunner.native_match import (
     ElementDescriptor,
@@ -121,6 +128,14 @@ class NativeDriver:
         self.window = None
         self.app = None
         self._elements: list[ElementDescriptor] = []
+        self.monitors: list = []
+        self.geometry: WindowGeometry | None = None
+        #: Placement at start. Anchors were captured against this; a resize or
+        #: a DPI change invalidates them, a move does not.
+        self.baseline: WindowGeometry | None = None
+        self.dpi_awareness = "not set"
+        self.warnings: list[str] = []
+        self.mouse_style = MouseStyle()
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -139,6 +154,14 @@ class NativeDriver:
             raise DriverError(
                 "flow has no target_app.native.window_title_pattern or .executable"
             )
+        # Before anything reads a coordinate. On a 150% monitor an unaware
+        # process is handed virtualised numbers: they look plausible, the
+        # clicks land wrong, and screenshots come back at a different
+        # resolution from the one the anchors were captured at.
+        self.dpi_awareness = make_dpi_aware()
+        self.monitors = enumerate_monitors()
+        self.mouse_style = MouseStyle.from_config(app_config.get("mouse"))
+
         try:
             if executable and app_config.get("launch", False):
                 self.app = Application(backend="uia").start(executable)
@@ -147,14 +170,117 @@ class NativeDriver:
             self.window.wait("exists ready", timeout=60)
         except Exception as exc:
             raise DriverError(f"could not attach to {pattern or executable!r}: {exc}") from None
+
         self.refresh()
+        self.baseline = self.geometry
+        self.park_pointer()
+        expected = app_config.get("monitor")
+        if expected and self.geometry and self.geometry.monitor != expected:
+            raise DriverError(
+                f"the window is on {self.geometry.monitor or 'an unknown monitor'}, "
+                f"but the flow expects {expected}. Move it, or change "
+                f"target_app.native.monitor. Anchors and regions are captured "
+                f"per monitor and do not carry across a DPI change."
+            )
 
     def refresh(self) -> None:
-        """Re-walk the tree. Called after anything that may have changed it."""
+        """Re-walk the tree and re-read the window's placement."""
         if self.window is None:
             raise DriverError("driver used before start")
         time.sleep(SETTLE_S)
+        self.geometry = self._read_geometry()
+        self._check_placement()
         self._elements = walk(self.window)
+
+    def _read_geometry(self) -> WindowGeometry | None:
+        try:
+            rect = self.window.rectangle()
+        except Exception:
+            return None
+        found = WindowGeometry(
+            left=int(rect.left), top=int(rect.top),
+            right=int(rect.right), bottom=int(rect.bottom),
+        )
+        monitor = monitor_for(self.monitors, found)
+        if monitor is None:
+            return found
+        return WindowGeometry(
+            left=found.left, top=found.top, right=found.right, bottom=found.bottom,
+            monitor=monitor.name, scale=monitor.scale,
+        )
+
+    def _check_placement(self) -> None:
+        """Warn once if the window has been resized or moved to a monitor at a
+        different scale. Anchors are pixels; both invalidate them."""
+        if not (self.baseline and self.geometry):
+            return
+        if self.geometry.same_placement_as(self.baseline):
+            return
+        message = (
+            f"the window changed from {self.baseline.describe()} to "
+            f"{self.geometry.describe()}; anchors captured before this may no "
+            f"longer match"
+        )
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    # -- pointer --------------------------------------------------------------
+
+    def pointer_position(self) -> tuple[int, int]:
+        try:
+            import ctypes
+
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+            point = POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+            return (int(point.x), int(point.y))
+        except Exception:
+            # Unknown start point: begin the move from the destination, which
+            # degrades to a teleport rather than flying in from (0, 0).
+            return (0, 0)
+
+    def move_pointer_to(self, x: int, y: int) -> None:
+        """Travel to a screen point, so a recording of the session is
+        followable rather than a sequence of jumps."""
+        if not self.mouse_style.animated:
+            return
+        start = self.pointer_position()
+        if start == (0, 0):
+            return
+        move_pointer(start, (x, y), self.mouse_style)
+
+    def park_pointer(self) -> None:
+        """Put the pointer inside the target window before the first step, so a
+        recording does not open with a jump in from wherever it was left."""
+        if self.geometry is None or not self.mouse_style.animated:
+            return
+        centre = self.geometry.to_screen(
+            self.geometry.width // 2, self.geometry.height // 2
+        )
+        self.move_pointer_to(*centre)
+
+    def _centre_of(self, handle) -> tuple[int, int] | None:
+        try:
+            rect = handle.rectangle()
+            return (
+                int((rect.left + rect.right) / 2),
+                int((rect.top + rect.bottom) / 2),
+            )
+        except Exception:
+            return None
+
+    def to_screen(self, x: int | float, y: int | float) -> tuple[int, int]:
+        """Window-relative to virtual-desktop, which is what the mouse takes.
+
+        Everything a flow declares -- anchors, regions -- is window-relative, so
+        it survives the window moving and means the same thing on whichever
+        monitor the application is on.
+        """
+        if self.geometry is None:
+            raise DriverError("window geometry is unknown; cannot place a click")
+        return self.geometry.to_screen(x, y)
 
     def stop(self) -> None:
         self.window = None
@@ -252,13 +378,29 @@ class NativeDriver:
 
     def click(self, target: Target, timeout_ms: int) -> Resolution:
         handle, resolution = self.resolve(target, timeout_ms)
+        self._approach(handle)
         _act(lambda: handle.click_input())
         self.refresh()
         return resolution
 
+    def _approach(self, handle) -> None:
+        """Travel to the control before pressing it.
+
+        pywinauto's own click_input teleports; arriving first means the click
+        itself moves the pointer nowhere, so the recording shows a hand moving
+        to a button rather than a button being pressed by nothing.
+        """
+        if isinstance(handle, _Point):
+            self.move_pointer_to(*handle.screen_point)
+            return
+        centre = self._centre_of(handle)
+        if centre:
+            self.move_pointer_to(*centre)
+
     def type(self, target: Target, text: str, timeout_ms: int, mode: str = "type",
              clear: bool = True, delay_ms: int = 0) -> Resolution:
         handle, resolution = self.resolve(target, timeout_ms)
+        self._approach(handle)
         _act(lambda: handle.click_input())
         if clear:
             # Select-all then delete: typing over a selection without deleting
@@ -392,15 +534,30 @@ class _Point:
         x, y = self.match.centre
         return x + int(self.offset.get("dx", 0)), y + int(self.offset.get("dy", 0))
 
+    @property
+    def screen_point(self) -> tuple[int, int]:
+        """The click point in virtual-desktop coordinates.
+
+        `point` is window-relative, because that is the space the screenshot --
+        and therefore the anchor match -- is in. The mouse is driven in screen
+        coordinates. On a single monitor with the window at the origin the two
+        are the same, which is exactly why getting this wrong survives testing;
+        on a second monitor they differ by the window origin, and left of or
+        above the primary that origin is negative.
+        """
+        return self.driver.to_screen(*self.point)
+
     def click_input(self) -> None:
         from pywinauto import mouse
 
-        mouse.click(coords=self.point)
+        self.driver.move_pointer_to(*self.screen_point)
+        mouse.click(coords=self.screen_point)
 
     def type_keys(self, keys: str, **kwargs) -> None:
         from pywinauto import keyboard, mouse
 
-        mouse.click(coords=self.point)
+        self.driver.move_pointer_to(*self.screen_point)
+        mouse.click(coords=self.screen_point)
         keyboard.send_keys(keys, **kwargs)
 
     def capture_as_image(self):

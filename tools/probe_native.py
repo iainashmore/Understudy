@@ -14,6 +14,11 @@ the whole approach, and writes the evidence to a folder:
   3. What does it look like?               -- a screenshot, so the tree can be
      read against the pixels.
 
+It also reports the monitor layout and DPI scaling, because anchors and regions
+are captured per monitor: a second screen at a different scale, or one placed
+left of the primary so its coordinates are negative, changes what a recorded
+flow means.
+
 Nothing here modifies the application. It only reads.
 
     python probe_native.py --title "*CATIA*"
@@ -148,6 +153,35 @@ def summarise_tree(nodes: list[dict[str, Any]]) -> dict[str, Any]:
         "with_automation_id": sum(1 for n in nodes if n["automation_id"]),
         "with_name": sum(1 for n in nodes if n["name"]),
         "control_types": dict(sorted(types.items(), key=lambda kv: -kv[1])[:25]),
+    }
+
+
+def probe_display() -> dict[str, Any]:
+    """Monitor layout and DPI awareness.
+
+    Needed because anchors and regions are captured per monitor: a second
+    screen at a different scale, or one placed left of the primary so its
+    coordinates are negative, changes what a recorded flow means.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from flowrunner.geometry import enumerate_monitors, make_dpi_aware
+    except Exception as exc:
+        return {"error": f"could not import flowrunner.geometry: {exc}"}
+
+    awareness = make_dpi_aware()
+    monitors = [
+        {"name": m.name, "left": m.left, "top": m.top, "right": m.right,
+         "bottom": m.bottom, "width": m.width, "height": m.height,
+         "primary": m.primary, "scale": m.scale}
+        for m in enumerate_monitors()
+    ]
+    scales = {m["scale"] for m in monitors}
+    return {
+        "dpi_awareness": awareness,
+        "monitors": monitors,
+        "mixed_scaling": len(scales) > 1,
+        "negative_origin": any(m["left"] < 0 or m["top"] < 0 for m in monitors),
     }
 
 
@@ -286,6 +320,24 @@ def main(argv: list[str] | None = None) -> int:
     if not cdp:
         print("  none")
 
+    display = probe_display()
+    print("display:")
+    if display.get("error"):
+        print(f"  {display['error']}")
+    else:
+        print(f"  DPI awareness: {display['dpi_awareness']}")
+        for monitor in display["monitors"] or []:
+            tag = " (primary)" if monitor["primary"] else ""
+            print(f"  {monitor['name']}: {monitor['width']}x{monitor['height']} "
+                  f"at ({monitor['left']}, {monitor['top']})"
+                  f"{tag} @{monitor['scale']:g}x")
+        if display.get("mixed_scaling"):
+            print("  NOTE: monitors have different DPI scales. Capture anchors on "
+                  "the monitor the run will use; they do not carry across.")
+        if display.get("negative_origin"):
+            print("  NOTE: a monitor sits left of or above the primary, so its "
+                  "screen coordinates are negative. Expected, and handled.")
+
     print(f"walking the UIA tree for windows matching {args.title!r} ...")
     uia = probe_uia(args.title, out_dir)
     print(f"  {uia}")
@@ -295,7 +347,8 @@ def main(argv: list[str] | None = None) -> int:
         watch_focus(args.watch, out_dir)
 
     report = {"timestamp": stamp, "title_pattern": args.title,
-              "cdp": cdp, "uia": uia, "verdict": verdict(cdp, uia)}
+              "display": display, "cdp": cdp, "uia": uia,
+              "verdict": verdict(cdp, uia)}
     (out_dir / "probe.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print("\n" + "\n".join(report["verdict"]))
