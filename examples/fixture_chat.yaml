@@ -1,0 +1,93 @@
+version: 1
+name: fixture-chat-flow
+target_app:
+  web:
+    url: "file:///home/user/harness/fixtures/chat_app/index.html?mode=stream&delay=25&dialog=portal&banner=1"
+    viewport: {width: 900, height: 700}
+
+defaults:
+  timeout_ms: 10000
+  poll_interval_ms: 200
+  stable_for_ms: 600
+
+targets:
+  cookie_banner:
+    intent: cookie consent button, appears unpredictably
+    web:
+      - testid: accept-cookies
+      - role: button
+        name: Accept cookies
+
+  new_chat:
+    intent: clears the conversation and starts a fresh one
+    web:
+      - testid: new-chat
+      - role: button
+        name: New chat
+
+  prompt_box:
+    intent: the main message input
+    web:
+      - testid: prompt-input
+      - role: textbox
+        name: Message
+      - placeholder: Ask something
+
+  send_button:
+    intent: submits the message
+    web:
+      - testid: send
+      - role: button
+        name: Send
+
+  confirm_dialog:
+    intent: confirmation that appears before sending
+    web:
+      - testid: confirm-send
+      - role: button
+        name: Confirm send
+
+  stop_button:
+    intent: visible only while a response is being generated
+    web:
+      - testid: stop
+      - role: button
+        name: Stop
+
+  response_area:
+    intent: where the assistant reply appears
+    web:
+      - testid: response
+      - role: status
+        name: Response
+
+interstitials:
+  - cookie_banner
+
+reset:
+  - action: click
+    target: new_chat
+
+steps:
+  - action: capture
+    label: before-prompt
+  - action: type
+    target: prompt_box
+    text: "{{prompt}}"
+  - action: capture
+    label: after-typing
+  - action: click
+    target: send_button
+  - action: click
+    target: confirm_dialog
+    optional: true
+  - action: wait_for_stable
+    target: response_area
+    until_hidden: stop_button
+    stable_for_ms: 500
+    timeout_ms: 30000
+  - action: capture
+    label: after-response
+  - action: read
+    target: response_area
+    store_as: response
