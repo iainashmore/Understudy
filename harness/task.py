@@ -88,6 +88,21 @@ class ScoringConfig:
 
 
 @dataclass(frozen=True)
+class TaskBrief:
+    """The agent-facing view of a task: what to draw, and nothing else.
+
+    `Task` holds the path to the reference image, so handing an agent the whole
+    task hands it the answer -- a model given a file path is perfectly capable
+    of reading it. Agents and environments get a brief; only the scorer gets the
+    reference. Same reason the golden recipe is stripped in `load_task`.
+    """
+
+    task_id: str
+    prompt: str
+    canvas: Canvas
+
+
+@dataclass(frozen=True)
 class Task:
     """Layer-agnostic task definition."""
 
@@ -98,6 +113,12 @@ class Task:
     difficulty: Difficulty
     reference_path: Path
     scoring: ScoringConfig
+
+    def brief(self) -> TaskBrief:
+        """The subset an agent is allowed to see."""
+        return TaskBrief(
+            task_id=self.task_id, prompt=self.prompt, canvas=self.canvas
+        )
 
     def reference_bytes(self) -> bytes:
         if not self.reference_path.exists():

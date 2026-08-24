@@ -153,3 +153,22 @@ def test_missing_required_key_is_rejected(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="prompt"):
         load_task("broken")
+
+
+def test_brief_withholds_the_reference_from_the_agent():
+    # A model handed `reference_path` can simply read the answer off disk.
+    task = load_task("t01_red_circle")
+    brief = task.brief()
+
+    assert not hasattr(brief, "reference_path")
+    assert "reference" not in json.dumps(brief, default=str).lower()
+    assert "png" not in json.dumps(brief, default=str).lower()
+
+
+def test_brief_carries_everything_an_agent_legitimately_needs():
+    task = load_task("t01_red_circle")
+    brief = task.brief()
+
+    assert brief.task_id == task.task_id
+    assert brief.prompt == task.prompt
+    assert brief.canvas == task.canvas

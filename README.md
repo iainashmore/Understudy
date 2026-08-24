@@ -11,14 +11,14 @@ See `HARNESS_SPEC.md` for the full design.
 
 ## Status
 
-Build step 1 of 7 is done: **task definitions and the scorer for the SVG
-domain**. Nothing drives an agent yet.
+Build steps 1 and 2 are done: **task definitions, the scorer, and the mock
+agents**. There is no environment yet, so nothing runs end to end.
 
 | # | Component | State |
 |---|-----------|-------|
 | 1 | Task definitions + scorer | done |
-| 2 | MockAgent | next |
-| 3 | Runner loop | |
+| 2 | MockAgent | done |
+| 3 | Runner loop | next |
 | 4 | APIEnvironment | |
 | 5 | KernelEnvironment | |
 | 6 | UIEnvironment | |
@@ -27,9 +27,11 @@ domain**. Nothing drives an agent yet.
 ## Layout
 
 ```
-harness/task.py        Task, Canvas, Difficulty, ScoringConfig, loaders
+harness/task.py        Task, TaskBrief, Canvas, Difficulty, ScoringConfig
 harness/scorer.py      Scorer protocol + PixelScorer
 harness/image.py       artifact normalisation (PNG -> RGB array), blur
+harness/interaction.py Layer, Action, Observation, Operation, Interface
+harness/agents/        Agent protocol + the mocks
 harness/reference.py   golden recipe -> SVG -> PNG   (authoring only)
 tasks/*.json           the task set, one file each
 references/*.png       generated golden images
@@ -41,7 +43,7 @@ tests/                 unit tests plus the threshold calibration
 
 ```bash
 pip install -r requirements.txt
-pytest                                        # 140 tests
+pytest                                        # 182 tests
 python3 tools/generate_references.py --check  # references current?
 python3 tools/generate_references.py          # regenerate after a recipe edit
 ```
@@ -71,6 +73,54 @@ Each `tasks/*.json` also holds a `golden` recipe — the shape list the referenc
 image is rendered from. `load_task()` drops it; only the authoring tool reads
 it. An environment that could see the recipe would be handed a shape list,
 which is roughly the API layer's action space, i.e. the answer.
+
+## Agents
+
+`Agent` is a protocol: `reset(brief, interface)` once per run, then
+`act(observation)` per turn until it returns `done` or the runner's budget runs
+out. Implementations keep their own history.
+
+The mocks exist so the loop can be exercised without spending API calls, and
+they cover misbehaviour as well as the happy path — the failure modes are the
+interesting output, so the runner has to handle them before a real model starts
+producing them.
+
+| Mock | Exercises |
+|------|-----------|
+| `ScriptedAgent` | a fixed plan; also covers wrong drawings and invalid operations, since those are just scripts |
+| `NoOpAgent` | declares victory having drawn nothing — must fail at every layer |
+| `LoopingAgent` | never stops, so the turn budget has to |
+| `CrashingAgent` | raises mid-run; a timeout must fail one run, not the sweep |
+| `ReactiveAgent` | reads the observation and changes its mind |
+
+`retrying_agent()` builds the canonical feedback-loop case: emit something
+invalid, read the error, correct it. Error legibility is one of the things being
+measured, so at least one mock has to close that loop.
+
+Every agent records the observations it was shown. That is not bookkeeping: a
+scripted agent ignores its observations by construction, so without the record a
+runner feeding back empty or stale observations would still pass every test.
+
+### The oracle is a diagnostic, not a measurement
+
+`oracle_agent(recipe, translate)` is handed the golden recipe and a
+layer-specific translator. Its job is to prove an environment can produce a
+passing artifact at all — if the oracle cannot pass a task through a layer, that
+layer is broken, and a real agent failing there would look like a capability
+result when it is a harness bug. Worth running against each new environment.
+Oracle runs carry `is_oracle = True` and stay out of the results table.
+
+### What an agent is allowed to see
+
+`Task` holds the path to the reference image, so agents and environments get a
+`TaskBrief` — id, prompt, canvas — and only the scorer gets the reference. A
+model handed a file path is perfectly capable of reading it. Same reasoning as
+stripping the golden recipe.
+
+The `Interface` an environment hands over describes the operations available at
+that layer and nothing else. Its preamble must never mention the task: the
+moment one layer's framing carries a hint the others lack, the comparison stops
+being about abstraction.
 
 ## Scoring
 
