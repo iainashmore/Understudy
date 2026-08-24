@@ -14,8 +14,10 @@ dependencies = [
     "jsonschema>=4",
 ]
 
-[project.optional-dependencies.web]
-playwright = ["playwright>=1.40"]
+[project.optional-dependencies]
+web = ["playwright>=1.40"]
+agent = ["anthropic>=1.0"]
+ocr = ["pytesseract>=0.3"]
 
 [project.optional-dependencies]
 # Authoring-only: rasterizes golden references. Deliberately a different

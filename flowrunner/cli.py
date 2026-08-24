@@ -15,6 +15,7 @@ from pathlib import Path
 from flowrunner.drivers import build as build_driver
 from flowrunner.flow import FlowError, load_flow
 from flowrunner.prompts import PromptsError, load_prompts
+from flowrunner.resolvers import build as build_resolver, credentials_available
 from flowrunner.runner import Runner, Status, run_directory, write_csv
 
 
@@ -43,7 +44,21 @@ def command_run(args) -> int:
     prompts = prompts.select([name.strip() for name in only] if only else None)
 
     out_dir = Path(args.out) if args.out else run_directory(args.runs_root)
-    driver = build_driver(args.backend, headless=not args.headed)
+
+    if args.agent != "off" and not credentials_available():
+        print(
+            "warning: --agent is on but no Anthropic credentials were found; "
+            "agent resolution will fail. Run `ant auth login` or set "
+            "ANTHROPIC_API_KEY.",
+            file=sys.stderr,
+        )
+    driver = build_driver(
+        args.backend,
+        headless=not args.headed,
+        resolver=build_resolver("claude" if args.agent != "off" else "off"),
+        agent_mode=args.agent,
+        learned_dir=args.learned_dir or str(Path(args.flow).parent / "learned"),
+    )
 
     print(f"{flow.name}: {len(prompts)} variant(s) x {args.repeat} -> {out_dir}")
     driver.start(flow.app_config(args.backend))
@@ -61,6 +76,10 @@ def command_run(args) -> int:
                     f"  [fallbacks: {', '.join(result.used_fallbacks)}]"
                     if result.used_fallbacks else ""
                 )
+                if result.agent_resolutions:
+                    drift += f"  [agent: {', '.join(result.agent_resolutions)}]"
+                if result.learned_anchors:
+                    drift += f"  [learned: {', '.join(result.learned_anchors)}]"
                 print(
                     f"  {marker:8} {result.prompt_id:<20} "
                     f"{result.duration_ms:>6}ms  {len(result.response):>5} chars{drift}"
@@ -95,6 +114,17 @@ def main(argv: list[str] | None = None) -> int:
             child.add_argument("--reset-level", type=int, default=1, choices=[1, 2])
             child.add_argument("--strict", action="store_true",
                                help="exit non-zero if any variant failed")
+            child.add_argument(
+                "--agent", default="off", choices=["off", "fallback", "only"],
+                help="off: deterministic only. fallback: ask the model when "
+                     "everything else fails. only: let the model resolve "
+                     "everything (no deterministic strategies).",
+            )
+            child.add_argument(
+                "--learned-dir", default=None,
+                help="where anchors the agent finds are cached "
+                     "(default: <flow dir>/learned)",
+            )
 
     args = parser.parse_args(argv)
     try:

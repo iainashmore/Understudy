@@ -13,6 +13,7 @@ click; no scoring. The human authors the steps, the tool repeats them reliably.
 | 3 | Runner + output layout | done |
 | 4 | `wait_for_stable` (text and pixel modes, region-scoped) | done |
 | — | Visual anchoring + OCR reads, for surfaces with no DOM | done |
+| — | Agent fallback rung (vision model, cached) | done |
 | 5 | Web recorder (`playwright codegen` wrapper) | not started |
 | 6 | Native driver (UIAutomation) | blocked on a Windows machine |
 | 7 | Native recorder (Win32 hooks + UIA) | blocked on a Windows machine |
@@ -143,6 +144,64 @@ added when `pytesseract` and a tesseract binary are present. A missing OCR
 engine is reported as a step error, never as an empty response — an empty string
 meaning "could not read" is indistinguishable from one meaning "the assistant
 said nothing", and the two demand opposite reactions.
+
+## The agent rung
+
+The bottom of the ladder, below visual anchoring: when no selector matches and
+no anchor is found, ask a vision model where the control is, guided by the
+target's `intent`.
+
+```yaml
+targets:
+  dialog_done:
+    intent: the button that commits the rename and closes the dialog
+    web:
+      - testid: dlg-done          # tried first
+      - image: anchors/done.png   # then this
+      - agent: true               # then, and only then, the model
+```
+
+```bash
+--agent off        # default: agent rungs are skipped entirely
+--agent fallback   # ask the model only when everything deterministic has failed
+--agent only       # ignore deterministic strategies; measure the agent alone
+--learned-dir DIR  # where found anchors are cached (default <flow dir>/learned)
+```
+
+**It is off by default, and that is the point.** This tool's value is that only
+the prompt varies between runs. A model choosing where to click adds variance on
+top of the variance you are trying to measure, and a sweep where the agent
+improvised differently on one variant is not a comparison any more.
+
+**What the agent finds is cached as an anchor.** The crop it pointed at is
+written to `learned/<target>.png` and every later run matches it
+deterministically — including runs with the agent switched back off:
+
+```
+flow has drifted: the CSS selector no longer matches anything
+
+  run 1 (--agent fallback)     via=agent           model calls=1  confidence 0.93
+  run 2 (--agent fallback)     via=learned-anchor  model calls=0  cached, score 1.000
+  run 3 (--agent off)          via=learned-anchor  model calls=0  cached, score 1.000
+```
+
+Resilience when the UI moves, without the per-run non-determinism. A cached
+anchor that stops matching is discarded and the model asked again, so a stale
+one is never carried forever.
+
+**Every resolution records how it was reached.** Steps carry
+`via: selector | anchor | learned-anchor | agent`, and each result row carries
+`agent_resolutions` and `learned_anchors`. A run that needed the model is a
+different kind of result from one that did not, and the results say so rather
+than leaving you to infer it.
+
+Other details: the model is `claude-opus-5` with adaptive thinking and a strict
+tool for the bounding box; a `found: false` or low-confidence answer resolves to
+nothing rather than a guess, because a wrong click is worse than a clean
+failure; screenshots are downscaled before sending and coordinates scaled back,
+so a 4K window returns coordinates in its own space. `learned/` is a directory
+of PNGs plus an index — inspect it, delete from it, or promote an entry into the
+flow by hand.
 
 ## Knowing when a response is complete
 

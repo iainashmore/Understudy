@@ -43,7 +43,10 @@ from typing import Any
 
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
 from flowrunner.flow import Strategy, Target
-from flowrunner.vision import locate_all
+from flowrunner.learned import LearnedAnchors
+from flowrunner.resolvers import NullResolver, Resolver
+from flowrunner.vision import crop, locate_all
+from harness.image import to_png_bytes
 
 FORM_CONTROLS = {"input", "textarea", "select"}
 RESOLVE_POLL_S = 0.1
@@ -142,9 +145,28 @@ class _AnchorTarget:
 class WebDriver:
     backend = "web"
 
-    def __init__(self, headless: bool = True, slow_mo_ms: int = 0) -> None:
+    #: off      -- agent rungs are skipped entirely (the default)
+    #: fallback -- the agent is asked only when every deterministic strategy fails
+    #: only     -- deterministic strategies are ignored; the agent resolves everything
+    AGENT_MODES = ("off", "fallback", "only")
+
+    def __init__(
+        self,
+        headless: bool = True,
+        slow_mo_ms: int = 0,
+        resolver: Resolver | None = None,
+        agent_mode: str = "off",
+        learned_dir: str | None = None,
+    ) -> None:
+        if agent_mode not in self.AGENT_MODES:
+            raise ValueError(
+                f"agent_mode must be one of {self.AGENT_MODES}, got {agent_mode!r}"
+            )
         self.headless = headless
         self.slow_mo_ms = slow_mo_ms
+        self.resolver: Resolver = resolver or NullResolver()
+        self.agent_mode = agent_mode
+        self.learned = LearnedAnchors(learned_dir)
         self._playwright = None
         self._browser = None
         self._context = None
@@ -318,15 +340,86 @@ class WebDriver:
         handle = _AnchorTarget(self.page, matches[0], strategy.fields.get("offset"))
         return handle, f"score {matches[0].score:.3f}"
 
+    def _agent_hint(self, target: Target, strategy: Strategy | None) -> str | None:
+        value = strategy.fields.get("agent") if strategy else None
+        return value if isinstance(value, str) else None
+
+    def _resolve_by_agent(self, target: Target, strategy: Strategy | None):
+        """Learned anchor first, then the model.
+
+        Once the agent has found a control its crop is an ordinary anchor, so
+        the second run onwards is deterministic again.
+        """
+        learned = self.learned.get(target.name)
+        if learned is not None:
+            matches = locate_all(self.page.screenshot(), learned, threshold=0.93)
+            if len(matches) == 1:
+                return (
+                    _AnchorTarget(self.page, matches[0]),
+                    "learned-anchor",
+                    f"cached, score {matches[0].score:.3f}",
+                )
+            # The learned anchor has stopped working: drop it and ask again
+            # rather than carrying a stale one forever.
+            self.learned.forget(target.name)
+
+        if self.agent_mode == "off":
+            return None, "agent", "agent resolution is off"
+
+        intent = target.intent or self._agent_hint(target, strategy) or ""
+        if not intent:
+            return None, "agent", "no intent to guide the agent"
+
+        screenshot = self.page.screenshot()
+        found = self.resolver.locate(
+            screenshot, intent, self._agent_hint(target, strategy)
+        )
+        if found is None:
+            return None, "agent", "agent did not find it"
+
+        self.learned.put(
+            target.name,
+            to_png_bytes(crop(screenshot, found.as_region())),
+            note=found.reasoning,
+        )
+        from flowrunner.vision import Match
+
+        match = Match(found.x, found.y, found.width, found.height, found.confidence)
+        return (
+            _AnchorTarget(self.page, match),
+            "agent",
+            f"confidence {found.confidence:.2f}",
+        )
+
     def resolve(self, target: Target, timeout_ms: int):
         """First strategy identifying exactly one element wins."""
         strategies = target.for_backend(self.backend)
         deadline = time.monotonic() + timeout_ms / 1000.0
         attempts: list[str] = []
 
+        if self.agent_mode == "only":
+            # Deterministic strategies are ignored on purpose: this mode exists
+            # to measure what the agent alone can do.
+            agent_strategy = next(
+                (s for s in strategies if "agent" in s.fields), None
+            )
+            handle, via, note = self._resolve_by_agent(target, agent_strategy)
+            if handle is not None:
+                return handle, Resolution(target.name, 0, agent_strategy, note, via)
+            raise TargetNotFound(target, self.backend, [f"agent-only: {note}"])
+
         while True:
             attempts = []
             for index, strategy in enumerate(strategies):
+                if "agent" in strategy.fields:
+                    handle, via, note = self._resolve_by_agent(target, strategy)
+                    if handle is not None:
+                        return handle, Resolution(
+                            target.name, index, strategy, note, via
+                        )
+                    attempts.append(f"{strategy.describe()} -> {note}")
+                    continue
+
                 if "image" in strategy.fields:
                     try:
                         handle, note = self._resolve_anchor(strategy)
@@ -334,7 +427,9 @@ class WebDriver:
                         attempts.append(f"{strategy.describe()} -> error: {exc}")
                         continue
                     if handle is not None:
-                        return handle, Resolution(target.name, index, strategy, note)
+                        return handle, Resolution(
+                            target.name, index, strategy, note, "anchor"
+                        )
                     attempts.append(f"{strategy.describe()} -> {note}")
                     continue
 

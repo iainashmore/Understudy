@@ -93,6 +93,24 @@ class VariantResult:
         return self.reads.get("response", "")
 
     @property
+    def agent_resolutions(self) -> list[str]:
+        """Steps the model resolved. A run that needed the agent is a different
+        kind of result from one that did not, so it is reported separately."""
+        return [
+            f"{status.target}({status.resolution.get('note', '')})"
+            for status in self.step_statuses
+            if status.resolution and status.resolution.get("via") == "agent"
+        ]
+
+    @property
+    def learned_anchors(self) -> list[str]:
+        return [
+            status.target
+            for status in self.step_statuses
+            if status.resolution and status.resolution.get("via") == "learned-anchor"
+        ]
+
+    @property
     def used_fallbacks(self) -> list[str]:
         """Steps that resolved on something other than the preferred strategy.
         The early warning that the UI has moved."""
@@ -116,6 +134,8 @@ class VariantResult:
             "step_statuses": [status.as_dict() for status in self.step_statuses],
             "screenshots": self.screenshots,
             "used_fallbacks": self.used_fallbacks,
+            "agent_resolutions": self.agent_resolutions,
+            "learned_anchors": self.learned_anchors,
             "backend": self.backend,
             "timestamp": self.timestamp,
             "error": self.error,
@@ -124,7 +144,7 @@ class VariantResult:
 
 CSV_COLUMNS = [
     "prompt_id", "repeat_index", "prompt", "response", "status", "duration_ms",
-    "backend", "used_fallbacks", "error",
+    "backend", "used_fallbacks", "agent_resolutions", "error",
 ]
 
 
@@ -438,8 +458,8 @@ def write_csv(results: list[VariantResult], path: Path | str) -> Path:
             row = result.as_dict()
             writer.writerow({
                 column: (
-                    ",".join(row["used_fallbacks"])
-                    if column == "used_fallbacks"
+                    ",".join(row[column])
+                    if column in ("used_fallbacks", "agent_resolutions")
                     else row.get(column, "")
                 )
                 for column in CSV_COLUMNS

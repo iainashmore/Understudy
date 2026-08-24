@@ -30,12 +30,13 @@ VARIABLE_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 WEB_STRATEGY_KEYS = {
     "testid", "role", "text", "label", "placeholder", "css", "xpath", "image",
+    "agent",
 }
 WEB_MODIFIER_KEYS = {"name", "exact", "nth", "threshold", "region", "offset"}
 #: `image` is available on every backend: it works on pixels, which every
 #: backend has, and it is the only thing left when a surface exposes nothing.
 NATIVE_STRATEGY_KEYS = {
-    "automation_id", "name", "control_type", "class_name", "image",
+    "automation_id", "name", "control_type", "class_name", "image", "agent",
 }
 NATIVE_MODIFIER_KEYS = {"threshold", "region", "offset"}
 
@@ -59,7 +60,8 @@ class Strategy:
     @property
     def kind(self) -> str:
         for key in ("testid", "role", "text", "label", "placeholder", "css", "xpath",
-                    "image", "automation_id", "control_type", "class_name", "name"):
+                    "image", "agent", "automation_id", "control_type", "class_name",
+                    "name"):
             if key in self.fields:
                 return key
         return "unknown"
@@ -291,6 +293,18 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
         source_path=source_path,
         source_text=source_text,
     )
+
+    for name, target in flow.targets.items():
+        for strategies in target.strategies.values():
+            for strategy in strategies:
+                if "agent" in strategy.fields and not (
+                    target.intent or isinstance(strategy.fields["agent"], str)
+                ):
+                    raise FlowError(
+                        f"target {name!r}: an agent strategy needs guidance -- give "
+                        f"the target an `intent`, or put a description in the "
+                        f"`agent` value"
+                    )
 
     known = set(flow.targets)
     for step in flow.reset + flow.steps:

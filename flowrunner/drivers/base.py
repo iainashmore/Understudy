@@ -36,12 +36,15 @@ class TargetNotFound(DriverError):
 
 @dataclass(frozen=True)
 class Resolution:
-    """Which strategy actually found the element."""
+    """Which strategy actually found the element, and by what means."""
 
     target: str
     index: int
     strategy: Strategy | None = None
     note: str | None = None
+    #: selector | anchor | learned-anchor | agent. A run that needed the model
+    #: is a different kind of result from one that did not.
+    via: str = "selector"
 
     @property
     def used_fallback(self) -> bool:
@@ -49,12 +52,17 @@ class Resolution:
         that the UI has moved."""
         return self.index > 0
 
+    @property
+    def used_agent(self) -> bool:
+        return self.via == "agent"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "target": self.target,
             "strategy_index": self.index,
             "strategy": self.strategy.describe() if self.strategy else None,
             "used_fallback": self.used_fallback,
+            "via": self.via,
             "note": self.note,
         }
 
