@@ -1,0 +1,158 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture Chat</title>
+<!--
+  Offline stand-in for a streaming chat app, used to prove the runner and
+  wait_for_stable without depending on a real service.
+
+  Query parameters select the behaviour under test:
+    mode=stream|instant|stall|error   how the response arrives (default stream)
+    delay=<ms>                        per-token delay when streaming (default 30)
+    dialog=none|inline|portal         where a confirm dialog is rendered --
+                                      same role and name, different DOM parent
+    banner=1                          a cookie banner that must be dismissed
+    testids=0                         strip data-testid, forcing target
+                                      resolution onto role/name strategies
+-->
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; max-width: 720px; }
+  #response { min-height: 60px; border: 1px solid #ccc; padding: 12px; white-space: pre-wrap; }
+  .row { display: flex; gap: 8px; margin: 12px 0; }
+  textarea { flex: 1; height: 60px; }
+  .hidden { display: none; }
+  .dialog { border: 2px solid #333; padding: 12px; margin: 12px 0; background: #f7f7f7; }
+  .banner { background: #ffe; border: 1px solid #cc0; padding: 8px; margin-bottom: 12px; }
+</style>
+
+<div id="banner-slot"></div>
+<h1>Fixture Chat</h1>
+
+<div class="row">
+  <button aria-label="New chat" data-testid="new-chat">New chat</button>
+</div>
+
+<div id="dialog-inline-slot"></div>
+
+<form id="composer">
+  <div class="row">
+    <textarea data-testid="prompt-input" aria-label="Message" placeholder="Ask something"></textarea>
+  </div>
+  <div class="row">
+    <button type="submit" data-testid="send">Send</button>
+    <button type="button" data-testid="stop" class="hidden">Stop</button>
+  </div>
+</form>
+
+<div data-testid="response" id="response" role="status" aria-label="Response"></div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const mode = params.get("mode") || "stream";
+  const delay = Number(params.get("delay") || 30);
+  const dialogMode = params.get("dialog") || "none";
+
+  const response = document.getElementById("response");
+  const stop = document.querySelector('[data-testid="stop"]');
+  const send = document.querySelector('[data-testid="send"]');
+  const input = document.querySelector('[data-testid="prompt-input"]');
+  let timer = null;
+
+  if (params.get("banner") === "1") {
+    const banner = document.createElement("div");
+    banner.className = "banner";
+    banner.innerHTML = '<span>We use cookies.</span> ' +
+      '<button data-testid="accept-cookies" aria-label="Accept cookies">Accept</button>';
+    document.getElementById("banner-slot").appendChild(banner);
+    banner.querySelector("button").addEventListener("click", () => banner.remove());
+  }
+
+  // The same dialog, by role and accessible name, rendered either inside the
+  // page flow or portalled onto <body>. Anything anchored to an ancestor path
+  // breaks between the two; a document-wide role+name lookup does not.
+  function showDialog(onConfirm) {
+    if (dialogMode === "none") { onConfirm(); return; }
+    const dialog = document.createElement("div");
+    dialog.className = "dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-label", "Confirm send");
+    dialog.innerHTML = '<p>Send this message?</p>' +
+      '<button data-testid="confirm-send" aria-label="Confirm send">Continue</button>';
+    const host = dialogMode === "portal"
+      ? document.body
+      : document.getElementById("dialog-inline-slot");
+    host.appendChild(dialog);
+    dialog.querySelector("button").addEventListener("click", () => {
+      dialog.remove();
+      onConfirm();
+    });
+  }
+
+  function setStreaming(streaming) {
+    stop.classList.toggle("hidden", !streaming);
+    send.disabled = streaming;
+  }
+
+  function respond(prompt) {
+    const words = ("Echo: " + prompt).split(/\s+/).filter(Boolean);
+    response.textContent = "";
+
+    if (mode === "error") {
+      response.textContent = "Something went wrong.";
+      setStreaming(false);
+      return;
+    }
+    if (mode === "instant") {
+      response.textContent = words.join(" ");
+      setStreaming(false);
+      return;
+    }
+    if (mode === "stall") {
+      // Never finishes: the stop button stays visible and the text never
+      // settles, so a timeout must be recorded as a step status.
+      setStreaming(true);
+      let dots = 0;
+      timer = setInterval(() => {
+        dots += 1;
+        response.textContent = "thinking" + ".".repeat(dots % 4);
+      }, delay);
+      return;
+    }
+
+    setStreaming(true);
+    let index = 0;
+    timer = setInterval(() => {
+      if (index >= words.length) {
+        clearInterval(timer);
+        timer = null;
+        setStreaming(false);
+        return;
+      }
+      response.textContent += (index ? " " : "") + words[index];
+      index += 1;
+    }, delay);
+  }
+
+  document.getElementById("composer").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const prompt = input.value;
+    showDialog(() => respond(prompt));
+  });
+
+  stop.addEventListener("click", () => {
+    if (timer) { clearInterval(timer); timer = null; }
+    setStreaming(false);
+  });
+
+  document.querySelector('[data-testid="new-chat"]').addEventListener("click", () => {
+    if (timer) { clearInterval(timer); timer = null; }
+    setStreaming(false);
+    response.textContent = "";
+    input.value = "";
+  });
+
+  if (params.get("testids") === "0") {
+    document.querySelectorAll("[data-testid]").forEach((node) =>
+      node.removeAttribute("data-testid")
+    );
+  }
+</script>

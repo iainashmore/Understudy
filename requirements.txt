@@ -2,3 +2,6 @@ numpy>=1.26
 pillow>=10
 cairosvg>=2.7
 pytest>=8
+pyyaml>=6
+jsonschema>=4
+playwright>=1.40
