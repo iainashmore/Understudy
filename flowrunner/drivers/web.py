@@ -43,6 +43,7 @@ from typing import Any
 
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
 from flowrunner.flow import Strategy, Target
+from flowrunner.vision import locate_all
 
 FORM_CONTROLS = {"input", "textarea", "select"}
 RESOLVE_POLL_S = 0.1
@@ -66,6 +67,76 @@ def find_chromium() -> str | None:
     candidates += sorted(root.glob("chromium-*/chrome-win/chrome.exe"))
     candidates += sorted(root.glob("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"))
     return str(candidates[-1]) if candidates else None
+
+
+class _AnchorTarget:
+    """A point found by locating an anchor image in the current screenshot.
+
+    Exposes the slice of the locator interface the driver uses, so an anchor and
+    a real element are interchangeable to everything above. Text cannot be read
+    from pixels, and saying so plainly beats returning an empty string that
+    looks like an empty response.
+    """
+
+    def __init__(self, page, match, offset: dict[str, int] | None = None) -> None:
+        self.page = page
+        self.match = match
+        self.offset = offset or {}
+
+    @property
+    def point(self) -> tuple[int, int]:
+        x, y = self.match.centre
+        return x + int(self.offset.get("dx", 0)), y + int(self.offset.get("dy", 0))
+
+    def click(self, timeout: int | None = None) -> None:
+        x, y = self.point
+        self.page.mouse.click(x, y)
+
+    def press(self, keys: str, timeout: int | None = None) -> None:
+        self.click()
+        self.page.keyboard.press(keys)
+
+    def press_sequentially(self, text: str, delay: int = 0, timeout: int | None = None) -> None:
+        self.click()
+        self.page.keyboard.type(text, delay=delay)
+
+    def fill(self, text: str, timeout: int | None = None) -> None:
+        """Select all, delete, then type.
+
+        The delete is not optional. Selecting and typing an empty string leaves
+        the selection untouched, so the next keystrokes append instead of
+        replacing -- and every prompt variant after the first goes out carrying
+        the previous one. That contaminates precisely the comparison this tool
+        exists to make, and it does so silently.
+        """
+        self.click()
+        self.page.keyboard.press("Control+a")
+        self.page.keyboard.press("Delete")
+        if text:
+            self.page.keyboard.type(text)
+
+    def screenshot(self) -> bytes:
+        return self.page.screenshot(clip={
+            "x": self.match.x, "y": self.match.y,
+            "width": self.match.width, "height": self.match.height,
+        })
+
+    def inner_text(self, timeout: int | None = None) -> str:
+        raise DriverError(
+            "this target is an image anchor: it has no text to read. Use "
+            "wait_for_stable with mode: pixels, or read from a different target."
+        )
+
+    input_value = inner_text
+
+    def evaluate(self, _expression: str):
+        return "anchor"
+
+    def is_visible(self) -> bool:
+        return True
+
+    def is_enabled(self) -> bool:
+        return True
 
 
 class WebDriver:
@@ -229,6 +300,24 @@ class WebDriver:
             locator = locator.nth(int(fields["nth"]))
         return locator
 
+    def _resolve_anchor(self, strategy: Strategy):
+        """Locate an anchor image in the current screenshot.
+
+        Coordinates are derived now, from this run's pixels, rather than stored
+        at record time -- which is what keeps this within the spirit of the
+        never-store-coordinates rule.
+        """
+        matches = locate_all(
+            self.page.screenshot(),
+            Path(strategy.fields["image"]).read_bytes(),
+            threshold=float(strategy.fields.get("threshold", 0.9)),
+            region=strategy.fields.get("region"),
+        )
+        if len(matches) != 1:
+            return None, f"{len(matches)} visual match(es)"
+        handle = _AnchorTarget(self.page, matches[0], strategy.fields.get("offset"))
+        return handle, f"score {matches[0].score:.3f}"
+
     def resolve(self, target: Target, timeout_ms: int):
         """First strategy identifying exactly one element wins."""
         strategies = target.for_backend(self.backend)
@@ -238,6 +327,17 @@ class WebDriver:
         while True:
             attempts = []
             for index, strategy in enumerate(strategies):
+                if "image" in strategy.fields:
+                    try:
+                        handle, note = self._resolve_anchor(strategy)
+                    except Exception as exc:
+                        attempts.append(f"{strategy.describe()} -> error: {exc}")
+                        continue
+                    if handle is not None:
+                        return handle, Resolution(target.name, index, strategy, note)
+                    attempts.append(f"{strategy.describe()} -> {note}")
+                    continue
+
                 try:
                     locator = self._locator(strategy)
                     count = locator.count()
@@ -309,7 +409,18 @@ class WebDriver:
         locator.press(keys, timeout=timeout_ms)
         return resolution
 
-    def screenshot(self, target: Target | None = None, full_page: bool = False) -> bytes:
+    def screenshot(
+        self, target: Target | None = None, full_page: bool = False,
+        region: dict[str, int] | None = None,
+    ) -> bytes:
+        if region:
+            # A region is what makes pixel stability usable on an opaque
+            # surface: the whole window may contain something that never stops
+            # moving, so the check has to be scoped to the part that matters.
+            return self.page.screenshot(clip={
+                "x": region["x"], "y": region["y"],
+                "width": region["width"], "height": region["height"],
+            })
         if target is None:
             return self.page.screenshot(full_page=full_page)
         locator, _ = self.resolve(target, 5_000)

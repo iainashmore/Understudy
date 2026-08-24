@@ -11,7 +11,8 @@ click; no scoring. The human authors the steps, the tool repeats them reliably.
 | 1 | Flow schema + parser | done |
 | 2 | Web driver (Playwright) — launch **and CDP attach** | done |
 | 3 | Runner + output layout | done |
-| 4 | `wait_for_stable` (text and pixel modes) | done |
+| 4 | `wait_for_stable` (text and pixel modes, region-scoped) | done |
+| — | Visual anchoring + OCR reads, for surfaces with no DOM | done |
 | 5 | Web recorder (`playwright codegen` wrapper) | not started |
 | 6 | Native driver (UIAutomation) | blocked on a Windows machine |
 | 7 | Native recorder (Win32 hooks + UIA) | blocked on a Windows machine |
@@ -90,6 +91,59 @@ Steps take `optional: true` for dialogs that sometimes don't appear, and a flow
 can list `interstitials` — cookie banners and similar — dismissed before every
 step without being part of the measured path.
 
+## When the surface exposes nothing
+
+The worst case: no DOM, no accessibility tree, no element picking — a
+custom-drawn CAD toolbar, a canvas, an embedded view with debugging off. There
+is still a path, exercised end to end in `examples/cad_blind.yaml` against
+`fixtures/cad_app`.
+
+**Find controls by their picture.** An anchor is a small image of the control,
+captured when the flow was authored; at replay it is located in the *current*
+screenshot and the click point is derived from where it is now.
+
+```yaml
+targets:
+  prompt_box:
+    web:
+      - image: anchors/assistant_label.png
+        threshold: 0.95
+        region: {x: 800, y: 40, width: 300, height: 200}
+        offset: {dx: 0, dy: 49}
+```
+
+That is not the same as storing coordinates, which is what the core rule
+forbids: a stored coordinate is wrong the moment the window moves, an anchor is
+re-located every run. It still fails on a theme change or a DPI change, so it
+sits below anything semantic.
+
+Matching is normalised cross-correlation **across colour channels**, not on
+luma. Toolbar icons are routinely distinguished only by hue, and a red glyph and
+a blue one on the same grey chrome have nearly identical luminance — a
+grayscale match cannot tell them apart and will click the wrong tool. Several
+matches means the anchor does not identify one control, and the same rule
+applies as everywhere else: ambiguity is not resolution.
+
+**Anchor on something that does not change.** This one cost a real bug. An
+anchor taken from an empty textbox stops matching the moment there is text in
+it, so every prompt variant after the first fails to find the box. Anchor on the
+static label beside it and use `offset` to reach the control.
+
+**Record the pixels, transcribe them if you can.**
+
+```yaml
+- action: read
+  mode: ocr
+  region: {x: 811, y: 176, width: 279, height: 241}
+  store_as: response
+```
+
+The region image is always saved and referenced in the result row; OCR text is
+added when `pytesseract` and a tesseract binary are present. A missing OCR
+engine is reported as a step error, never as an empty response — an empty string
+meaning "could not read" is indistinguishable from one meaning "the assistant
+said nothing", and the two demand opposite reactions.
+
 ## Knowing when a response is complete
 
 No fixed sleeps, ever. `wait_for_stable` polls until the content stops changing:
@@ -108,9 +162,18 @@ No fixed sleeps, ever. `wait_for_stable` polls until the content stops changing:
 spinner clears truncates the last token.
 
 `mode: pixels` polls a screenshot instead of text, for surfaces that expose no
-text at all: a CAD viewport, a custom-drawn panel. Comparison is blurred and
-tolerance-based, not exact, because a caret blink would otherwise mean "still
-changing" forever.
+text at all: a CAD viewport, a custom-drawn panel. Comparison is blurred,
+downscaled and tolerance-based, not exact, because a caret blink would otherwise
+mean "still changing" forever.
+
+**Scope it with `region`.** A CAD viewport that animates continuously means
+whole-window stability *never* settles — measured, not assumed: the fixture's
+spinning viewport makes a full-window wait hit its timeout every time, while the
+same wait scoped to the reply rectangle settles in about 1.5s.
+
+Text stability on a painted response is worse than useless: it settles
+instantly on the empty string and reports success having captured nothing. That
+silent failure is pinned by a test.
 
 A timeout is a step status, never a crash. The run still produces its row, its
 screenshots, and whatever text had arrived.

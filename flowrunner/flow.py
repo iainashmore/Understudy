@@ -29,10 +29,15 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "flow.schema.json"
 VARIABLE_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 WEB_STRATEGY_KEYS = {
-    "testid", "role", "text", "label", "placeholder", "css", "xpath",
+    "testid", "role", "text", "label", "placeholder", "css", "xpath", "image",
 }
-WEB_MODIFIER_KEYS = {"name", "exact", "nth"}
-NATIVE_STRATEGY_KEYS = {"automation_id", "name", "control_type", "class_name"}
+WEB_MODIFIER_KEYS = {"name", "exact", "nth", "threshold", "region", "offset"}
+#: `image` is available on every backend: it works on pixels, which every
+#: backend has, and it is the only thing left when a surface exposes nothing.
+NATIVE_STRATEGY_KEYS = {
+    "automation_id", "name", "control_type", "class_name", "image",
+}
+NATIVE_MODIFIER_KEYS = {"threshold", "region", "offset"}
 
 DEFAULT_TIMEOUT_MS = 10_000
 DEFAULT_POLL_INTERVAL_MS = 250
@@ -54,7 +59,7 @@ class Strategy:
     @property
     def kind(self) -> str:
         for key in ("testid", "role", "text", "label", "placeholder", "css", "xpath",
-                    "automation_id", "control_type", "class_name", "name"):
+                    "image", "automation_id", "control_type", "class_name", "name"):
             if key in self.fields:
                 return key
         return "unknown"
@@ -167,7 +172,9 @@ class Flow:
             )
 
 
-def _normalise_strategies(raw: Any, backend: str, target_name: str) -> tuple[Strategy, ...]:
+def _normalise_strategies(
+    raw: Any, backend: str, target_name: str, base_dir: Path | None = None
+) -> tuple[Strategy, ...]:
     """Accept the brief form and the ranked form.
 
         web: "textarea[data-testid=x]"        one CSS selector
@@ -192,7 +199,7 @@ def _normalise_strategies(raw: Any, backend: str, target_name: str) -> tuple[Str
         allowed = (
             WEB_STRATEGY_KEYS | WEB_MODIFIER_KEYS
             if backend == "web"
-            else NATIVE_STRATEGY_KEYS
+            else NATIVE_STRATEGY_KEYS | NATIVE_MODIFIER_KEYS
         )
         unknown = sorted(set(fields) - allowed)
         if unknown:
@@ -207,6 +214,18 @@ def _normalise_strategies(raw: Any, backend: str, target_name: str) -> tuple[Str
                 f"target {target_name!r}: {backend} strategy {position} needs one "
                 f"of {', '.join(sorted(primary))}"
             )
+        if "image" in fields:
+            # Anchor paths are written relative to the flow file, so a flow
+            # directory can be moved or copied into a run folder intact.
+            anchor = Path(str(fields["image"]))
+            if not anchor.is_absolute() and base_dir is not None:
+                anchor = (base_dir / anchor).resolve()
+            if not anchor.exists():
+                raise FlowError(
+                    f"target {target_name!r}: anchor image not found: {anchor}"
+                )
+            fields["image"] = str(anchor)
+
         strategies.append(Strategy(backend=backend, fields=fields))
     return tuple(strategies)
 
@@ -247,13 +266,14 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
             + (f" (and {len(errors) - 1} more problem(s))" if len(errors) > 1 else "")
         )
 
+    base_dir = source_path.parent if source_path else None
     targets = {}
     for name, spec in (data.get("targets") or {}).items():
         targets[name] = Target(
             name=name,
             intent=spec.get("intent"),
             strategies={
-                backend: _normalise_strategies(spec[backend], backend, name)
+                backend: _normalise_strategies(spec[backend], backend, name, base_dir)
                 for backend in ("web", "native")
                 if backend in spec
             },
@@ -281,6 +301,16 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
                     f"{step.describe()}: {key} {referenced!r} is not defined in "
                     f"targets ({', '.join(sorted(known)) or 'none'})"
                 )
+    for step in flow.reset + flow.steps:
+        if step.action == "read" and not (step.target or step.params.get("region")):
+            raise FlowError(
+                f"{step.describe()}: read needs either a target or a region"
+            )
+        if step.params.get("mode") == "pixels" and not (
+            step.target or step.params.get("region")
+        ):
+            raise FlowError(f"{step.describe()}: pixel mode needs a target or a region")
+
     for name in flow.interstitials:
         if name not in known:
             raise FlowError(f"interstitial {name!r} is not defined in targets")

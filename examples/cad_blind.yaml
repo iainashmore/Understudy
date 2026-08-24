@@ -1,0 +1,77 @@
+# The worst case: no DOM, no accessibility tree, no element picking.
+#
+# Every target is found by locating a picture of it in the current screenshot,
+# so the coordinates are derived fresh each run rather than stored. The response
+# is painted into a canvas, so it is waited on by pixel stability over a region
+# and recorded as both an image and (where an OCR engine is installed) text.
+#
+# Regions are in window coordinates and assume the viewport below. Read them off
+# a screenshot once; they are the one thing here that is genuinely positional,
+# and they scope *what to watch*, not what to click.
+
+version: 1
+name: cad-blind-flow
+target_app:
+  web:
+    url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=30"
+    viewport: {width: 1100, height: 700}
+
+defaults:
+  timeout_ms: 10000
+  poll_interval_ms: 250
+  stable_for_ms: 900
+
+targets:
+  prompt_box:
+    intent: the assistant's prompt input
+    web:
+      # Anchored on the static "Assistant" label, not on the textbox itself.
+      # A textbox changes appearance the moment it has text in it, so an anchor
+      # taken from an empty one stops matching on the second prompt -- which is
+      # a silent way to lose every variant after the first.
+      - image: anchors/prompt_box.png
+        threshold: 0.95
+        region: {x: 800, y: 40, width: 300, height: 200}
+        offset: {dx: 0, dy: 49}
+
+  send_button:
+    intent: submits the prompt to the assistant
+    web:
+      - image: anchors/send_button.png
+        threshold: 0.95
+        region: {x: 800, y: 40, width: 300, height: 200}
+
+steps:
+  - action: capture
+    label: before-prompt
+
+  # Point and click the textbox, then type. The anchor is located in this
+  # run's pixels; typing goes to whatever that click focused.
+  - action: type
+    target: prompt_box
+    text: "{{prompt}}"
+
+  - action: capture
+    label: after-typing
+
+  - action: click
+    target: send_button
+
+  # The viewport animates forever, so whole-window stability would never
+  # settle. Watching only the reply rectangle is what makes this work.
+  - action: wait_for_stable
+    target: prompt_box          # unused in pixel mode when a region is given
+    mode: pixels
+    region: {x: 811, y: 176, width: 279, height: 241}
+    stable_for_ms: 900
+    timeout_ms: 45000
+
+  - action: capture
+    label: after-response
+
+  # Record the response: the pixels always, transcribed text when an OCR
+  # engine is present.
+  - action: read
+    mode: ocr
+    region: {x: 811, y: 176, width: 279, height: 241}
+    store_as: response

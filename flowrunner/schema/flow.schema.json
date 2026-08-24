@@ -303,7 +303,6 @@
           },
           "then": {
             "required": [
-              "target",
               "store_as"
             ],
             "properties": {
@@ -315,6 +314,16 @@
               "store_as": {
                 "type": "string",
                 "minLength": 1
+              },
+              "region": {
+                "$ref": "#/$defs/region"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "ocr"
+                ]
               }
             },
             "additionalProperties": false
@@ -347,6 +356,9 @@
               },
               "full_page": {
                 "type": "boolean"
+              },
+              "region": {
+                "$ref": "#/$defs/region"
               }
             },
             "additionalProperties": false
@@ -383,6 +395,16 @@
               "poll_interval_ms": {
                 "type": "integer",
                 "minimum": 10
+              },
+              "region": {
+                "$ref": "#/$defs/region"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "pixels"
+                ]
               }
             },
             "additionalProperties": false
@@ -452,6 +474,48 @@
           }
         }
       ]
+    },
+    "region": {
+      "description": "Rectangle in window coordinates. Scopes a screenshot or a stability check to part of the surface.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        }
+      }
+    },
+    "offset": {
+      "description": "Click point relative to the centre of the located anchor. Lets a flow anchor on something that does not change -- a label, an icon -- and act on a neighbouring control whose appearance does.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dx",
+        "dy"
+      ],
+      "properties": {
+        "dx": {
+          "type": "integer"
+        },
+        "dy": {
+          "type": "integer"
+        }
+      }
     }
   }
 }

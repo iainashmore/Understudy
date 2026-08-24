@@ -24,6 +24,7 @@ from typing import Any
 
 from flowrunner.drivers.base import Driver, DriverError, Resolution, TargetNotFound
 from flowrunner.flow import Flow, Step, render_step
+from flowrunner.ocr import read_text
 from flowrunner.prompts import PromptSet, PromptVariant
 from flowrunner.waiting import (
     StableOutcome,
@@ -80,6 +81,9 @@ class VariantResult:
     timestamp: str
     repeat_index: int = 0
     reads: dict[str, str] = field(default_factory=dict)
+    #: Where a read came from pixels, the pixels are kept: a transcription is a
+    #: lossy derivative and the image is the evidence.
+    read_images: dict[str, str] = field(default_factory=dict)
     step_statuses: list[StepStatus] = field(default_factory=list)
     screenshots: list[str] = field(default_factory=list)
     error: str | None = None
@@ -106,6 +110,7 @@ class VariantResult:
             "variables": self.variables,
             "response": self.response,
             "reads": self.reads,
+            "read_images": self.read_images,
             "status": self.status.value,
             "duration_ms": self.duration_ms,
             "step_statuses": [status.as_dict() for status in self.step_statuses],
@@ -274,10 +279,7 @@ class Runner:
             status.detail["chars"] = len(step.params["text"])
 
         elif action == "read":
-            text, resolution = self.driver.read(target, timeout)
-            result.reads[step.params["store_as"]] = text
-            status.resolution = resolution.as_dict()
-            status.detail["chars"] = len(text)
+            self._read(step, target, timeout, result, folder, counter, status)
 
         elif action == "key":
             resolution = self.driver.key(step.params["keys"], target, timeout)
@@ -287,6 +289,7 @@ class Runner:
             path = self._capture(
                 step.params["label"], result, folder, counter,
                 target=target, full_page=bool(step.params.get("full_page", False)),
+                region=step.params.get("region"),
             )
             status.detail["screenshot"] = path
 
@@ -301,6 +304,35 @@ class Runner:
         else:
             raise DriverError(f"unsupported action {action!r}")
 
+    def _read(
+        self, step: Step, target, timeout: int, result: VariantResult,
+        folder: str, counter: dict[str, int], status: StepStatus,
+    ) -> None:
+        store_as = step.params["store_as"]
+        region = step.params.get("region")
+        mode = step.params.get("mode", "text")
+
+        if mode == "text" and not region:
+            text, resolution = self.driver.read(target, timeout)
+            status.resolution = resolution.as_dict()
+        else:
+            image = self.driver.screenshot(
+                target=None if region else target, region=region
+            )
+            result.read_images[store_as] = self._write_image(
+                f"{store_as}-source", result, folder, counter, image
+            )
+            outcome = read_text(image)
+            text = outcome.text
+            status.detail["ocr_engine"] = outcome.engine
+            if not outcome.available:
+                # Never let "could not read" masquerade as "said nothing".
+                status.status = Status.ERROR
+                status.error = outcome.error
+
+        result.reads[store_as] = text
+        status.detail["chars"] = len(text)
+
     def _wait_for_stable(self, step: Step, target, timeout: int, status: StepStatus) -> None:
         stable_for = int(step.params.get("stable_for_ms", self.flow.defaults.stable_for_ms))
         poll = int(step.params.get("poll_interval_ms", self.flow.defaults.poll_interval_ms))
@@ -313,8 +345,11 @@ class Runner:
             signal = lambda: not self.driver.is_visible(watched)  # noqa: E731
 
         mode = step.params.get("mode", "text")
+        region = step.params.get("region")
         if mode == "pixels":
-            sample = lambda: self.driver.screenshot(target=target)  # noqa: E731
+            sample = lambda: self.driver.screenshot(  # noqa: E731
+                target=None if region else target, region=region
+            )
             equivalent = pixels_equivalent
         else:
             def sample():
@@ -353,17 +388,27 @@ class Runner:
 
     # -- output ---------------------------------------------------------------
 
-    def _capture(
+    def _write_image(
         self, label: str, result: VariantResult, folder: str,
-        counter: dict[str, int], target=None, full_page: bool = False,
+        counter: dict[str, int], image: bytes,
     ) -> str:
         counter["n"] += 1
         relative = f"{folder}/{counter['n']:02d}-{label}.png"
         path = self.out_dir / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(self.driver.screenshot(target=target, full_page=full_page))
+        path.write_bytes(image)
         result.screenshots.append(relative)
         return relative
+
+    def _capture(
+        self, label: str, result: VariantResult, folder: str,
+        counter: dict[str, int], target=None, full_page: bool = False,
+        region: dict[str, int] | None = None,
+    ) -> str:
+        return self._write_image(
+            label, result, folder, counter,
+            self.driver.screenshot(target=target, full_page=full_page, region=region),
+        )
 
     def _capture_failure(
         self, step: Step, result: VariantResult, folder: str, counter: dict[str, int]

@@ -28,14 +28,18 @@ from enum import Enum
 
 import numpy as np
 
-from harness.image import gaussian_blur, load_rgb
+from harness.image import gaussian_blur, load_rgb, resize_to
 
 #: Matches the harness scorer's calibration: enough blur to absorb rendering
 #: jitter, tight enough tolerance that real change still registers.
-PIXEL_BLUR_SIGMA = 1.5
+PIXEL_BLUR_SIGMA = 1.0
 PIXEL_TOLERANCE = 24
 #: Fraction of pixels allowed to differ while still counting as unchanged.
-PIXEL_CHANGE_FLOOR = 0.001
+PIXEL_CHANGE_FLOOR = 0.002
+#: Longest edge compared. A stability check asks "did this change", not "how
+#: exactly"; comparing a full window every 250ms costs more than the polling
+#: interval and would make the wait itself the bottleneck.
+PIXEL_MAX_EDGE = 320
 
 
 class StableOutcome(str, Enum):
@@ -62,19 +66,27 @@ def _normalise(text: str) -> str:
     return " ".join(text.split())
 
 
+def _prepare(image: bytes) -> np.ndarray:
+    pixels = load_rgb(image)
+    height, width = pixels.shape[:2]
+    longest = max(height, width)
+    if longest > PIXEL_MAX_EDGE:
+        scale = PIXEL_MAX_EDGE / longest
+        pixels = resize_to(pixels, max(1, int(height * scale)), max(1, int(width * scale)))
+    return gaussian_blur(pixels, PIXEL_BLUR_SIGMA)
+
+
 def pixels_equivalent(first: bytes, second: bytes) -> bool:
-    """Blurred, tolerance-based image comparison."""
+    """Blurred, tolerance-based image comparison, on a downscaled copy."""
     if first == second:
         return True
     try:
-        left, right = load_rgb(first), load_rgb(second)
+        left, right = _prepare(first), _prepare(second)
     except Exception:
         return False
     if left.shape != right.shape:
         return False
-    deviation = np.abs(
-        gaussian_blur(left, PIXEL_BLUR_SIGMA) - gaussian_blur(right, PIXEL_BLUR_SIGMA)
-    ).max(axis=2)
+    deviation = np.abs(left - right).max(axis=2)
     changed = float((deviation > PIXEL_TOLERANCE).mean())
     return changed <= PIXEL_CHANGE_FLOOR
 
