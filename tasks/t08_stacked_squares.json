@@ -1,0 +1,39 @@
+{
+  "id": "t08_stacked_squares",
+  "description": "Three cascading squares in a specified stacking order. Any other order produces a visibly different figure.",
+  "prompt": "On a 200x200 pixel canvas filled with white (#ffffff), draw three filled 90x90 pixel squares, each one on top of the previous: first a red (#ff0000) square with its top-left corner at (20, 20), then a green (#00ff00) square with its top-left corner at (55, 55), then a blue (#0000ff) square with its top-left corner at (90, 90). Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#ffffff"
+  },
+  "difficulty": "occlusion",
+  "golden": {
+    "shapes": [
+      {
+        "type": "rect",
+        "x": 20,
+        "y": 20,
+        "width": 90,
+        "height": 90,
+        "fill": "#ff0000"
+      },
+      {
+        "type": "rect",
+        "x": 55,
+        "y": 55,
+        "width": 90,
+        "height": 90,
+        "fill": "#00ff00"
+      },
+      {
+        "type": "rect",
+        "x": 90,
+        "y": 90,
+        "width": 90,
+        "height": 90,
+        "fill": "#0000ff"
+      }
+    ]
+  }
+}

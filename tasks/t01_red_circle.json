@@ -1,0 +1,22 @@
+{
+  "id": "t01_red_circle",
+  "description": "Single filled circle on a solid background. The spec's worked example.",
+  "prompt": "On a 200x200 pixel canvas filled with blue (#0000ff), draw a filled red (#ff0000) circle of radius 40 centred at (100, 100). Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#0000ff"
+  },
+  "difficulty": "simple",
+  "golden": {
+    "shapes": [
+      {
+        "type": "circle",
+        "cx": 100,
+        "cy": 100,
+        "r": 40,
+        "fill": "#ff0000"
+      }
+    ]
+  }
+}

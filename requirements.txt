@@ -1,0 +1,4 @@
+numpy>=1.26
+pillow>=10
+cairosvg>=2.7
+pytest>=8

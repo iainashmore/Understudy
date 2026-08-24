@@ -1,0 +1,79 @@
+{
+  "id": "t06_checkerboard",
+  "description": "Sixteen-cell checkerboard. Tests arithmetic and repetition rather than any single shape.",
+  "prompt": "On a 200x200 pixel canvas filled with white (#ffffff), draw a 4x4 checkerboard of 50x50 pixel squares covering the whole canvas. Fill the squares black (#000000) where the row index plus the column index is even, counting both indices from 0 at the top-left square, and leave the remaining squares white. The top-left square is black. Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#ffffff"
+  },
+  "difficulty": "composite",
+  "golden": {
+    "shapes": [
+      {
+        "type": "rect",
+        "x": 0,
+        "y": 0,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 100,
+        "y": 0,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 50,
+        "y": 50,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 150,
+        "y": 50,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 0,
+        "y": 100,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 100,
+        "y": 100,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 50,
+        "y": 150,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      },
+      {
+        "type": "rect",
+        "x": 150,
+        "y": 150,
+        "width": 50,
+        "height": 50,
+        "fill": "#000000"
+      }
+    ]
+  }
+}

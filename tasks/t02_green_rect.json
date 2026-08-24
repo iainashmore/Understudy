@@ -1,0 +1,23 @@
+{
+  "id": "t02_green_rect",
+  "description": "Single axis-aligned rectangle. Tests corner-versus-centre positioning.",
+  "prompt": "On a 200x200 pixel canvas filled with white (#ffffff), draw a filled green (#008000) rectangle 120 pixels wide and 80 pixels tall, with its top-left corner at (40, 60). Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#ffffff"
+  },
+  "difficulty": "simple",
+  "golden": {
+    "shapes": [
+      {
+        "type": "rect",
+        "x": 40,
+        "y": 60,
+        "width": 120,
+        "height": 80,
+        "fill": "#008000"
+      }
+    ]
+  }
+}

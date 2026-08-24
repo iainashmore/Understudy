@@ -1,0 +1,29 @@
+{
+  "id": "t07_overlap_order",
+  "description": "Two overlapping circles where the later one must occlude the earlier one. Swapping the order changes the lens-shaped intersection.",
+  "prompt": "On a 200x200 pixel canvas filled with white (#ffffff), draw a filled red (#ff0000) circle of radius 60 centred at (80, 100), then draw a filled blue (#0000ff) circle of radius 60 centred at (120, 100) on top of it, so that the blue circle hides the part of the red circle it overlaps. Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#ffffff"
+  },
+  "difficulty": "occlusion",
+  "golden": {
+    "shapes": [
+      {
+        "type": "circle",
+        "cx": 80,
+        "cy": 100,
+        "r": 60,
+        "fill": "#ff0000"
+      },
+      {
+        "type": "circle",
+        "cx": 120,
+        "cy": 100,
+        "r": 60,
+        "fill": "#0000ff"
+      }
+    ]
+  }
+}

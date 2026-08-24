@@ -1,0 +1,33 @@
+{
+  "id": "t03_yellow_triangle",
+  "description": "Single polygon. Tests whether the layer can express a non-primitive outline at all.",
+  "prompt": "On a 200x200 pixel canvas filled with black (#000000), draw a filled yellow (#ffff00) triangle with vertices at (100, 30), (170, 160) and (30, 160). Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 200,
+    "height": 200,
+    "background": "#000000"
+  },
+  "difficulty": "simple",
+  "golden": {
+    "shapes": [
+      {
+        "type": "polygon",
+        "points": [
+          [
+            100,
+            30
+          ],
+          [
+            170,
+            160
+          ],
+          [
+            30,
+            160
+          ]
+        ],
+        "fill": "#ffff00"
+      }
+    ]
+  }
+}

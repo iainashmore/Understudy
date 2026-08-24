@@ -1,0 +1,36 @@
+{
+  "id": "t04_three_circles",
+  "description": "Three evenly spaced circles on a non-square canvas. Repetition plus a canvas that is not 200x200.",
+  "prompt": "On a 240x120 pixel canvas filled with white (#ffffff), draw three filled circles of radius 30, all centred on the horizontal line y = 60: a red (#ff0000) one centred at (40, 60), a green (#00ff00) one centred at (120, 60), and a blue (#0000ff) one centred at (200, 60). Coordinates are in pixels measured from the top-left corner of the canvas, with x increasing to the right and y increasing downwards.",
+  "canvas": {
+    "width": 240,
+    "height": 120,
+    "background": "#ffffff"
+  },
+  "difficulty": "composite",
+  "golden": {
+    "shapes": [
+      {
+        "type": "circle",
+        "cx": 40,
+        "cy": 60,
+        "r": 30,
+        "fill": "#ff0000"
+      },
+      {
+        "type": "circle",
+        "cx": 120,
+        "cy": 60,
+        "r": 30,
+        "fill": "#00ff00"
+      },
+      {
+        "type": "circle",
+        "cx": 200,
+        "cy": 60,
+        "r": 30,
+        "fill": "#0000ff"
+      }
+    ]
+  }
+}

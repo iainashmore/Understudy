@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abstraction-harness"
+version = "0.1.0"
+description = "Harness for measuring at which level of abstraction an AI agent can complete a task"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+# Authoring-only: rasterizes golden references. Deliberately a different
+# rasterizer from any environment's, so no layer shares a code path with the
+# reference it is scored against.
+authoring = ["cairosvg>=2.7"]
+dev = ["pytest>=8"]
+
+[tool.setuptools]
+packages = ["harness"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
