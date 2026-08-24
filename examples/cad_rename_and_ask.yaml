@@ -1,0 +1,114 @@
+# Select a geometry node, rename it through the properties dialog, then ask the
+# assistant about it -- driven entirely by locating pictures of the controls.
+#
+# The dialog anchors deliberately carry no `region`. The dialog opens in a
+# different place between runs (?dialogpos=a vs b) and the flow is unchanged:
+# the anchor is searched across the whole window and the click point comes from
+# wherever it was found this time.
+#
+# Run it twice to see that:
+#   --out runs/pos-a   with dialogpos=a in the url
+#   --out runs/pos-b   with dialogpos=b
+
+version: 1
+name: cad-rename-and-ask
+target_app:
+  web:
+    url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=25&dialogpos=a"
+    viewport: {width: 1100, height: 700}
+
+defaults:
+  timeout_ms: 8000
+  poll_interval_ms: 250
+  stable_for_ms: 900
+
+targets:
+  pad_node:
+    intent: the Pad.1 node in the geometry tree
+    web:
+      - image: anchors/tree_pad_node.png
+        threshold: 0.95
+        region: {x: 0, y: 40, width: 190, height: 300}
+
+  properties_tool:
+    intent: opens the properties dialog for the selected node
+    web:
+      - image: anchors/properties_tool.png
+        threshold: 0.95
+        region: {x: 0, y: 0, width: 300, height: 40}
+
+  dialog_name_field:
+    intent: the name field in the properties dialog
+    web:
+      # No region: the dialog moves between runs, so it is searched for across
+      # the whole window. Anchored on the static "Name" label rather than the
+      # field, whose contents change.
+      - image: anchors/dialog_name_label.png
+        threshold: 0.95
+        offset: {dx: 0, dy: 26}
+
+  dialog_done:
+    intent: commits the rename and closes the dialog
+    web:
+      - image: anchors/dialog_done.png
+        threshold: 0.95
+
+  prompt_box:
+    intent: the assistant's prompt input
+    web:
+      - image: anchors/prompt_box.png
+        threshold: 0.95
+        region: {x: 800, y: 40, width: 300, height: 200}
+        offset: {dx: 0, dy: 49}
+
+  send_button:
+    intent: submits the prompt to the assistant
+    web:
+      - image: anchors/send_button.png
+        threshold: 0.95
+        region: {x: 800, y: 40, width: 300, height: 200}
+
+steps:
+  - action: capture
+    label: 1-initial
+
+  - action: click
+    target: pad_node
+  - action: capture
+    label: 2-node-selected
+
+  - action: click
+    target: properties_tool
+  - action: capture
+    label: 3-dialog-open
+
+  - action: type
+    target: dialog_name_field
+    text: "{{new_name}}"
+  - action: capture
+    label: 4-name-edited
+
+  - action: click
+    target: dialog_done
+  - action: capture
+    label: 5-renamed
+
+  - action: type
+    target: prompt_box
+    text: "{{prompt}}"
+  - action: click
+    target: send_button
+
+  - action: wait_for_stable
+    target: prompt_box
+    mode: pixels
+    region: {x: 811, y: 176, width: 279, height: 241}
+    stable_for_ms: 900
+    timeout_ms: 45000
+  - action: capture
+    label: 6-response
+
+  - action: read
+    mode: ocr
+    region: {x: 811, y: 176, width: 279, height: 241}
+    store_as: response

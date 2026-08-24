@@ -20,6 +20,8 @@
     busy=spinner|none         whether a completion signal exists
     viewport=spin|static      whether the 3D view animates forever
     delay=<ms>                per-token streaming delay (default 40)
+    dialogpos=a|b|<x>,<y>     where the properties dialog opens. The same
+                              dialog, same contents, different screen position.
 -->
 <style>
   body { font: 13px system-ui, sans-serif; margin: 0; display: grid;
@@ -43,6 +45,16 @@
   #replyCanvas { border: 1px solid #ccc; background: #fff; }
   .hidden { display: none; }
   #busy { color: #b36b00; }
+  .node { cursor: pointer; padding: 0 3px; border-radius: 2px; }
+  .node.selected { background: #2f6fb5; color: #fff; }
+  #dialog { position: fixed; width: 260px; background: #eef0f2;
+            border: 1px solid #6b7580; box-shadow: 0 6px 18px rgba(0,0,0,.35);
+            font: 13px system-ui, sans-serif; z-index: 20; }
+  #dialog .bar { background: #4a5560; color: #fff; padding: 5px 8px;
+                 font-weight: 600; }
+  #dialog .body { padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+  #dialog input { padding: 3px 5px; }
+  #dialog .row { display: flex; gap: 6px; justify-content: flex-end; }
 </style>
 
 <div id="toolbar"></div>
@@ -52,18 +64,33 @@
   <ul>
     <li>xy plane</li>
     <li>yz plane</li>
-    <li>Part1
+    <li><span class="node">Part1</span>
       <ul>
-        <li>PartBody
-          <ul><li>Pad.1</li><li>Pocket.1</li></ul>
+        <li><span class="node">PartBody</span>
+          <ul>
+            <li><span class="node" id="node-pad">Pad.1</span></li>
+            <li><span class="node">Pocket.1</span></li>
+          </ul>
         </li>
-        <li>Sketch.1</li>
+        <li><span class="node">Sketch.1</span></li>
       </ul>
     </li>
   </ul>
 </div>
 
 <div id="stage"><canvas id="viewport"></canvas></div>
+
+<div id="dialog" class="hidden">
+  <div class="bar">Properties</div>
+  <div class="body">
+    <label id="nameLabel" for="nameField">Name</label>
+    <input id="nameField" type="text">
+    <div class="row">
+      <button id="dlgCancel" type="button">Cancel</button>
+      <button id="dlgDone" type="button">Done</button>
+    </div>
+  </div>
+</div>
 
 <div id="panel">
   <label for="ask">Assistant</label>
@@ -87,8 +114,9 @@
   // use, which is the normal state of a custom CAD toolbar.
   // Distinct glyph colours: a real toolbar has distinguishable icons even when
   // it exposes no names. That is what makes a visual anchor identifying.
-  const TOOLS = ["New", "Open", "Save", "Sketch", "Pad", "Measure"];
-  const GLYPHS = ["#d94f4f", "#4fd98a", "#4f7fd9", "#d9c74f", "#a44fd9", "#4fd9d0"];
+  const TOOLS = ["New", "Open", "Save", "Sketch", "Pad", "Measure", "Properties"];
+  const GLYPHS = ["#d94f4f", "#4fd98a", "#4f7fd9", "#d9c74f", "#a44fd9", "#4fd9d0",
+                  "#ff8a3d"];
   const toolbar = document.getElementById("toolbar");
   TOOLS.forEach((label, index) => {
     const tool = document.createElement("div");
@@ -101,7 +129,10 @@
       tool.setAttribute("role", "button");
       tool.setAttribute("aria-label", label);
     }
-    tool.addEventListener("click", () => { tool.style.background = "#8fa8c8"; });
+    tool.addEventListener("click", () => {
+      if (label === "Properties") openProperties();
+      else tool.style.background = "#8fa8c8";
+    });
     toolbar.appendChild(tool);
   });
 
@@ -143,6 +174,46 @@
   }
   drawViewport();
 
+  // Geometry tree selection.
+  let selected = null;
+  document.querySelectorAll(".node").forEach((node) => {
+    node.addEventListener("click", () => {
+      document.querySelectorAll(".node").forEach((n) => n.classList.remove("selected"));
+      node.classList.add("selected");
+      selected = node;
+    });
+  });
+
+  // The properties dialog. Same markup and same contents wherever it opens --
+  // only its position on screen changes, which is the whole point.
+  const DIALOG_POSITIONS = { a: [300, 170], b: [640, 400] };
+  const dialog = document.getElementById("dialog");
+  const nameField = document.getElementById("nameField");
+
+  function dialogOrigin() {
+    const requested = params.get("dialogpos") || "a";
+    if (requested.includes(",")) return requested.split(",").map(Number);
+    return DIALOG_POSITIONS[requested] || DIALOG_POSITIONS.a;
+  }
+
+  function openProperties() {
+    if (!selected) return;
+    const [x, y] = dialogOrigin();
+    dialog.style.left = x + "px";
+    dialog.style.top = y + "px";
+    nameField.value = selected.textContent;
+    dialog.classList.remove("hidden");
+    nameField.focus();
+  }
+
+  document.getElementById("dlgDone").addEventListener("click", () => {
+    if (selected && nameField.value.trim()) selected.textContent = nameField.value.trim();
+    dialog.classList.add("hidden");
+  });
+  document.getElementById("dlgCancel").addEventListener("click", () => {
+    dialog.classList.add("hidden");
+  });
+
   // The assistant panel.
   const reply       = document.getElementById("reply");
   const replyCanvas = document.getElementById("replyCanvas");
@@ -177,7 +248,8 @@
   }
 
   document.getElementById("send").addEventListener("click", () => {
-    const words = ("Echo: " + ask.value).split(/\s+/).filter(Boolean);
+    const context = selected ? ` [selected: ${selected.textContent}]` : "";
+    const words = ("Echo: " + ask.value + context).split(/\s+/).filter(Boolean);
     render("");
     if (hasBusy) busy.classList.remove("hidden");
     let index = 0;
