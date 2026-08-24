@@ -2,6 +2,7 @@
 
 from harness.agents import Agent, BaseAgent, ScriptedAgent
 from harness.environment import Environment
+from harness.environments import APIEnvironment
 from harness.image import load_rgb, to_png_bytes
 from harness.interaction import (
     Action,
@@ -26,6 +27,7 @@ from harness.task import (
 )
 
 __all__ = [
+    "APIEnvironment",
     "Action",
     "Agent",
     "BaseAgent",

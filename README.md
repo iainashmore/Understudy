@@ -11,17 +11,19 @@ See `HARNESS_SPEC.md` for the full design.
 
 ## Status
 
-Build steps 1–3 are done: **tasks, scorer, mock agents, and the runner loop**.
-The loop runs end to end against a stub environment; no real layer exists yet,
-so there are no capability results.
+Build steps 1–4 are done: **tasks, scorer, mock agents, the runner loop, and
+the API layer**. The pipeline runs end to end — `task → agent → environment →
+scorer → result` — and the oracle passes all nine tasks through the API layer at
+score 1.000, so the harness is sound on the one layer that exists. No real model
+has been run, so there are no capability results yet.
 
 | # | Component | State |
 |---|-----------|-------|
 | 1 | Task definitions + scorer | done |
 | 2 | MockAgent | done |
 | 3 | Runner loop | done |
-| 4 | APIEnvironment | next |
-| 5 | KernelEnvironment | |
+| 4 | APIEnvironment | done |
+| 5 | KernelEnvironment | next |
 | 6 | UIEnvironment | |
 | 7 | ModelAgent | |
 
@@ -32,7 +34,8 @@ harness/task.py        Task, TaskBrief, Canvas, Difficulty, ScoringConfig
 harness/scorer.py      Scorer protocol + PixelScorer
 harness/image.py       artifact normalisation (PNG -> RGB array), blur
 harness/interaction.py Layer, Action, Observation, Operation, Interface
-harness/environment.py Environment protocol (no implementations yet)
+harness/environment.py Environment protocol
+harness/environments/  layer implementations + registry (api only so far)
 harness/agents/        Agent protocol + the mocks
 harness/runner.py      the loop, RunResult, trace writing
 harness/results.py     results CSV + success-rate-by-layer summary
@@ -40,6 +43,7 @@ harness/reference.py   golden recipe -> SVG -> PNG   (authoring only)
 tasks/*.json           the task set, one file each
 references/*.png       generated golden images
 tools/generate_references.py
+tools/run_sweep.py
 tests/                 unit tests plus the threshold calibration
 ```
 
@@ -47,9 +51,11 @@ tests/                 unit tests plus the threshold calibration
 
 ```bash
 pip install -r requirements.txt
-pytest                                        # 223 tests
-python3 tools/generate_references.py --check  # references current?
-python3 tools/generate_references.py          # regenerate after a recipe edit
+pytest                                        # 287 tests
+python3 tools/generate_references.py
+tools/run_sweep.py --check  # references current?
+python3 tools/generate_references.py
+tools/run_sweep.py          # regenerate after a recipe edit
 ```
 
 ## The task set
@@ -125,6 +131,51 @@ The `Interface` an environment hands over describes the operations available at
 that layer and nothing else. Its preamble must never mention the task: the
 moment one layer's framing carries a hint the others lack, the comparison stops
 being about abstraction.
+
+## The API layer
+
+Structured operations, not executed Python: no sandbox, and the error signal
+stays clean — which matters because error legibility is one of the properties
+being compared. It is also the honest analogue of the eventual CAD target, where
+the API layer is CadQuery-style calls.
+
+```
+draw_circle(cx, cy, r, fill)          draw_polygon(points, fill)
+draw_rect(x, y, width, height, fill)  draw_line(x1, y1, x2, y2, stroke, stroke_width)
+draw_ellipse(cx, cy, rx, ry, fill)    clear()
+```
+
+Shapes paint in order, later over earlier. The preamble says so, because that is
+a fact about the interface and every layer documents its own semantics —
+withholding it here while the UI's canvas makes it self-evident would be the
+asymmetry, not the reverse.
+
+Arguments are described once, in a spec used for both the documentation the
+agent sees and the validation it is held to, so the two cannot drift. Errors
+name the operation, the argument, and what was expected:
+
+```
+draw_circle: 'r' must be greater than 0, got -5
+draw_circle: 'fill' must be a colour like '#ff0000' or '#f00', got 'red'
+draw_polygon: 'points' needs at least three [x, y] pairs, got 2
+unknown operation 'draw_square'. Available: clear, draw_circle, ..., done
+```
+
+Colours are hex only. Names look friendlier, but several in the task set do not
+mean what a reader expects — the prompts' "brown" is `saddlebrown` and their
+"dark red" is `firebrick` — so accepting names would quietly draw the wrong
+colour instead of producing an error the agent can act on.
+
+Rendered with Pillow, supersampled 4× and filtered down; references come out of
+cairo, so a correct drawing here is never matching its own anti-aliasing.
+
+### Known bias in the comparison
+
+The golden recipes and the API vocabulary are both shape lists, so this layer is
+structurally closest to how the tasks were authored. That is an advantage the
+kernel and UI layers do not get, and it is not entirely separable from the
+abstraction-level effect the harness is trying to measure. Worth stating plainly
+when the results are read, rather than discovered later.
 
 ## The runner
 
@@ -254,7 +305,8 @@ Settled before building; recorded because they shape what the results mean.
 
 Adding a task: write `tasks/<id>.json` with `id`, `description`, `prompt`,
 `canvas`, `difficulty`, and a `golden` recipe, then run
-`tools/generate_references.py`. The validity tests pick it up automatically and
+`tools/generate_references.py
+tools/run_sweep.py`. The validity tests pick it up automatically and
 will tell you if the prompt is under-specified or the tier is mislabelled.
 
 Swapping the scorer: implement the `Scorer` protocol. The SVG scorer is meant to
