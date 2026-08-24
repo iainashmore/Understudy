@@ -230,7 +230,9 @@ class TestOracle:
         "task", load_all_tasks(), ids=[t.task_id for t in load_all_tasks()]
     )
     def test_the_oracle_passes_every_task(self, task):
-        agent = oracle_agent(load_golden_recipe(task.task_id), oracle_actions)
+        agent = oracle_agent(
+            load_golden_recipe(task.task_id), oracle_actions, task.canvas
+        )
         result = Runner(PixelScorer()).run(task, APIEnvironment(), agent)
 
         assert result.outcome is Outcome.COMPLETED
@@ -254,7 +256,9 @@ class TestOracle:
         assert all(name in OPERATIONS_BY_NAME for name in translated)
 
     def test_oracle_runs_stay_out_of_the_results(self, task):
-        agent = oracle_agent(load_golden_recipe(task.task_id), oracle_actions)
+        agent = oracle_agent(
+            load_golden_recipe(task.task_id), oracle_actions, task.canvas
+        )
         result = Runner(PixelScorer()).run(task, APIEnvironment(), agent)
         assert result.is_oracle
 

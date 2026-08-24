@@ -16,7 +16,6 @@ of cairo, so a correct drawing here is never matching its own anti-aliasing.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +23,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageDraw
 
+from harness.environments.colour import normalise_hex
 from harness.image import to_png_bytes
 from harness.interaction import (
     Action,
@@ -33,16 +33,12 @@ from harness.interaction import (
     Operation,
     Parameter,
 )
-from harness.task import TaskBrief
+from harness.task import Canvas, TaskBrief
 
 #: Supersampling factor. Pillow's scan converter is aliased, and hard edges
 #: against a soft reference would cost accuracy everywhere a shape has an
 #: outline.
 SUPERSAMPLE = 4
-
-_HEX6 = re.compile(r"^#[0-9a-fA-F]{6}$")
-_HEX3 = re.compile(r"^#[0-9a-fA-F]{3}$")
-
 
 class ActionError(ValueError):
     """A rejected action. Reported to the agent, never raised out of `step`."""
@@ -150,7 +146,7 @@ PREAMBLE = (
     "to the right and y increasing downwards.\n"
     "Call one operation per turn. Shapes are painted in the order you draw "
     "them, so a later shape covers an earlier one where they overlap. Colours "
-    "are hex strings such as '#ff0000'; colour names are not accepted."
+    "are hex strings such as '#1a9edb'; colour names are not accepted."
 )
 
 
@@ -162,19 +158,13 @@ def parse_colour(value: Any, field: str, operation: str) -> str:
     is firebrick -- so accepting names would silently draw the wrong colour.
     A rejected name produces a legible error instead, which the agent can act on.
     """
-    if not isinstance(value, str):
+    normalised = normalise_hex(value)
+    if normalised is None:
         raise ActionError(
-            f"{operation}: {field!r} must be a colour like '#ff0000', "
-            f"got {value!r} ({type(value).__name__})"
+            f"{operation}: {field!r} must be a colour like '#ff0000' or '#f00', "
+            f"got {value!r}"
         )
-    if _HEX6.match(value):
-        return value.lower()
-    if _HEX3.match(value):
-        return "#" + "".join(character * 2 for character in value[1:]).lower()
-    raise ActionError(
-        f"{operation}: {field!r} must be a colour like '#ff0000' or '#f00', "
-        f"got {value!r}"
-    )
+    return normalised
 
 
 def parse_number(value: Any, spec: ParamSpec, operation: str) -> float:
@@ -421,10 +411,14 @@ class APIEnvironment:
         return message
 
 
-def oracle_actions(shapes: Sequence[dict[str, Any]]) -> list[Action]:
+def oracle_actions(
+    shapes: Sequence[dict[str, Any]], canvas: Canvas | None = None
+) -> list[Action]:
     """Translate a golden recipe into API calls, for the oracle diagnostic.
 
     Only used to prove this environment can produce a passing artifact at all.
+    The canvas is part of the translator signature because lower layers need it
+    to rasterise; this layer has shape primitives and does not.
     """
     translation = {
         "circle": ("draw_circle", ("cx", "cy", "r", "fill")),

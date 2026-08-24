@@ -230,7 +230,8 @@ def test_run_id_identifies_the_cell(task, runner):
 def test_oracle_runs_are_flagged(task, runner):
     agent = oracle_agent(
         {"shapes": [{"cx": 100, "cy": 100, "r": 40}]},
-        lambda shapes: [Action("draw_circle", dict(shape)) for shape in shapes],
+        lambda shapes, canvas: [Action("draw_circle", dict(shape)) for shape in shapes],
+        task.canvas,
     )
     result = runner.run(task, FakeEnvironment(), agent)
 

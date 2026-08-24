@@ -11,11 +11,10 @@ See `HARNESS_SPEC.md` for the full design.
 
 ## Status
 
-Build steps 1–4 are done: **tasks, scorer, mock agents, the runner loop, and
-the API layer**. The pipeline runs end to end — `task → agent → environment →
-scorer → result` — and the oracle passes all nine tasks through the API layer at
-score 1.000, so the harness is sound on the one layer that exists. No real model
-has been run, so there are no capability results yet.
+Build steps 1–5 are done: **tasks, scorer, mock agents, the runner loop, and
+two of the three layers**. The oracle passes all nine tasks at both the API and
+kernel layers at score 1.000, so the harness is sound on everything built so
+far. No real model has been run, so there are no capability results yet.
 
 | # | Component | State |
 |---|-----------|-------|
@@ -23,8 +22,8 @@ has been run, so there are no capability results yet.
 | 2 | MockAgent | done |
 | 3 | Runner loop | done |
 | 4 | APIEnvironment | done |
-| 5 | KernelEnvironment | next |
-| 6 | UIEnvironment | |
+| 5 | KernelEnvironment | done |
+| 6 | UIEnvironment | next |
 | 7 | ModelAgent | |
 
 ## Layout
@@ -35,7 +34,7 @@ harness/scorer.py      Scorer protocol + PixelScorer
 harness/image.py       artifact normalisation (PNG -> RGB array), blur
 harness/interaction.py Layer, Action, Observation, Operation, Interface
 harness/environment.py Environment protocol
-harness/environments/  layer implementations + registry (api only so far)
+harness/environments/  layer implementations + registry (api, kernel)
 harness/agents/        Agent protocol + the mocks
 harness/runner.py      the loop, RunResult, trace writing
 harness/results.py     results CSV + success-rate-by-layer summary
@@ -51,7 +50,7 @@ tests/                 unit tests plus the threshold calibration
 
 ```bash
 pip install -r requirements.txt
-pytest                                        # 287 tests
+pytest                                        # 421 tests
 python3 tools/generate_references.py
 tools/run_sweep.py --check  # references current?
 python3 tools/generate_references.py
@@ -176,6 +175,68 @@ structurally closest to how the tasks were authored. That is an advantage the
 kernel and UI layers do not get, and it is not entirely separable from the
 abstraction-level effect the harness is trying to measure. Worth stating plainly
 when the results are read, rather than discovered later.
+
+## The kernel layer
+
+Below the API layer, not beside it. There are no shapes here — the agent works
+out which pixels it wants and sets them.
+
+```
+fill(colour)                     set every pixel
+set_pixels(pixels)               [[x, y, colour], ...]
+write_spans(spans)               [[x, y, length, colour], ...]
+```
+
+Three properties define it, each the honest reading of *max control, no
+guardrails, failures land on the agent*:
+
+- **No shape primitives at all.** This is what makes the ladder monotone. Raw
+  SVG path data — the other candidate for this rung — would have sat *above* the
+  API layer, not below it.
+- **Nothing is clipped.** A write leaving the buffer is rejected, not trimmed,
+  so bounds arithmetic is the agent's problem.
+- **No anti-aliasing.** Pixel values are exactly what the agent wrote.
+
+Actions carry *sequences* of writes, as the spec's "low-level op sequences"
+implies. One pixel per turn would put a circle out of reach of any sane budget,
+and the layer would be measuring the turn limit rather than the abstraction. The
+oracle solves the whole task set in 1–8 turns and 80–400 spans, well inside the
+40-turn budget.
+
+**What this layer does not do is give worse errors than the others.** Its
+messages are terse because its operations are, but they name the entry, the
+value and the limit. Degrading the error signal on purpose would be putting a
+thumb on the scale for the hypothesis under test. A rejected batch also writes
+nothing at all — validation completes before any pixel lands, so the agent is
+never left guessing what state the buffer is in.
+
+### Hard edges are not penalised
+
+The references are anti-aliased and this layer cannot anti-alias, which looked
+like it might sink the whole rung. Measured: a hard-edged rasterisation scores
+**1.000** on every task, because the scorer's 1.5px blur absorbs the difference
+entirely. Had it not, every kernel result would have been a measurement of the
+scorer. There is a per-task regression test asserting exactly 1.000, not merely
+"passes".
+
+## Layer parity
+
+`tests/test_layer_parity.py` holds the invariants that keep the comparison
+honest, applied to whichever layers are registered — so a new environment has to
+satisfy them the moment it is added, not whenever someone remembers to check:
+
+- no preamble names a colour any task asks for, or uses task vocabulary;
+- every preamble states the canvas geometry and coordinate convention;
+- `done` is offered everywhere and implemented by no layer;
+- every layer returns the canvas after every action — not just the UI one;
+- rejected actions are observations carrying an error, never exceptions, and
+  they list what is available;
+- every artifact is a PNG at canvas size, and `reset` really does discard the
+  previous run;
+- the oracle passes every task at every layer.
+
+That last one is the load-bearing check. Until it holds for a layer, a real
+agent's failure there cannot be attributed to the agent.
 
 ## The runner
 

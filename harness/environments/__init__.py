@@ -9,17 +9,24 @@ from typing import Any
 
 from harness.environment import Environment
 from harness.environments.api import APIEnvironment, oracle_actions
+from harness.environments.kernel import KernelEnvironment
+from harness.environments.kernel import oracle_actions as kernel_oracle_actions
 from harness.interaction import Action, Layer
+from harness.task import Canvas
 
 #: Layers with a working implementation. UI and Kernel join this as they land.
 ENVIRONMENTS: dict[Layer, Callable[[], Environment]] = {
     Layer.API: APIEnvironment,
+    Layer.KERNEL: KernelEnvironment,
 }
 
 #: How to say a golden recipe in each layer's action space, for the oracle
 #: diagnostic. Only ever used to prove an environment can pass at all.
-ORACLE_TRANSLATORS: dict[Layer, Callable[[Sequence[dict[str, Any]]], list[Action]]] = {
+ORACLE_TRANSLATORS: dict[
+    Layer, Callable[[Sequence[dict[str, Any]], Canvas], list[Action]]
+] = {
     Layer.API: oracle_actions,
+    Layer.KERNEL: kernel_oracle_actions,
 }
 
 
@@ -38,6 +45,7 @@ def build(layer: Layer) -> Environment:
 
 __all__ = [
     "APIEnvironment",
+    "KernelEnvironment",
     "ENVIRONMENTS",
     "ORACLE_TRANSLATORS",
     "available_layers",

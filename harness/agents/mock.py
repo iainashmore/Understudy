@@ -22,6 +22,7 @@ from typing import Any
 
 from harness.agents.base import BaseAgent
 from harness.interaction import Action, Observation
+from harness.task import Canvas
 
 
 class ScriptedAgent(BaseAgent):
@@ -164,7 +165,8 @@ def retrying_agent(
 
 def oracle_agent(
     recipe: dict[str, Any],
-    translate: Callable[[list[dict[str, Any]]], Iterable[Action]],
+    translate: Callable[[list[dict[str, Any]], Canvas], Iterable[Action]],
+    canvas: Canvas,
     name: str = "oracle",
 ) -> ScriptedAgent:
     """An agent handed the answer, for proving an environment can pass at all.
@@ -177,8 +179,10 @@ def oracle_agent(
     table.
 
     `translate` is supplied by the environment being tested, since only it knows
-    how to say "draw this circle" in its own action space.
+    how to say "draw this circle" in its own action space. It receives the
+    canvas because a layer with no shape primitives has to rasterise, and
+    rasterising needs to know how big the buffer is.
     """
-    agent = ScriptedAgent(translate(list(recipe["shapes"])), name=name)
+    agent = ScriptedAgent(translate(list(recipe["shapes"]), canvas), name=name)
     agent.is_oracle = True
     return agent

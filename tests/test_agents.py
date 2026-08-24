@@ -166,13 +166,16 @@ def test_retrying_agent_does_not_retry_when_nothing_went_wrong(brief):
 def test_oracle_is_flagged_and_uses_the_layer_translator(brief):
     from harness.task import load_golden_recipe
 
-    def translate(shapes):
+    def translate(shapes, canvas):
+        assert canvas.width == 200, "the translator is told the buffer size"
         return [
             Action("draw_circle", {"cx": s["cx"], "cy": s["cy"], "r": s["r"]})
             for s in shapes
         ]
 
-    agent = oracle_agent(load_golden_recipe("t01_red_circle"), translate)
+    agent = oracle_agent(
+        load_golden_recipe("t01_red_circle"), translate, brief.canvas
+    )
     start(agent, brief)
 
     assert agent.is_oracle is True, "oracle runs must be distinguishable"

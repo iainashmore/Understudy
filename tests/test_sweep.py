@@ -46,7 +46,10 @@ class TestRegistry:
 class TestSweepCli:
     def test_a_sweep_writes_results_and_traces(self, tmp_path):
         exit_code = run_sweep.main(
-            ["--task", "t01_red_circle", "--task", "t09_ring_punchout", "--out", str(tmp_path)]
+            [
+                "--task", "t01_red_circle", "--task", "t09_ring_punchout",
+                "--layer", "api", "--out", str(tmp_path),
+            ]
         )
         assert exit_code == 0
 
@@ -59,7 +62,9 @@ class TestSweepCli:
         assert all((tmp_path / "traces" / row["run_id"] / "final.png").exists() for row in rows)
 
     def test_the_oracle_passes_and_the_do_nothing_agent_does_not(self, tmp_path):
-        run_sweep.main(["--task", "t01_red_circle", "--out", str(tmp_path)])
+        run_sweep.main(
+            ["--task", "t01_red_circle", "--layer", "api", "--out", str(tmp_path)]
+        )
         with (tmp_path / "results.csv").open() as handle:
             rows = {row["agent"]: row for row in csv.DictReader(handle)}
 
@@ -69,11 +74,20 @@ class TestSweepCli:
 
     def test_repeats_produce_distinct_runs(self, tmp_path):
         run_sweep.main(
-            ["--task", "t01_red_circle", "--agent", "noop", "--repeats", "3", "--out", str(tmp_path)]
+            [
+                "--task", "t01_red_circle", "--agent", "noop", "--layer", "api",
+                "--repeats", "3", "--out", str(tmp_path),
+            ]
         )
         with (tmp_path / "results.csv").open() as handle:
             run_ids = [row["run_id"] for row in csv.DictReader(handle)]
         assert len(set(run_ids)) == 3
+
+    def test_a_default_sweep_covers_every_available_layer(self, tmp_path):
+        run_sweep.main(["--task", "t01_red_circle", "--agent", "noop", "--out", str(tmp_path)])
+        with (tmp_path / "results.csv").open() as handle:
+            layers = {row["layer"] for row in csv.DictReader(handle)}
+        assert layers == {layer.value for layer in available_layers()}
 
     def test_asking_for_an_unbuilt_layer_is_a_clear_error(self, tmp_path):
         unbuilt = next((l for l in Layer if l not in ENVIRONMENTS), None)
@@ -87,6 +101,7 @@ class TestSweepCli:
             [
                 "--task", "t07_overlap_order",
                 "--agent", "oracle",
+                "--layer", "api",
                 "--capture-turn-images",
                 "--out", str(tmp_path),
             ]

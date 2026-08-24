@@ -37,7 +37,9 @@ def build_agent(kind: str, task_id: str, layer: Layer):
         translate = ORACLE_TRANSLATORS.get(layer)
         if translate is None:
             return None
-        return oracle_agent(load_golden_recipe(task_id), translate)
+        return oracle_agent(
+            load_golden_recipe(task_id), translate, load_task(task_id).canvas
+        )
     return NoOpAgent()
 
 

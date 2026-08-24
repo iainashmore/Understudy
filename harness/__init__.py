@@ -2,7 +2,7 @@
 
 from harness.agents import Agent, BaseAgent, ScriptedAgent
 from harness.environment import Environment
-from harness.environments import APIEnvironment
+from harness.environments import APIEnvironment, KernelEnvironment
 from harness.image import load_rgb, to_png_bytes
 from harness.interaction import (
     Action,
@@ -35,6 +35,7 @@ __all__ = [
     "Difficulty",
     "Environment",
     "Interface",
+    "KernelEnvironment",
     "Layer",
     "Observation",
     "Operation",
