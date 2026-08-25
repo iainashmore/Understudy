@@ -265,7 +265,7 @@ class TestRunning:
         assert "Echo: first prompt" in page
         # Numbered so a step can be quoted. This run has no recording, so the
         # video element is covered where it exists: test_transcript_html.
-        assert "<ol class=\"steps\">" in page
+        assert '<span class="step-no">1</span>' in page
 
     def test_rebuilding_writes_both_forms(self, api):
         pytest.importorskip("playwright")

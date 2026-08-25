@@ -23,11 +23,17 @@ def run_dir(tmp_path):
     (tmp_path / "results.jsonl").write_text(json.dumps({
         "prompt_id": "baseline", "repeat_index": 0,
         "prompt": "A distinctive prompt string", "variables": {},
-        "response": "A distinctive response string", "reads": {}, "read_images": {},
+        "response": "A distinctive response string",
+        "reads": {"response": "A distinctive response string"}, "read_images": {},
         "status": "ok", "duration_ms": 100, "screenshots": [],
         "backend": "web", "timestamp": "2026-08-25T00:00:00Z",
-        "step_statuses": [{"index": 1, "phase": "steps", "action": "click",
-                           "target": "send", "status": "ok", "duration_ms": 10}],
+        "step_statuses": [
+            {"index": 1, "phase": "steps", "action": "type", "target": "prompt_box",
+             "status": "ok", "duration_ms": 10,
+             "detail": {"text": "A distinctive prompt string"}},
+            {"index": 2, "phase": "steps", "action": "read", "target": "reply",
+             "status": "ok", "duration_ms": 5, "detail": {"store_as": "response"}},
+        ],
     }) + "\n")
     return tmp_path
 

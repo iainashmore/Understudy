@@ -317,8 +317,9 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
                 f'<div class="entry-meta">{" · ".join(meta)}</div>' if meta else ""]
 
         turn = turns.get(entry.number)
+        count = "" if len(turns) < 2 else f" {turn}"
         if entry.typed:
-            tag = f"prompt {turn}" if turn else "typed"
+            tag = f"prompt{count}" if turn else "typed"
             body.append(f'<div class="typed"><span class="tag">{_e(tag)}</span>'
                         f"<pre>{_e(entry.typed)}</pre></div>")
         if entry.keys:
@@ -326,7 +327,7 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
                         f"<pre>{_e(entry.keys)}</pre></div>")
 
         for name, text in entry.reads:
-            tag = f"reply {turn}" if turn else name
+            tag = f"reply{count}" if turn else name
             body.append(f'<div class="typed"><span class="tag">{_e(tag)}</span>'
                         f"<pre>{_e(text) or '<em>nothing captured</em>'}</pre></div>")
         for name, relative in entry.read_images:
@@ -348,6 +349,41 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
         for relative in orphans:
             out.append(f"<figure>{_img(run_dir, relative, embed)}<figcaption>"
                        f"{_e(_label_of(relative))}</figcaption></figure>")
+    return "".join(out)
+
+
+def _recordings(run_dir: Path, results: list[dict[str, Any]], embed: bool) -> str:
+    """Every prompt run's video, together and early.
+
+    Watching it is the fastest way to know whether the replay did what it was
+    meant to -- faster than any table -- so it belongs above the detail rather
+    than inside each prompt run's section, which is where a reader finds it
+    only after scrolling past everything it would have explained.
+    """
+    videos = [r for r in results if r.get("recording")]
+    failures = [r for r in results
+                if not r.get("recording") and r.get("recording_error")]
+    if not videos and not failures:
+        return ""
+
+    named = len(results) > 1
+    out = ["<h2>Recording</h2>"]
+    for result in videos:
+        source, inlined = _video_source(run_dir, result["recording"], embed)
+        beside = ("" if inlined or not embed else
+                  '<p class="note">The video is not inside this file: it is too '
+                  'large to inline. Keep it beside the transcript.</p>')
+        out.append(
+            (f'<p class="lede">{_e(result["prompt_id"])}</p>' if named else "")
+            + f'<video controls preload="metadata" src="{source}"></video>'
+            f'<p class="no-codec note" hidden>This browser cannot decode H.264. '
+            f"Chrome, Edge and any desktop player can; some Chromium builds "
+            f"ship without it.</p>{beside}"
+        )
+    for result in failures:
+        label = f"{_e(result['prompt_id'])}: " if named else ""
+        out.append(f'<p class="note">No recording — {label}'
+                   f'{_e(result["recording_error"])}</p>')
     return "".join(out)
 
 
@@ -423,26 +459,6 @@ def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
                    '<p class="note">No text captured. The response was recorded '
                    'as pixels; the region image is below.</p>')
 
-    if result.get("recording"):
-        relative = result["recording"]
-        source, inlined = _video_source(run_dir, relative, embed)
-        beside = ("" if inlined or not embed else
-                  '<p class="note">The video is not inside this file: it is '
-                  'too large to inline. Keep it beside the transcript, at the '
-                  'path below.</p>')
-        out.append(
-            f'<h3>Recording</h3><video controls preload="metadata" src="{source}">'
-            f"</video>"
-            f'<p class="no-codec note" hidden>This browser cannot decode H.264. '
-            f"Chrome, Edge and any desktop player can; some Chromium builds ship "
-            f"without it. The link below opens the file.</p>"
-            f'{beside}'
-            f'<p class="lede"><a href="{source}">{_e(relative)}</a></p>'
-        )
-    elif result.get("recording_error"):
-        out.append(f'<p class="note">No recording: '
-                   f'{_e(result["recording_error"])}</p>')
-
     entries = timeline(result, narration)
     shown = {name for entry in entries for name, _ in entry.read_images}
     for name, relative in (result.get("read_images") or {}).items():
@@ -471,34 +487,38 @@ def render_html(
                  **load_narration(run_dir)}
     title, description = _flow_heading(run_dir)
 
-    files = [name for name in
-             ("flow.yaml", "prompts.yaml", "results.jsonl", "results.csv",
-              "transcript.md")
-             if (run_dir / name).exists()]
-    links = " ".join(f'<a href="{_e(name)}">{_e(name)}</a>' for name in files)
+    def group(label: str, names: tuple[str, ...]) -> str:
+        found = [n for n in names if (run_dir / n).exists()]
+        if not found:
+            return ""
+        return (f"<span><b>{label}</b> "
+                + " ".join(f'<a href="{_e(n)}">{_e(n)}</a>' for n in found)
+                + "</span>")
 
     body = [
         f"<h1>{_e(title)}</h1>",
         f'<p class="lede">{_e(description)}</p>' if description else "",
         '<p class="meta">'
-        f"<span><b>Run</b> {_e(run_dir.name)}</span>"
-        f"<span><b>Backend</b> {_e(summary.backend)}</span>"
+        # What was under test first: a transcript records a reply, and without
+        # the release that said it, comparing two of them means nothing.
+        + (f"<span><b>Under test</b> {_e(subject_of(results).summary())}</span>"
+           if subject_of(results).recorded else "")
+        + f"<span><b>Run</b> {_e(run_dir.name)} · {_e(summary.backend)}</span>"
         f"<span><b>Prompt runs</b> {summary.variants} — {summary.passed} ok, "
         f"{summary.failed} failed, {summary.timed_out} timed out</span>"
         + (f"<span><b>Started</b> {_e(results[0].get('timestamp', '?'))}</span>"
            if results else "")
-        + (f"<span><b>Under test</b> {_e(subject_of(results).summary())}</span>"
-           if subject_of(results).recorded else "")
         + "</p>",
-        f'<p class="meta screen-only">{links}</p>' if links else "",
-        _summary_table(results),
-        _steps_list(results, narration),
-        "<h2>Prompts and responses</h2>",
-        '<div class="wrap"><table><thead><tr><th>prompt run</th><th>prompt</th>'
-        "<th>response</th></tr></thead><tbody>"
-        + "".join(_exchange_rows(r) for r in results)
-        + "</tbody></table></div>",
+        '<p class="meta screen-only">'
+        + group("Input", ("flow.yaml", "prompts.yaml", "prompts.csv"))
+        + group("Output", ("results.jsonl", "results.csv", "transcript.md"))
+        + "</p>",
+        _recordings(run_dir, results, embed),
     ]
+    # And then the run, step by step. There was a summary table, a list of the
+    # steps, a table of prompts against responses, and then the steps again
+    # with everything attached -- four views of one run, and a reader
+    # assembling them.
     body += [_variant(run_dir, result, embed, narration) for result in results]
     body.append(
         "<footer>Generated by understudy. Screenshots are the run's own "

@@ -46,6 +46,16 @@
                border-radius:4px; cursor:pointer; }
   .tree-item:hover { background:#2b323a; }
   .tree-item.active { background:#31435a; }
+  /* A flow's runs, under the flow. Indented so the nesting is obvious at a
+     glance and the eye can skip the whole block. */
+  .run-list { margin:0 0 6px; }
+  .run { display:flex; align-items:center; gap:6px; padding:3px 6px 3px 34px;
+         font-size:12px; cursor:pointer; color:var(--dim, #9aa5b1); }
+  .run:hover { background:#2b323a; }
+  .run .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .run .pick { cursor:pointer; margin:0; }
+  .run .count.bad { color:#e05c5c; }
+  .compare-bar { padding:2px 6px 6px 34px; }
   .tree-item .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tree-item .count { color:var(--dim); font-size:11px; }
   .tree-item .actions { display:none; gap:2px; }
@@ -523,6 +533,7 @@ function group(name, path, description, flowPaths, error) {
 }
 
 function item(flow) {
+  const wrapper = document.createElement("div");
   const row = document.createElement("div");
   row.className = "tree-item";
   row.dataset.path = flow.path;
@@ -537,7 +548,76 @@ function item(flow) {
     action("copy", () => duplicateFlow(flow.path)),
     action("del", () => removeFlow(flow.path, flow.title)),
   );
-  return row;
+  wrapper.appendChild(row);
+  wrapper.appendChild(runList(flow));
+  return wrapper;
+}
+
+// One flow is replayed many times -- against this release, then the next, then
+// again after a fix. Its runs belong under it, where you look for them.
+function runList(flow) {
+  const list = document.createElement("div");
+  list.className = "run-list";
+  list.dataset.for = flow.path;
+  list.hidden = state.flow !== flow.path;
+
+  const runs = knownRuns.filter((r) => r.flow && r.flow === flow.name);
+  if (!runs.length) {
+    list.innerHTML = `<div class="run muted">no runs yet</div>`;
+    return list;
+  }
+  runs.forEach((run) => {
+    const failed = run.total && run.ok < run.total;
+    const line = document.createElement("div");
+    line.className = "run";
+    // The tick is how two runs get chosen for a comparison; the rest of the
+    // row opens one. The same list, both jobs, no second place to look.
+    line.innerHTML = `<input type="checkbox" class="pick" title="compare">
+      <span class="label">${escapeHtml(run.subject || run.name)}</span>
+      <span class="count ${failed ? "bad" : ""}">${run.ok}/${run.total}</span>`;
+    line.title = `${run.name}${run.when ? " · " + run.when : ""}`;
+    const tick = line.querySelector(".pick");
+    tick.dataset.dir = run.dir;
+    tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
+    line.onclick = () => openRun(run);
+    list.appendChild(line);
+  });
+  const bar = document.createElement("div");
+  bar.className = "compare-bar";
+  bar.hidden = true;
+  bar.innerHTML = `<button class="link">compare the two ticked</button>`;
+  bar.querySelector("button").onclick = () => compareTicked();
+  list.appendChild(bar);
+  return list;
+}
+
+function ticked() {
+  return [...document.querySelectorAll(".run-list:not([hidden]) .pick:checked")];
+}
+
+function refreshCompareBar() {
+  const chosen = ticked();
+  document.querySelectorAll(".compare-bar").forEach((bar) => {
+    bar.hidden = chosen.length !== 2;
+  });
+  // More than two is not a side-by-side, and silently ignoring the extras
+  // would compare a pair the reader did not choose.
+  if (chosen.length > 2) chosen[0].checked = false;
+}
+
+async function compareTicked() {
+  const [before, after] = ticked().map((box) => box.dataset.dir);
+  if (!before || !after) return;
+  showTab("compare");
+  $("cmpLeft").value = before;
+  $("cmpRight").value = after;
+  $("cmpGo").click();
+}
+
+async function openRun(run) {
+  document.querySelectorAll(".run-list .run").forEach((r) => r.classList.remove("active"));
+  showTab("transcript");
+  await loadTranscript(run.dir + "/transcript.md");
 }
 
 function action(text, handler) {
@@ -550,6 +630,8 @@ function action(text, handler) {
 function markActive() {
   document.querySelectorAll(".tree-item").forEach((row) =>
     row.classList.toggle("active", row.dataset.path === state.flow));
+  document.querySelectorAll(".run-list").forEach((list) =>
+    list.hidden = list.dataset.for !== state.flow);
 }
 
 /* ---------- open / save / new / duplicate / delete ---------- */

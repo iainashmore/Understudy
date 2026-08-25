@@ -153,12 +153,15 @@ class Api:
         shows something a person can choose between."""
         described = []
         for relative in self.workspace.listing()["flows"]:
-            entry: dict[str, Any] = {"path": relative, "title": relative,
+            entry: dict[str, Any] = {"path": relative, "name": "",
+                                     "title": relative,
                                      "description": "", "tags": [],
                                      "variants": 0, "embedded": False, "error": None}
             try:
                 flow = load_flow(self.workspace.resolve(relative))
                 entry.update(
+                    name=flow.name,   # what a run records, so runs can be
+                                      # listed under the flow that produced them
                     title=flow.title or flow.name, description=flow.description,
                     tags=list(flow.tags), steps=len(flow.steps),
                     variants=len(flow.embedded_prompts),

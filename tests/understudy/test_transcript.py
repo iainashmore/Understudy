@@ -45,10 +45,18 @@ def result(**overrides) -> dict:
             {"index": 1, "phase": "reset", "action": "click", "target": "new_chat",
              "status": "ok", "duration_ms": 40, "resolution": {"via": "selector"}},
             {"index": 1, "phase": "steps", "action": "type", "target": "prompt_box",
-             "status": "ok", "duration_ms": 90, "resolution": {"via": "anchor"}},
+             "status": "ok", "duration_ms": 90, "resolution": {"via": "anchor"},
+             "detail": {"text": "Summarise this."}},
+            # A read step, because that is the only way `reads` is ever filled.
+            {"index": 2, "phase": "steps", "action": "read", "target": "response_area",
+             "status": "ok", "duration_ms": 5, "detail": {"store_as": "response"}},
         ],
     }
     base.update(overrides)
+    # `response` is derived from the reads in a real result, so a test that
+    # sets one and not the other is describing a run that cannot happen.
+    if "response" in overrides and "reads" not in overrides:
+        base["reads"] = {"response": overrides["response"]}
     return base
 
 
@@ -201,17 +209,27 @@ class TestAConversationRatherThanOneQuestion:
         run = make_run(tmp_path, [a_conversation()])
         text = render_markdown(run)
 
-        assert "2 exchanges" in text
+        assert "Prompt 1:" in text and "Prompt 2:" in text
         assert "Add a 10mm hole." in text and "Now fillet it." in text
         assert "Hole added." in text and "Fillet added." in text
 
+    def test_each_turn_sits_at_the_step_that_said_it(self, tmp_path):
+        """Not gathered into a conversation block of their own. The step-by-step
+        is the transcript; a prompt is something a step did."""
+        text = render_markdown(make_run(tmp_path, [a_conversation()]))
+
+        first = text.index("Add a 10mm hole.")
+        second = text.index("Now fillet it.")
+        between = text[first:second]
+        assert "Click tree node" in between or "click" in between.lower(), \
+            "the click between the two turns should be between them"
+
     def test_one_prompt_still_reads_as_one_prompt(self, tmp_path):
-        """The common case is unchanged: no conversation scaffolding around a
-        single question."""
+        """The common case: no turn numbers, just what was typed and read."""
         text = render_markdown(make_run(tmp_path, [result()]))
 
-        assert "exchanges" not in text
-        assert "### Response" in text
+        assert "Prompt 2:" not in text
+        assert "A summary." in text
 
 
 class TestStructure:
@@ -236,23 +254,33 @@ class TestStructure:
         text = render_markdown(run)
 
         order = [text.index(mark) for mark in
-                 ("**Under test**", "**Input**", "## Recording", "## Steps")]
+                 ("**Under test**", "**Input**", "## Recording", "### Step by step")]
         assert order == sorted(order), text[:600]
 
-    def test_the_summary_has_a_row_per_variant(self, tmp_path):
+    def test_there_is_a_section_per_prompt_run_with_its_outcome(self, tmp_path):
         run = make_run(tmp_path, [result(), result(prompt_id="terse", duration_ms=900)])
         text = render_markdown(run)
-        assert "| [baseline](#baseline) | pass | 1200 ms |" in text
-        assert "| [terse](#terse) | pass | 900 ms |" in text
+        assert "## baseline" in text and "## terse" in text
+        assert "**Status** pass · 1200 ms" in text
+        assert "**Status** pass · 900 ms" in text
 
-    def test_prompts_and_responses_are_together_for_comparison(self, tmp_path):
-        """Comparing them is the reason the run happened."""
+    def test_there_is_one_view_of_the_run_not_four(self, tmp_path):
+        """A summary table, a list of the steps, a table of prompts against
+        responses, and then the steps again with everything attached -- four
+        views of one run, and a reader assembling them."""
+        text = render_markdown(make_run(tmp_path, [result()]))
+
+        assert "## Summary" not in text
+        assert "## Prompts and responses" not in text
+        assert "\n## Steps\n" not in text
+
+    def test_what_was_said_and_heard_is_at_the_step_that_said_it(self, tmp_path):
         run = make_run(tmp_path, [
             result(prompt="one", response="first"),
             result(prompt_id="b", prompt="two", response="second"),
         ])
-        section = render_markdown(run).split("## Prompts and responses")[1]
-        assert "> first" in section and "> second" in section
+        text = render_markdown(run)
+        assert "first" in text and "second" in text
 
     def test_screenshots_are_linked_relatively_and_exist(self, tmp_path):
         run = make_run(tmp_path, [result()])
@@ -281,10 +309,15 @@ class TestAwkwardContent:
         text = render_markdown(run)
         assert "````text" in text, "the fence must be longer than the content's"
 
-    def test_pipes_in_a_response_do_not_break_the_summary_table(self, tmp_path):
+    def test_pipes_in_a_step_do_not_break_the_step_table(self, tmp_path):
+        """The collapsed table of every step is still a table, and a response
+        or a target containing a pipe still has to stay inside its cell."""
         run = make_run(tmp_path, [result(response="a | b | c")])
-        row = [l for l in render_markdown(run).splitlines() if l.startswith("| [baseline]")][0]
-        assert row.count("|") == 6, "only the table's own separators"
+        rows = [l for l in render_markdown(run).splitlines()
+                if l.startswith("| 1 ") or l.startswith("| 2 ")]
+        assert rows, "no step rows at all"
+        for row in rows:
+            assert row.count("|") == 9, row
 
     def test_a_missing_screenshot_is_noted_rather_than_a_broken_link(self, tmp_path):
         run = make_run(tmp_path, [result()])
@@ -305,10 +338,10 @@ class TestAwkwardContent:
         )])
         text = render_markdown(run)
 
-        assert "_No text captured._" in text
-        assert "Recorded `response` region:" in text
+        assert "The pixels `response` was read from:" in text
         assert '<img src="baseline/04-src.png"' in text
         assert text.count('src="baseline/04-src.png"') == 1, "not also as a screenshot"
+        assert "(nothing captured)" in text, "and it says the text was empty"
 
     def test_repeats_get_distinct_sections(self, tmp_path):
         run = make_run(tmp_path, [result(), result(repeat_index=1)])

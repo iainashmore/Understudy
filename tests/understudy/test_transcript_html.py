@@ -33,7 +33,7 @@ def result(**overrides):
         "prompt": "Summarise this.",
         "variables": {"prompt": "Summarise this.", "new_name": "Bracket"},
         "response": "A summary.",
-        "reads": {}, "read_images": {},
+        "reads": {"response": "A summary."}, "read_images": {},
         "status": "ok", "duration_ms": 4200,
         "screenshots": ["baseline/01-start.png", "baseline/02-done.png"],
         "recording": None, "recording_error": None, "pointer_note": None,
@@ -48,10 +48,18 @@ def result(**overrides):
             {"index": 3, "phase": "steps", "action": "capture", "status": "ok",
              "duration_ms": 40, "detail": {"screenshot": "baseline/02-done.png"}},
             {"index": 4, "phase": "steps", "action": "type", "target": "prompt_box",
-             "status": "ok", "duration_ms": 2800, "detail": {}},
+             "status": "ok", "duration_ms": 2800,
+             "detail": {"text": "Summarise this."}},
+            # A read step, because that is the only way `reads` is ever filled.
+            {"index": 5, "phase": "steps", "action": "read", "target": "response",
+             "status": "ok", "duration_ms": 5, "detail": {"store_as": "response"}},
         ],
     }
     base.update(overrides)
+    # `response` is derived from the reads in a real result, so a test setting
+    # one and not the other describes a run that cannot happen.
+    if "response" in overrides and "reads" not in overrides:
+        base["reads"] = {"response": overrides["response"]}
     return base
 
 
@@ -92,10 +100,13 @@ def test_it_carries_the_prompt_and_the_response(run_dir):
 
 
 def test_the_steps_are_numbered(run_dir):
+    """There is one list of steps now, and it is the one with the screenshots
+    and the replies attached -- not a bare list above it saying the same thing
+    without any of them."""
     page = render_html(run_dir([result()]))
-    assert '<ol class="steps">' in page
-    assert "<li>Click pad_node</li>" in page
-    assert "<li>Type into prompt_box</li>" in page
+    assert '<ol class="steps">' not in page
+    assert '<span class="step-no">1</span>' in page
+    assert "Click pad_node" in page and "Type into prompt_box" in page
 
 
 def test_screenshots_sit_under_the_step_that_produced_them(run_dir):
@@ -242,11 +253,6 @@ def test_a_conversation_renders_as_one_block_per_turn(run_dir):
     assert "2 exchanges" in page
     assert page.count('class="exchange"') == 2
     assert "Now fillet it." in page and "Fillet added." in page
-
-
-def test_the_overview_lists_every_turn_of_a_conversation(run_dir):
-    page = render_html(run_dir([a_conversation()]))
-    assert "1/2" in page and "2/2" in page
 
 
 def test_the_exchange_rule_is_not_print_only(run_dir):

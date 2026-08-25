@@ -546,51 +546,12 @@ def render_markdown(
         out.append("- **Output** " + ", ".join(f"[`{n}`]({n})" for n in outputs))
 
     out += _recordings_markdown(results)
-    out += ["", "## Summary", "",
-            "| prompt run | status | duration | response | notes |",
-            "|------------|--------|----------|----------|-------|"]
 
-    for result in results:
-        notes = []
-        if result.get("used_fallbacks"):
-            notes.append(f"fallbacks: {', '.join(result['used_fallbacks'])}")
-        if result.get("agent_resolutions"):
-            notes.append(f"agent: {', '.join(result['agent_resolutions'])}")
-        if result.get("learned_anchors"):
-            notes.append(f"learned: {', '.join(result['learned_anchors'])}")
-        if result.get("error"):
-            notes.append(_escape(result["error"])[:70])
-        response = result.get("response") or ""
-        out.append(
-            f"| [{result['prompt_id']}](#{_slug(result)}) "
-            f"| {STATUS_MARK.get(result.get('status'), result.get('status'))} "
-            f"| {result.get('duration_ms', 0)} ms "
-            f"| {len(response)} chars | {_escape('; '.join(notes))[:90]} |"
-        )
-
-    out += _walkthrough(results, narration)
-
-    # Prompts against responses, one table, because comparing them is the whole
-    # reason the run happened.
-    out += ["", "## Prompts and responses", ""]
-    for result in results:
-        turns = exchanges(result)
-        if len(turns) <= 1:
-            out += [
-                f"**{result['prompt_id']}** — {_escape(result.get('prompt', ''))}", "",
-                f"> {_escape(result.get('response', '')) or '_(no text captured)_'}",
-                "",
-            ]
-            continue
-        # A conversation. Every turn, in order, rather than whichever read
-        # happened to be stored as `response`.
-        out += [f"**{result['prompt_id']}** — {len(turns)} exchanges", ""]
-        for turn in turns:
-            out += [
-                f"{turn.number}. _(step {turn.step})_ {_escape(turn.prompt)}", "",
-                f"   > {_escape(turn.response) or '_(no text captured)_'}", "",
-            ]
-
+    # And then the run, step by step. There was a summary table, a list of the
+    # steps, a table of prompts against responses, and then the steps again
+    # with everything attached -- four views of one run, and a reader assembling
+    # them. One view: what happened, in order, with what was said and what came
+    # back at the step where it happened.
     for result in results:
         out += _variant_section(run_dir, result, embed, narration)
 
@@ -645,37 +606,14 @@ def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
     if result.get("error"):
         out += ["", f"> **Error** {_escape(result['error'])}"]
 
-    turns = exchanges(result)
-    variables = dict(result.get("variables") or {})
-    prompt = (variables.pop("prompt", "") or "").strip()
-    if prompt:
-        out += ["", "### Prompt", ""] + _fence(prompt)
-
-    # Not the ones that were said: those are the conversation below, and
-    # listing them twice makes the reader check whether they differ.
-    said = {turn.prompt.strip() for turn in turns}
-    other = {k: v for k, v in variables.items() if str(v).strip() not in said}
+    # Everything a prompt run said and heard is in the steps, at the step it
+    # happened. Variables the steps did not say -- a style, a document name --
+    # are the only thing left worth stating up front.
+    said = {turn.prompt.strip() for turn in exchanges(result)}
+    other = {k: v for k, v in (result.get("variables") or {}).items()
+             if str(v).strip() and str(v).strip() not in said}
     if other:
-        out += ["", "Other variables:", ""]
-        out += [f"- `{k}` = {v}" for k, v in sorted(other.items())]
-
-    if len(turns) > 1:
-        # A session rather than a single question. The prompt above is the
-        # variable that was substituted; these are the things actually said.
-        out += ["", f"### The conversation — {len(turns)} exchanges", ""]
-        for turn in turns:
-            out += ["", f"**{turn.number}. Said** _(step {turn.step})_", ""]
-            out += _fence(turn.prompt.strip())
-            out += ["", f"**{turn.number}. Replied**", ""]
-            reply = turn.response.strip()
-            out += _fence(reply) if reply else ["_No text captured._"]
-    else:
-        out += ["", "### Response", ""]
-        response = (result.get("response") or "").strip()
-        out += _fence(response) if response else [
-            "_No text captured._ "
-            "The response was recorded as pixels; the region image is below."
-        ]
+        out += ["", ", ".join(f"`{k}` = {v}" for k, v in sorted(other.items()))]
 
     entries = timeline(result, narration or {})
     shown_reads = {name for entry in entries for name, _ in entry.read_images}
@@ -729,14 +667,17 @@ def _timeline_markdown(run_dir: Path, result: dict[str, Any], embed: bool,
         if meta:
             out += [f"_{' · '.join(meta)}_", ""]
 
+        # Numbered only when there is more than one, because "Prompt 1" on a
+        # flow that asks one question is a number that answers no question.
         turn = turns.get(entry.number)
+        count = "" if len(turns) < 2 else f" {turn}"
         if entry.typed:
-            label = f"Prompt {turn}:" if turn else "Typed:"
+            label = f"Prompt{count}:" if turn else "Typed:"
             out += [label, ""] + _fence(entry.typed) + [""]
         if entry.keys:
             out += [f"Pressed `{entry.keys}`", ""]
         for name, text in entry.reads:
-            label = f"Reply {turn}:" if turn else f"Read as `{name}`:"
+            label = f"Reply{count}:" if turn else f"Read as `{name}`:"
             out += [label, ""] + _fence(text or "(nothing captured)") + [""]
         for name, relative in entry.read_images:
             out += [f"The pixels `{name}` was read from:", "",
