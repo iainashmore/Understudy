@@ -1,0 +1,64 @@
+# The native path, end to end, against an application everybody has.
+#
+# Not a demonstration: this is the flow the CI job replays on a Windows runner,
+# so the whole native chain -- launch, find the window, walk the UIA tree, move
+# the real cursor, type, read back, screenshot, transcript -- runs somewhere
+# before it runs in front of a CAD application.
+#
+# Notepad is a well-behaved UIA citizen and CATIA is not. What this proves is
+# that the plumbing works; the interesting failures are still ahead.
+
+version: 1
+name: notepad-smoke
+title: Notepad — the native path end to end
+description: Launch Notepad, type a prompt, read it back, and prove the native driver through the runner
+tags: [smoke, native]
+
+subject:
+  app: Notepad
+  model: none
+
+target_app:
+  native:
+    executable: notepad.exe
+    launch: true
+    window_title_pattern: "*Notepad*"
+    # Animated, so the recording of a runner shows the same thing a recording
+    # of a workstation would.
+    mouse: {mode: human, speed: 2200}
+    typing: {mode: human, cps: 25}
+
+defaults:
+  timeout_ms: 20000
+  poll_interval_ms: 200
+
+targets:
+  editor:
+    intent: the text area Notepad types into
+    native:
+      # Document on the newer builds, Edit on the classic one. Ranked, so
+      # whichever the machine has is found without the flow caring.
+      - control_type: Document
+      - control_type: Edit
+
+prompts:
+  - id: baseline
+    prompt: The quick brown fox jumps over the lazy dog.
+  - id: awkward
+    # Unescaped, `~` is Enter and `+` is Shift under SendKeys: this variant
+    # exists to prove a prompt cannot submit itself halfway through.
+    prompt: C++ at 50% (yes) ~ still literal
+
+steps:
+  - action: capture
+    label: 1-before
+
+  - action: type
+    target: editor
+    text: "{{prompt}}"
+  - action: capture
+    label: 2-typed
+
+  - action: read
+    target: editor
+    store_as: response
