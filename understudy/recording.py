@@ -20,8 +20,10 @@ lifecycle can be checked without gdigrab.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,6 +180,26 @@ def transcode_to_mp4(source: Path, output: Path, ffmpeg: str | None = None) -> R
                      error=f"kept as .webm: conversion failed -- {tail}")
 
 
+#: How much of ffmpeg's chatter to keep. Only the end of it is ever useful.
+MAX_STDERR = 8192
+
+#: ffmpeg's per-frame progress, which it writes to stderr separated by
+#: carriage returns rather than newlines.
+PROGRESS = re.compile(r"^(frame|size)=")
+
+
+def meaningful_stderr(text: str, keep: int = 6) -> str:
+    """What ffmpeg said, with the progress counter taken out.
+
+    It writes a progress line per frame, so the last 300 characters of a
+    failing capture are "frame= 37 fps=8.0 q=29.0 size= 0KiB" and nothing
+    about why it stopped. The error is always further back.
+    """
+    lines = [line.strip() for line in re.split(r"[\r\n]+", text) if line.strip()]
+    real = [line for line in lines if not PROGRESS.match(line)]
+    return "\n".join((real or lines)[-keep:])
+
+
 class FfmpegProcess:
     """Start ffmpeg, then stop it so the file is actually playable.
 
@@ -189,12 +211,40 @@ class FfmpegProcess:
         self.command = command
         self.process: subprocess.Popen | None = None
         self.stderr_tail: str = ""
+        self._pump: threading.Thread | None = None
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
 
     def start(self, spawn=subprocess.Popen) -> None:
         self.process = spawn(
             self.command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+        self._pump = threading.Thread(target=self._drain, daemon=True)
+        self._pump.start()
+
+    def _drain(self) -> None:
+        """Read stderr while ffmpeg runs, rather than once at the end.
+
+        ffmpeg writes a progress line per frame. Nothing read any of it until
+        stop(), so the pipe buffer filled, ffmpeg blocked writing to it, and
+        the capture stopped dead -- a 25-second run produced a file holding
+        three seconds of nothing and ffmpeg exited 1. Short runs got away with
+        it, which is why the first Notepad recordings looked fine.
+        """
+        stream = getattr(self.process, "stderr", None)
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    return
+                with self._lock:
+                    self._buffer.extend(chunk)
+                    del self._buffer[:-MAX_STDERR]
+        except Exception:
+            return
 
     @property
     def running(self) -> bool:
@@ -215,12 +265,11 @@ class FfmpegProcess:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait(timeout=5)
-        try:
-            self.stderr_tail = (self.process.stderr.read() or b"").decode(
-                "utf-8", "replace"
-            )[-800:]
-        except Exception:
-            pass
+        if self._pump is not None:
+            self._pump.join(timeout=2)
+        with self._lock:
+            raw = bytes(self._buffer)
+        self.stderr_tail = meaningful_stderr(raw.decode("utf-8", "replace"))
         return self.process.returncode
 
 

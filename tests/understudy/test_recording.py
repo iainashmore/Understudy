@@ -80,6 +80,8 @@ class FakeProcess:
         self.written = b""
         self.stdin = self
         self.stderr = self
+        self.stderr_read = False
+        self.stderr_text = b"frame= 120 fps=12"
 
     # stdin
     def write(self, data: bytes) -> None:
@@ -91,9 +93,13 @@ class FakeProcess:
     def close(self) -> None:
         pass
 
-    # stderr
-    def read(self) -> bytes:
-        return b"frame= 120 fps=12"
+    # stderr. Read once and then empty, like a real pipe at EOF -- the drain
+    # loop reads until it gets nothing.
+    def read(self, size: int = -1) -> bytes:
+        if self.stderr_read:
+            return b""
+        self.stderr_read = True
+        return self.stderr_text
 
     def poll(self):
         return self.returncode
@@ -140,6 +146,62 @@ class TestProcessLifecycle:
 
     def test_stopping_something_never_started_is_not_a_crash(self):
         assert FfmpegProcess(["ffmpeg"]).stop() is None
+
+
+class TestStderrHandling:
+    """ffmpeg writes a progress line per frame. Both problems below come from
+    that, and together they cost a 25-second recording."""
+
+    def test_the_progress_counter_does_not_bury_the_error(self):
+        from understudy.recording import meaningful_stderr
+
+        chatter = (
+            "[gdigrab @ 0000] Capturing whole desktop as 1024x768\r"
+            "Output #0, mp4, to 'out.mp4':\r"
+            "Conversion failed!\r"
+            "frame=   25 fps=6.9 q=29.0 size=       0KiB\r"
+            "frame=   31 fps=7.5 q=29.0 size=       0KiB\r"
+            "frame=   37 fps=8.0 q=29.0 size=       0KiB"
+        )
+        kept = meaningful_stderr(chatter)
+        assert "Conversion failed!" in kept, \
+            "the reason is gone and only the frame counter is left"
+        assert "frame=   37" not in kept
+
+    def test_it_keeps_something_when_there_is_only_progress(self):
+        from understudy.recording import meaningful_stderr
+
+        assert "frame=" in meaningful_stderr("frame= 1\rframe= 2")
+
+    def test_stderr_is_read_while_ffmpeg_runs_not_only_at_the_end(self):
+        """The pipe holds tens of kilobytes. Reading it only at stop() meant
+        that on any run longer than a few seconds it filled, ffmpeg blocked
+        writing to it, and the capture stopped -- silently, because the file
+        existed."""
+        import threading
+
+        class BlockingStderr:
+            """Refuses to accept more than one chunk until it is read, the way
+            a full pipe refuses to accept more than it can hold."""
+
+            def __init__(self):
+                self.drained = threading.Event()
+                self.chunks = [b"one", b"two", b""]
+
+            def read(self, size=-1):
+                if len(self.chunks) == 1:
+                    self.drained.set()
+                return self.chunks.pop(0) if self.chunks else b""
+
+        stderr = BlockingStderr()
+        process = FakeProcess()
+        process.stderr = stderr
+
+        job = FfmpegProcess(["ffmpeg"])
+        job.start(spawn=lambda *a, **k: process)
+
+        assert stderr.drained.wait(timeout=5), \
+            "nothing read stderr while the process was running"
 
 
 class TestRecorders:

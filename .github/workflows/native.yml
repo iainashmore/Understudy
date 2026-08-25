@@ -155,6 +155,31 @@ jobs:
           sys.exit(0 if worst >= 0.9 else 1)
           "
 
+      - name: Check every run that asked for a video got one
+        shell: bash
+        run: |
+          # A failed recording is deliberately not fatal to a sweep -- losing
+          # forty prompts because ffmpeg died is the wrong trade. In this job
+          # it is the point, so here it is fatal.
+          python -c "
+          import json, pathlib, sys
+          bad = False
+          for results in sorted(pathlib.Path('runs').glob('*/results.jsonl')):
+              for line in results.open():
+                  row = json.loads(line)
+                  video = row.get('recording')
+                  print(f\"{results.parent.name}/{row['prompt_id']}: \"
+                        f\"{video or row.get('recording_error')}\")
+                  if not video:
+                      bad = True
+                      continue
+                  size = (results.parent / video).stat().st_size
+                  print(f'    {size} bytes')
+                  if size < 2048:
+                      bad = True
+          sys.exit(1 if bad else 0)
+          "
+
       - name: Show what it produced
         if: always()
         shell: bash
