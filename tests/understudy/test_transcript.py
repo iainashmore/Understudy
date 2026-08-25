@@ -52,15 +52,168 @@ def result(**overrides) -> dict:
     return base
 
 
+def a_conversation(**overrides) -> dict:
+    """Two exchanges in one prompt run: ask, read, click elsewhere, ask again.
+
+    This is what a real session with an embedded assistant looks like -- not
+    one question, but several, with clicks between them.
+    """
+    base = result(
+        prompt="Add a 10mm hole.",
+        variables={"prompt": "Add a 10mm hole.", "followup": "Now fillet it."},
+        reads={"first": "Hole added.", "second": "Fillet added."},
+        response="",
+        step_statuses=[
+            {"index": 1, "phase": "steps", "action": "type", "target": "leo_box",
+             "status": "ok", "duration_ms": 90, "detail": {"text": "Add a 10mm hole."},
+             "resolution": {"via": "selector"}},
+            {"index": 2, "phase": "steps", "action": "read", "target": "leo_reply",
+             "status": "ok", "duration_ms": 10,
+             "detail": {"store_as": "first", "chars": 11}},
+            {"index": 3, "phase": "steps", "action": "click", "target": "tree_node",
+             "status": "ok", "duration_ms": 30, "resolution": {"via": "selector"}},
+            {"index": 4, "phase": "steps", "action": "type", "target": "leo_box",
+             "status": "ok", "duration_ms": 80, "detail": {"text": "Now fillet it."},
+             "resolution": {"via": "selector"}},
+            {"index": 5, "phase": "steps", "action": "read", "target": "leo_reply",
+             "status": "ok", "duration_ms": 10,
+             "detail": {"store_as": "second", "chars": 13}},
+        ],
+    )
+    base.update(overrides)
+    return base
+
+
+class TestAConversationRatherThanOneQuestion:
+    """A flow is not always one prompt. A session with an embedded assistant is
+    several: click into the tree, ask, read the answer, click elsewhere, ask
+    again. A transcript showing one prompt and one response is showing a
+    quarter of what happened."""
+
+    def test_it_finds_every_exchange_in_order(self):
+        from understudy.transcript import exchanges
+
+        turns = exchanges(a_conversation())
+
+        assert [t.prompt for t in turns] == ["Add a 10mm hole.", "Now fillet it."]
+        assert [t.response for t in turns] == ["Hole added.", "Fillet added."]
+
+    def test_each_exchange_knows_which_step_said_it(self):
+        """So it can be quoted to R&D by number, like every other step.
+
+        1 and 3, not 1 and 4: the numbers count user actions, and the read
+        between them is the tool observing rather than something a person did.
+        """
+        from understudy.transcript import exchanges
+
+        assert [t.step for t in exchanges(a_conversation())] == [1, 3]
+
+    def test_a_reply_read_after_a_later_click_still_belongs_to_its_prompt(self):
+        """Reads attach to the last thing typed before them, which is the rule
+        a person reading the screen uses."""
+        from understudy.transcript import exchanges
+
+        conversation = a_conversation()
+        # The reply lands only after the click that follows the prompt.
+        conversation["step_statuses"][1], conversation["step_statuses"][2] = (
+            conversation["step_statuses"][2], conversation["step_statuses"][1]
+        )
+        turns = exchanges(conversation)
+
+        assert turns[0].response == "Hole added."
+
+    def test_there_is_no_limit_on_how_many_turns(self):
+        """Two is not the shape. A session is as long as it is -- ask, read,
+        click, ask, read, click, for as many turns as the work takes."""
+        from understudy.transcript import exchanges
+
+        steps, index = [], 1
+        for turn in range(1, 7):
+            steps.append({"index": index, "phase": "steps", "action": "type",
+                          "target": "leo_box", "status": "ok", "duration_ms": 50,
+                          "detail": {"text": f"question {turn}"}})
+            steps.append({"index": index + 1, "phase": "steps", "action": "read",
+                          "target": "leo_reply", "status": "ok", "duration_ms": 5,
+                          "detail": {"store_as": f"answer_{turn}"}})
+            steps.append({"index": index + 2, "phase": "steps", "action": "click",
+                          "target": "tree_node", "status": "ok", "duration_ms": 20})
+            index += 3
+
+        turns = exchanges(result(
+            response="", step_statuses=steps,
+            reads={f"answer_{n}": f"answer {n}" for n in range(1, 7)},
+        ))
+
+        assert [t.number for t in turns] == [1, 2, 3, 4, 5, 6]
+        assert [t.prompt for t in turns] == [f"question {n}" for n in range(1, 7)]
+        assert [t.response for t in turns] == [f"answer {n}" for n in range(1, 7)]
+
+    def test_typing_that_nothing_answered_is_a_step_not_a_turn(self):
+        """Flows type into form fields as well as prompt boxes -- renaming a
+        part before asking about it is two typed steps and one question. A
+        filename listed as an exchange would be wrong in the one place this
+        view exists to be right."""
+        from understudy.transcript import exchanges
+
+        turns = exchanges(result(
+            response="", reads={"answer": "It is 40mm."},
+            step_statuses=[
+                {"index": 1, "phase": "steps", "action": "type",
+                 "target": "dialog_name_field", "status": "ok", "duration_ms": 40,
+                 "detail": {"text": "Bracket"}},
+                {"index": 2, "phase": "steps", "action": "click",
+                 "target": "dialog_done", "status": "ok", "duration_ms": 20},
+                {"index": 3, "phase": "steps", "action": "type", "target": "leo_box",
+                 "status": "ok", "duration_ms": 60,
+                 "detail": {"text": "How wide is Bracket?"}},
+                {"index": 4, "phase": "steps", "action": "read", "target": "leo_reply",
+                 "status": "ok", "duration_ms": 5, "detail": {"store_as": "answer"}},
+            ],
+        ))
+
+        assert [t.prompt for t in turns] == ["How wide is Bracket?"]
+
+    def test_the_transcript_shows_both_turns(self, tmp_path):
+        run = make_run(tmp_path, [a_conversation()])
+        text = render_markdown(run)
+
+        assert "2 exchanges" in text
+        assert "Add a 10mm hole." in text and "Now fillet it." in text
+        assert "Hole added." in text and "Fillet added." in text
+
+    def test_one_prompt_still_reads_as_one_prompt(self, tmp_path):
+        """The common case is unchanged: no conversation scaffolding around a
+        single question."""
+        text = render_markdown(make_run(tmp_path, [result()]))
+
+        assert "exchanges" not in text
+        assert "### Response" in text
+
+
 class TestStructure:
     def test_the_header_says_what_was_run(self, tmp_path):
         run = make_run(tmp_path, [result()])
         text = render_markdown(run)
 
         assert text.startswith("# demo-flow")
-        assert "**Backend** web" in text
+        assert "· web" in text
         assert "1 ok, 0 failed, 0 timed out" in text
-        assert "[`flow.yaml`](flow.yaml)" in text
+        assert "**Input** [`flow.yaml`](flow.yaml)" in text
+
+    def test_the_header_reads_in_the_order_it_is_wanted(self, tmp_path):
+        """What was under test, then the raw material either side of the run,
+        then the video, then the steps. The video is the fastest way to know
+        whether the replay did what it was meant to, so it goes above the
+        detail rather than under it."""
+        run = make_run(tmp_path, [result(
+            recording="baseline/recording.mp4",
+            subject={"app": "CATIA V5", "app_version": "R33", "model": "LEO"},
+        )])
+        text = render_markdown(run)
+
+        order = [text.index(mark) for mark in
+                 ("**Under test**", "**Input**", "## Recording", "## Steps")]
+        assert order == sorted(order), text[:600]
 
     def test_the_summary_has_a_row_per_variant(self, tmp_path):
         run = make_run(tmp_path, [result(), result(prompt_id="terse", duration_ms=900)])

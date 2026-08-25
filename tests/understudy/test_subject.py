@@ -101,3 +101,51 @@ class TestCarryingItBetweenRuns:
         store = tmp_path / "subjects.json"
         store.write_text('{"flows": {"x": {"app": "CATIA V5", "future": "?"}}}')
         assert load_remembered("x", store).app == "CATIA V5"
+
+
+class TestWhatWasUnderTest:
+    """The order of authority, which the transcript depends on being right: a
+    reply attributed to the wrong release is worse than one attributed to
+    nothing."""
+
+    def store(self, tmp_path, data):
+        import json
+
+        path = tmp_path / "subjects.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_a_flow_declaration_beats_a_carry_over_from_another_flow(self, tmp_path):
+        """This is what went wrong: a flow declaring `app: Fixture chat` was
+        recorded as CATIA V5 R33, because that had been typed an hour earlier
+        for something else."""
+        from understudy.subject import Subject, resolve_subject
+
+        store = self.store(tmp_path, {"last": {"app": "CATIA V5", "release": "R33"}})
+        subject = resolve_subject(
+            "fixture-chat", Subject(app="Fixture chat"), Subject(), path=store,
+        )
+
+        assert subject.app == "Fixture chat"
+        # And the release, which the flow says nothing about, still carries.
+        assert subject.release == "R33"
+
+    def test_what_this_flow_recorded_beats_its_own_declaration(self, tmp_path):
+        """The declaration is a default. Somebody who ran this flow against
+        R34 yesterday means R34 today."""
+        from understudy.subject import Subject, resolve_subject
+
+        store = self.store(tmp_path, {"flows": {"f": {"app": "CATIA V5 R34"}}})
+        subject = resolve_subject("f", Subject(app="Declared"), Subject(), path=store)
+
+        assert subject.app == "CATIA V5 R34"
+
+    def test_the_flags_win(self, tmp_path):
+        from understudy.subject import Subject, resolve_subject
+
+        store = self.store(tmp_path, {"flows": {"f": {"app": "Remembered"}}})
+        subject = resolve_subject(
+            "f", Subject(app="Declared"), Subject(app="Typed now"), path=store,
+        )
+
+        assert subject.app == "Typed now"

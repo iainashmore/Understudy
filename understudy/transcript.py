@@ -2,7 +2,7 @@
 
 results.jsonl is what a machine reads. This is what a person reads: prompts and
 responses side by side, the screenshots that prove the flow did what it was
-meant to, and enough diagnostics to work out why a variant failed.
+meant to, and enough diagnostics to work out why a prompt run failed.
 
 Written into the run directory alongside the screenshots it links, with
 relative paths, so the whole folder can be zipped, committed or attached and
@@ -217,6 +217,59 @@ def _note_of(step: dict[str, Any]) -> str | None:
     return step.get("error") or resolution.get("note") or detail.get("signal")
 
 
+@dataclass(frozen=True)
+class Exchange:
+    """One thing said to the assistant, and what came back.
+
+    A flow is not always one prompt. A real session is several: click into the
+    model tree, ask for a hole, read the answer, click somewhere else, ask for
+    a fillet, read that. Each of those is an exchange, and a prompt run is the
+    whole conversation -- so a transcript that shows a single prompt and a
+    single response is showing one turn of a session that had four.
+    """
+
+    #: 1-based, in the order they happened.
+    number: int
+    #: The numbered user action that typed it, so it can be quoted with R&D.
+    step: int
+    prompt: str
+    #: name -> text, for everything read before the next thing was typed.
+    reads: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def response(self) -> str:
+        return "\n".join(text for _, text in self.reads if text)
+
+
+def exchanges(result: dict[str, Any]) -> list[Exchange]:
+    """The conversation, in order, derived from what the steps actually did.
+
+    Reads belong to the last thing typed before them, which is the same rule a
+    person reading the screen uses. Anything read before the first prompt --
+    the state the panel started in -- belongs to no exchange and is left to the
+    timeline.
+    """
+    typed: list[Exchange] = []
+    for entry in timeline(result, {}):
+        if entry.typed is not None:
+            typed.append(Exchange(
+                number=0, step=entry.number,
+                prompt=entry.typed, reads=tuple(entry.reads),
+            ))
+        elif typed and entry.reads:
+            last = typed[-1]
+            typed[-1] = replace(last, reads=last.reads + tuple(entry.reads))
+
+    # Typing that was answered is a turn; typing that was not is a step. A
+    # flow types into form fields as well as prompt boxes -- renaming a part
+    # before asking about it is two typed steps and one question -- and
+    # calling a filename an exchange would be wrong in the one place this
+    # view exists to be right. Every typed step is still in the timeline.
+    answered = [turn for turn in typed if turn.reads]
+    return [replace(turn, number=index)
+            for index, turn in enumerate(answered, start=1)]
+
+
 def timeline(result: dict[str, Any], narration: dict[str, str]) -> list[TimelineEntry]:
     """Group the run's steps into the user actions a person performed.
 
@@ -360,9 +413,7 @@ def _walkthrough(results: list[dict[str, Any]], narration: dict[str, str]) -> li
     if not steps:
         return []
 
-    lines = ["", "## Steps", "",
-             "The same path on every variant. Quote these numbers when "
-             "referring to a step.", ""]
+    lines = ["", "## Steps", ""]
     for number, description, is_reset in steps:
         prefix = "_(reset)_ " if is_reset else ""
         lines.append(f"{number}. {prefix}{description}")
@@ -419,34 +470,43 @@ def render_markdown(
     narration = load_narration(run_dir)
 
     title, description = _flow_heading(run_dir)
-    out: list[str] = [
-        f"# {title}",
-        "",
-    ] + ([f"{description}", ""] if description else []) + [
-        f"- **Run** `{run_dir.name}`",
-        f"- **Backend** {summary.backend}",
-        f"- **Variants** {summary.variants} — "
-        f"{summary.passed} ok, {summary.failed} failed, {summary.timed_out} timed out",
-    ]
-    if results:
-        out.append(f"- **Started** {results[0].get('timestamp', '?')}")
+    out: list[str] = [f"# {title}", ""]
+    if description:
+        out += [description, ""]
+
+    # What produced these answers, first: a transcript records a reply, and
+    # without the release that said it, comparing two of them means nothing.
     subject = subject_of(results)
     if subject.recorded:
-        # What produced these answers. Without it the transcript records a
-        # reply but not which release said it, and comparing two of them
-        # later means nothing.
         out.append("- **Under test** " + subject.summary())
         for field, label in SUBJECT_LABELS.items():
             value = getattr(subject, field)
             if value and field not in ("app", "app_version", "model",
                                        "model_version", "release"):
                 out.append(f"- **{label}** {value}")
-    for name in ("flow.yaml", "prompts.yaml", "prompts.csv", "results.jsonl", "results.csv"):
-        if (run_dir / name).exists():
-            out.append(f"- [`{name}`]({name})")
+    out += [
+        f"- **Run** `{run_dir.name}` · {summary.backend}",
+        f"- **Prompt runs** {summary.variants} — "
+        f"{summary.passed} ok, {summary.failed} failed, {summary.timed_out} timed out",
+    ]
+    if results:
+        out.append(f"- **Started** {results[0].get('timestamp', '?')}")
+
+    # The raw material either side of the run, named as what they are rather
+    # than left as a row of filenames.
+    inputs = [name for name in ("flow.yaml", "prompts.yaml", "prompts.csv")
+              if (run_dir / name).exists()]
+    outputs = [name for name in ("results.jsonl", "results.csv")
+               if (run_dir / name).exists()]
+    if inputs:
+        out.append("- **Input** " + ", ".join(f"[`{n}`]({n})" for n in inputs))
+    if outputs:
+        out.append("- **Output** " + ", ".join(f"[`{n}`]({n})" for n in outputs))
+
+    out += _recordings_markdown(results)
     out += ["", "## Summary", "",
-            "| variant | status | duration | response | notes |",
-            "|---------|--------|----------|----------|-------|"]
+            "| prompt run | status | duration | response | notes |",
+            "|------------|--------|----------|----------|-------|"]
 
     for result in results:
         notes = []
@@ -472,10 +532,22 @@ def render_markdown(
     # reason the run happened.
     out += ["", "## Prompts and responses", ""]
     for result in results:
-        out += [
-            f"**{result['prompt_id']}** — {_escape(result.get('prompt', ''))}", "",
-            f"> {_escape(result.get('response', '')) or '_(no text captured)_'}", "",
-        ]
+        turns = exchanges(result)
+        if len(turns) <= 1:
+            out += [
+                f"**{result['prompt_id']}** — {_escape(result.get('prompt', ''))}", "",
+                f"> {_escape(result.get('response', '')) or '_(no text captured)_'}",
+                "",
+            ]
+            continue
+        # A conversation. Every turn, in order, rather than whichever read
+        # happened to be stored as `response`.
+        out += [f"**{result['prompt_id']}** — {len(turns)} exchanges", ""]
+        for turn in turns:
+            out += [
+                f"{turn.number}. _(step {turn.step})_ {_escape(turn.prompt)}", "",
+                f"   > {_escape(turn.response) or '_(no text captured)_'}", "",
+            ]
 
     for result in results:
         out += _variant_section(run_dir, result, embed, narration)
@@ -489,6 +561,34 @@ def render_markdown(
 def _slug(result: dict[str, Any]) -> str:
     suffix = f"-{result['repeat_index'] + 1}" if result.get("repeat_index") else ""
     return f"{result['prompt_id']}{suffix}".lower().replace(" ", "-").replace(".", "")
+
+
+def _recordings_markdown(results: list[dict[str, Any]]) -> list[str]:
+    """Every run's video, together and early.
+
+    Watching it is the fastest way to know whether the replay did what it was
+    meant to -- faster than any table -- so it belongs above the detail rather
+    than inside each prompt run's own section, which is where a reader finds it
+    only after scrolling past everything it would have explained.
+    """
+    videos = [r for r in results if r.get("recording")]
+    failures = [r for r in results if not r.get("recording") and r.get("recording_error")]
+    if not videos and not failures:
+        return []
+
+    named = len(results) > 1
+    out = ["", "## Recording", ""]
+    for result in videos:
+        if named:
+            out += [f"**{result['prompt_id']}**", ""]
+        out += [
+            f'<video controls width="460" src="{result["recording"]}"></video>', "",
+            f"[{result['recording']}]({result['recording']})", "",
+        ]
+    for result in failures:
+        label = f"{result['prompt_id']}: " if named else ""
+        out += [f"_No recording — {label}{_escape(result['recording_error'])}_", ""]
+    return out
 
 
 def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
@@ -509,24 +609,24 @@ def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
         out += ["", "Other variables:", ""]
         out += [f"- `{k}` = {v}" for k, v in sorted(variables.items())]
 
-    out += ["", "### Response", ""]
-    response = (result.get("response") or "").strip()
-    out += _fence(response) if response else [
-        "_No text captured._ "
-        "The response was recorded as pixels; the region image is below."
-    ]
-
-    if result.get("recording"):
-        out += ["", "### Recording", "",
-                f"[{result['recording']}]({result['recording']})",
-                "",
-                "<video controls width=\"460\" src=\"" + result["recording"] +
-                "\"></video>",
-                "",
-                "_Video players differ; if it does not play inline, the link "
-                "above opens the file._"]
-    elif result.get("recording_error"):
-        out += ["", f"_No recording: {_escape(result['recording_error'])}_"]
+    turns = exchanges(result)
+    if len(turns) > 1:
+        # A session rather than a single question. The prompt above is the
+        # variable that was substituted; these are the things actually said.
+        out += ["", f"### The conversation — {len(turns)} exchanges", ""]
+        for turn in turns:
+            out += [f"**{turn.number}. Said** _(step {turn.step})_", ""]
+            out += _fence(turn.prompt.strip())
+            out += ["", f"**{turn.number}. Replied**", ""]
+            reply = turn.response.strip()
+            out += _fence(reply) if reply else ["_No text captured._"]
+    else:
+        out += ["", "### Response", ""]
+        response = (result.get("response") or "").strip()
+        out += _fence(response) if response else [
+            "_No text captured._ "
+            "The response was recorded as pixels; the region image is below."
+        ]
 
     entries = timeline(result, narration or {})
     shown_reads = {name for entry in entries for name, _ in entry.read_images}

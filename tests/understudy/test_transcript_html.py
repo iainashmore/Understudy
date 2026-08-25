@@ -213,6 +213,52 @@ def test_the_viewer_in_the_app_still_points_at_the_file(run_dir):
     assert "data:video/mp4" not in page
 
 
+def a_conversation():
+    """Two exchanges in one prompt run, with a click between them."""
+    return result(
+        prompt="Add a 10mm hole.", response="",
+        reads={"first": "Hole added.", "second": "Fillet added."},
+        step_statuses=[
+            {"index": 1, "phase": "steps", "action": "type", "target": "leo_box",
+             "status": "ok", "duration_ms": 90,
+             "detail": {"text": "Add a 10mm hole."}},
+            {"index": 2, "phase": "steps", "action": "read", "target": "leo_reply",
+             "status": "ok", "duration_ms": 10, "detail": {"store_as": "first"}},
+            {"index": 3, "phase": "steps", "action": "click", "target": "tree_node",
+             "status": "ok", "duration_ms": 30},
+            {"index": 4, "phase": "steps", "action": "type", "target": "leo_box",
+             "status": "ok", "duration_ms": 80,
+             "detail": {"text": "Now fillet it."}},
+            {"index": 5, "phase": "steps", "action": "read", "target": "leo_reply",
+             "status": "ok", "duration_ms": 10, "detail": {"store_as": "second"}},
+        ],
+    )
+
+
+def test_a_conversation_renders_as_one_block_per_turn(run_dir):
+    """Not one prompt and whichever read happened to be stored as `response`."""
+    page = render_html(run_dir([a_conversation()]))
+
+    assert "2 exchanges" in page
+    assert page.count('class="exchange"') == 2
+    assert "Now fillet it." in page and "Fillet added." in page
+
+
+def test_the_overview_lists_every_turn_of_a_conversation(run_dir):
+    page = render_html(run_dir([a_conversation()]))
+    assert "1/2" in page and "2/2" in page
+
+
+def test_the_exchange_rule_is_not_print_only(run_dir):
+    """It was, first time: the CSS landed inside the @media print block, so on
+    screen four turns ran together as one wall of text."""
+    from understudy.transcript_html import STYLE
+
+    on_screen, _, printed = STYLE.partition("@media print")
+    assert ".exchange {" in on_screen
+    assert ".exchange" in printed, "and it still avoids breaking across pages"
+
+
 def test_write_html_lands_next_to_the_screenshots(run_dir):
     directory = run_dir([result()])
     path = write_html(directory)

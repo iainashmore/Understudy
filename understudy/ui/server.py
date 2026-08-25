@@ -34,7 +34,7 @@ from understudy.transcript import load_results, write_transcript
 from understudy.transcript_html import write_html
 from understudy.compare import compare as compare_runs
 from understudy.compare_report import write_comparison
-from understudy.subject import Subject, load_remembered, remember
+from understudy.subject import Subject, remember, resolve_subject
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import Git, GitError
 from understudy.vcs.remote import parse_remote
@@ -229,7 +229,7 @@ targets:
     web:
       - testid: response
 
-# One entry per variant. Any key besides `id` is a variable the steps can use.
+# One entry per prompt run. Any key besides `id` is a variable the steps use.
 prompts:
   - id: baseline
     prompt: Replace this with the prompt to test.
@@ -408,7 +408,7 @@ flows: []
             # What was under test: whatever the form said, falling back to
             # what this flow was last run against, so it is typed once.
             given = Subject.from_config(request.get("subject") or {})
-            subject = load_remembered(flow.name).merged_with(given)
+            subject = resolve_subject(flow.name, flow.subject, given)
             if given.recorded:
                 remember(flow.name, flow.subject.merged_with(subject))
 
@@ -534,7 +534,9 @@ flows: []
             flow = load_flow(self.workspace.resolve(flow_path))
         except Exception:
             return {"subject": {}}
-        subject = flow.subject.merged_with(load_remembered(flow.name))
+        # The same order the run itself uses, so the form shows what would
+        # actually be recorded rather than something close to it.
+        subject = resolve_subject(flow.name, flow.subject, Subject())
         return {"subject": subject.as_dict(), "summary": subject.summary()}
 
     # -- repository -----------------------------------------------------------

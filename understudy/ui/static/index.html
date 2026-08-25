@@ -160,8 +160,8 @@
         </div>
         <textarea id="flowText" spellcheck="false"></textarea>
         <p class="muted">One file is one test: the steps, the targets and the
-          <code>prompts:</code> variants all live here. Any key besides
-          <code>id</code> on a variant is a variable the steps can use as
+          <code>prompts:</code> block all live here. Any key besides
+          <code>id</code> on a prompt is a variable the steps can use as
           <code>{{name}}</code>.</p>
       </section>
 
@@ -670,7 +670,7 @@ $("validate").onclick = async () => {
     box.innerHTML = `<div class="card"><span class="pill ok">valid</span>
       <p><strong>${escapeHtml(f.name)}</strong> — ${f.steps} steps, ${f.reset_steps} reset,
       ${f.targets.length} targets. Variables: ${f.variables.join(", ") || "none"}.<br>
-      <strong>${p.count} prompt variants</strong>: ${p.ids.join(", ")}</p></div>`;
+      <strong>${p.count} prompt runs</strong>: ${p.ids.join(", ")}</p></div>`;
   } else {
     box.innerHTML = `<div class="card"><span class="pill bad">invalid</span><pre>` +
       result.problems.map(escapeHtml).join("\n") + `</pre></div>`;
@@ -717,7 +717,7 @@ function listen(runId) {
     const event = JSON.parse(message.data);
     if (event.type === "started") {
       state.outDir = event.out_dir;
-      logLine(`running ${event.variants} variant(s)`);
+      logLine(`running ${event.variants} prompt run(s)`);
     }
     if (event.type === "variant_started") logLine(`  ${event.prompt_id} ...`);
     if (event.type === "variant_finished") {

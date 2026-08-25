@@ -31,6 +31,7 @@ from understudy.transcript import (
     _label_of,
     action_numbers,
     describe_step,
+    exchanges,
     load_results,
     numbered_steps,
     screenshot_captions,
@@ -111,6 +112,11 @@ video { max-width:100%; border:1px solid var(--line); border-radius:6px; }
         padding:8px 12px; border-radius:0 4px 4px 0; margin:10px 0;
         color:var(--dim); }
 .error { border-left-color:var(--bad); background:rgba(224,92,92,.08); }
+/* One turn of a conversation. The rule down the side is what makes four
+   exchanges read as four rather than one wall of text. */
+.exchange { border-left:3px solid var(--line); padding-left:14px; margin:14px 0; }
+.exchange .lede { margin:6px 0 4px; }
+.step-ref { opacity:.7; }
 footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line);
          color:var(--dim); font-size:12px; }
 a { color:var(--accent); }
@@ -120,6 +126,7 @@ a { color:var(--accent); }
   /* Only a variant starts a fresh page. Breaking before every heading turns a
      one-variant run into six mostly-empty sheets. */
   h2.variant { break-before:page; }
+  .exchange { break-inside:avoid; }
   h3 { break-after:avoid; }
   figure, tr, pre { break-inside:avoid; }
   figure img { max-height:150mm; width:auto; }
@@ -201,8 +208,6 @@ def _steps_list(results: list[dict[str, Any]], narration: dict[str, str]) -> str
                'screenshots.</p>') if narration else ""
     return (
         "<h2>Steps</h2>"
-        '<p class="lede">The same path on every variant. Quote these numbers '
-        "when referring to a step.</p>"
         f'<ol class="steps">{"".join(items)}</ol>{trailer}'
     )
 
@@ -229,7 +234,7 @@ def _summary_table(results: list[dict[str, Any]]) -> str:
         )
     return (
         '<h2>Summary</h2><div class="wrap"><table><thead><tr>'
-        "<th>variant</th><th>status</th><th>duration</th><th>response</th>"
+        "<th>prompt run</th><th>status</th><th>duration</th><th>response</th>"
         "<th>notes</th></tr></thead><tbody>"
         f"{''.join(rows)}</tbody></table></div>"
     )
@@ -338,6 +343,26 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
     return "".join(out)
 
 
+def _exchange_rows(result: dict[str, Any]) -> str:
+    """One row per turn, so a session of four questions reads as four.
+
+    A flow is not always one prompt: click into the tree, ask, read, click
+    elsewhere, ask again. Showing only the read stored as `response` shows one
+    turn of a conversation that had four.
+    """
+    name = _e(result["prompt_id"])
+    turns = exchanges(result)
+    if len(turns) <= 1:
+        return (f"<tr><td>{name}</td><td>{_e(result.get('prompt', ''))}</td>"
+                f"<td>{_e(result.get('response') or '')}</td></tr>")
+    rows = []
+    for turn in turns:
+        label = f"{name} <span class=\"lede\">{turn.number}/{len(turns)}</span>"
+        rows.append(f"<tr><td>{label}</td><td>{_e(turn.prompt)}</td>"
+                    f"<td>{_e(turn.response)}</td></tr>")
+    return "".join(rows)
+
+
 def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
              narration: dict[str, str]) -> str:
     title = result["prompt_id"]
@@ -362,11 +387,28 @@ def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
                         for k, v in sorted(variables.items()))
         out.append(f"<h3>Other variables</h3><ul>{items}</ul>")
 
-    response = (result.get("response") or "").strip()
-    out.append("<h3>Response</h3>")
-    out.append(f"<pre>{_e(response)}</pre>" if response else
-               '<p class="note">No text captured. The response was recorded as '
-               'pixels; the region image is below.</p>')
+    turns = exchanges(result)
+    if len(turns) > 1:
+        # A session, not a single question. The prompt above is the variable
+        # that was substituted in; these are the things actually said.
+        out.append(f"<h3>The conversation — {len(turns)} exchanges</h3>")
+        for turn in turns:
+            reply = turn.response.strip()
+            out.append(
+                f'<div class="exchange"><p class="lede">{turn.number}. '
+                f'said <span class="step-ref">step {turn.step}</span></p>'
+                f"<pre>{_e(turn.prompt.strip())}</pre>"
+                f'<p class="lede">{turn.number}. replied</p>'
+                + (f"<pre>{_e(reply)}</pre>" if reply else
+                   '<p class="note">No text captured.</p>')
+                + "</div>"
+            )
+    else:
+        response = (result.get("response") or "").strip()
+        out.append("<h3>Response</h3>")
+        out.append(f"<pre>{_e(response)}</pre>" if response else
+                   '<p class="note">No text captured. The response was recorded '
+                   'as pixels; the region image is below.</p>')
 
     if result.get("recording"):
         relative = result["recording"]
@@ -426,7 +468,7 @@ def render_html(
         '<p class="meta">'
         f"<span><b>Run</b> {_e(run_dir.name)}</span>"
         f"<span><b>Backend</b> {_e(summary.backend)}</span>"
-        f"<span><b>Variants</b> {summary.variants} — {summary.passed} ok, "
+        f"<span><b>Prompt runs</b> {summary.variants} — {summary.passed} ok, "
         f"{summary.failed} failed, {summary.timed_out} timed out</span>"
         + (f"<span><b>Started</b> {_e(results[0].get('timestamp', '?'))}</span>"
            if results else "")
@@ -437,12 +479,9 @@ def render_html(
         _summary_table(results),
         _steps_list(results, narration),
         "<h2>Prompts and responses</h2>",
-        '<div class="wrap"><table><thead><tr><th>variant</th><th>prompt</th>'
+        '<div class="wrap"><table><thead><tr><th>prompt run</th><th>prompt</th>'
         "<th>response</th></tr></thead><tbody>"
-        + "".join(
-            f"<tr><td>{_e(r['prompt_id'])}</td><td>{_e(r.get('prompt', ''))}</td>"
-            f"<td>{_e(r.get('response') or '')}</td></tr>" for r in results
-        )
+        + "".join(_exchange_rows(r) for r in results)
         + "</tbody></table></div>",
     ]
     body += [_variant(run_dir, result, embed, narration) for result in results]

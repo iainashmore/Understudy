@@ -19,7 +19,7 @@ from understudy.authoring import AuthoringError, duplicate_file
 from understudy.narrate import ClaudeNarrator, narrate_run
 from understudy.prompts import PromptsError, prompts_for
 from understudy.pdf import write_pdf
-from understudy.subject import Subject, load_remembered, remember
+from understudy.subject import Subject, remember, resolve_subject
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import GitError
 from understudy.transcript import write_transcript, write_suite_index
@@ -42,7 +42,7 @@ def command_validate(args) -> int:
     print(f"flow      {flow.title} ({flow.name}): {len(flow.steps)} step(s), "
           f"{len(flow.reset)} reset step(s), {len(flow.targets)} target(s)")
     print(f"variables {', '.join(sorted(flow.variables())) or 'none'}")
-    print(f"prompts   {len(prompts)} variant(s): "
+    print(f"prompts   {len(prompts)} prompt run(s): "
           f"{', '.join(v.id for v in prompts)}")
     print(f"backend   {args.backend}: ok")
     return 0
@@ -84,7 +84,7 @@ def command_suite(args) -> int:
                 marks.append(f"BROKEN: {summary['error'][:60]}")
             print(
                 f"  {summary['title'][:28]:<28} {summary['steps']:>3} steps  "
-                f"{summary['variants']:>3} variants  "
+                f"{summary['variants']:>3} prompts   "
                 f"{'[' + ','.join(summary['tags']) + ']' if summary['tags'] else '':<20} "
                 f"{summary['description'][:44]} {' '.join(marks)}"
             )
@@ -292,7 +292,7 @@ def _subject_for(args, flow) -> Subject:
     })
     # Not retyped every morning: the last thing recorded for this flow stands
     # in until somebody says otherwise.
-    subject = load_remembered(flow.name).merged_with(given)
+    subject = resolve_subject(flow.name, flow.subject, given)
     if given.recorded:
         remember(flow.name, flow.subject.merged_with(subject))
     return subject
@@ -320,7 +320,7 @@ def command_run(args) -> int:
         learned_dir=args.learned_dir or str(Path(args.flow).parent / "learned"),
     )
 
-    print(f"{flow.name}: {len(prompts)} variant(s) x {args.repeat} -> {out_dir}")
+    print(f"{flow.name}: {len(prompts)} prompt run(s) x {args.repeat} -> {out_dir}")
     driver.start(flow.app_config(args.backend))
     try:
         runner = Runner(flow, driver, out_dir, reset_level=args.reset_level,
@@ -457,7 +457,7 @@ def main(argv: list[str] | None = None) -> int:
             child.add_argument("--csv", action="store_true")
             child.add_argument("--reset-level", type=int, default=1, choices=[1, 2])
             child.add_argument("--strict", action="store_true",
-                               help="exit non-zero if any variant failed")
+                               help="exit non-zero if any prompt run failed")
             child.add_argument(
                 "--agent", default="off", choices=["off", "fallback", "only"],
                 help="off: deterministic only. fallback: ask the model when "
@@ -471,9 +471,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             child.add_argument(
                 "--record", action="store_true",
-                help="record each variant to video: ffmpeg on native, "
-                     "Playwright on web (which implies a fresh browser context "
-                     "per variant)",
+                help="record each prompt run to video: ffmpeg on native, "
+                     "Playwright on web (which implies a fresh browser "
+                     "context per run)",
             )
             child.add_argument("--capture-steps", action="store_true",
                                help="screenshot after every step, without narrating")

@@ -106,7 +106,18 @@ class VariantResult:
 
     @property
     def response(self) -> str:
-        return self.reads.get("response", "")
+        """The reply, for the summary line, the CSV and the comparison.
+
+        A conversation has no single reply. `store_as: response` names one
+        explicitly; a flow with three turns names them reply_1, reply_2,
+        reply_3, and the last one is the end of the exchange -- which is what a
+        one-line summary of a session should show. Reporting nothing, which is
+        what this did, made a three-turn run look like it had said nothing at
+        all: "ok  direct  25195ms  0 chars".
+        """
+        if "response" in self.reads:
+            return self.reads["response"]
+        return next(reversed(self.reads.values()), "") if self.reads else ""
 
     @property
     def agent_resolutions(self) -> list[str]:

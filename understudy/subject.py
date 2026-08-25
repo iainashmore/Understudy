@@ -98,8 +98,15 @@ from pathlib import Path
 DEFAULT_STORE = Path.home() / ".understudy" / "subjects.json"
 
 
-def load_remembered(flow_name: str, path: Path | str | None = None) -> Subject:
-    """What was recorded last time this flow ran. Empty if never."""
+def load_remembered(flow_name: str, path: Path | str | None = None,
+                    any_flow: bool = True) -> Subject:
+    """What was recorded last time this flow ran. Empty if never.
+
+    `any_flow` falls back to whatever ran last, for a flow that has never run:
+    somebody testing three flows against one release should type the release
+    once. It is a guess about a different flow, though, so a caller that has a
+    better answer -- the flow's own `subject:` block -- turns it off.
+    """
     path = Path(path) if path else DEFAULT_STORE
     if not path.exists():
         return Subject()
@@ -107,13 +114,35 @@ def load_remembered(flow_name: str, path: Path | str | None = None) -> Subject:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return Subject()
-    entry = (data.get("flows") or {}).get(flow_name) or data.get("last") or {}
+    entry = (data.get("flows") or {}).get(flow_name) or {}
+    if not entry and any_flow:
+        entry = data.get("last") or {}
     try:
         return Subject.from_config(entry)
     except ValueError:
         # A field this version does not know about: take what fits rather than
         # refusing to pre-fill anything.
         return Subject(**{f: str(entry.get(f, "") or "") for f in FIELDS})
+
+
+def resolve_subject(flow_name: str, declared: Subject, given: Subject,
+                    path: Path | str | None = None) -> Subject:
+    """What was under test, in order of authority.
+
+    Flags beat what this flow recorded last time, which beats what the flow
+    declares, which beats a value carried over from whatever ran last. That
+    last one is a convenience -- test three flows against one release and type
+    the release once -- and it is a guess about a different flow, so it sits
+    at the bottom. It used to sit at the top, and a flow declaring
+    `app: Fixture chat` was reported as CATIA V5 R33 because that had been
+    typed for something else an hour earlier.
+    """
+    return (
+        load_remembered(flow_name, path, any_flow=True)
+        .merged_with(declared)
+        .merged_with(load_remembered(flow_name, path, any_flow=False))
+        .merged_with(given)
+    )
 
 
 def remember(flow_name: str, subject: Subject,
