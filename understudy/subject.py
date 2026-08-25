@@ -137,8 +137,16 @@ def resolve_subject(flow_name: str, declared: Subject, given: Subject,
     `app: Fixture chat` was reported as CATIA V5 R33 because that had been
     typed for something else an hour earlier.
     """
+    # A flow that says what it tests is not filled in from another flow. The
+    # carry-over exists so somebody testing three flows against one release
+    # types the release once; blending it into a flow that declares its own
+    # produced "Fixture chat R33 · fixture 2027x FD02" -- an app from here, a
+    # version from something else, and a sentence describing nothing that
+    # exists.
+    carried = Subject() if declared.recorded else load_remembered(
+        flow_name, path, any_flow=True)
     return (
-        load_remembered(flow_name, path, any_flow=True)
+        carried
         .merged_with(declared)
         .merged_with(load_remembered(flow_name, path, any_flow=False))
         .merged_with(given)

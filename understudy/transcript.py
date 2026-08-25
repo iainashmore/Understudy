@@ -162,6 +162,46 @@ def describe_step(step: dict[str, Any], narration: dict[str, str]) -> str:
     return f"{action.replace('_', ' ')} {target or ''}".strip()
 
 
+def intent_descriptions(run_dir: Path, results: list[dict[str, Any]]) -> dict[str, str]:
+    """Step descriptions built from the flow's own `intent:` lines.
+
+    Every target carries one -- "the properties tool in the ribbon", "where the
+    reply appears" -- written when the flow was authored, by the person who
+    knew what the control was. "Click properties_tool" throws that away and
+    hands the reader an identifier; "Click the properties tool in the ribbon"
+    is the same sentence a person would say.
+
+    Shaped like a narration file so it can be laid under one: the model's
+    descriptions win where they exist, and this covers the rest for free,
+    without an API key.
+    """
+    try:
+        from understudy.flow import load_flow
+
+        flow = load_flow(run_dir / "flow.yaml")
+    except Exception:
+        return {}
+
+    intents = {name: (target.intent or "").strip()
+               for name, target in flow.targets.items()}
+    verbs = {"click": "Click", "type": "Type into", "key": "Press a key in"}
+
+    described: dict[str, str] = {}
+    for result in results:
+        for step in result.get("step_statuses", []):
+            intent = intents.get(step.get("target") or "")
+            verb = verbs.get(step.get("action", ""))
+            if intent and verb:
+                # The name as well as the intent. Intents are written both
+                # ways -- "the main message input" but also "submits the
+                # message" -- so "Click submits the message" is what you get
+                # from gluing a verb to whichever one it happens to be. The
+                # name also keeps the description tied to the flow file.
+                name = (step.get("target") or "").replace("_", " ")
+                described[step_key(step)] = f"{verb} {name} — {intent}"
+    return described
+
+
 def numbered_steps(result: dict[str, Any], narration: dict[str, str]) -> list[tuple[int, str, bool]]:
     """(number, description, is_reset) for each user action, in order."""
     numbers = action_numbers(result)
@@ -467,7 +507,9 @@ def render_markdown(
     run_dir = Path(run_dir)
     results = load_results(run_dir) if results is None else results
     summary = summarise(run_dir, results)
-    narration = load_narration(run_dir)
+    # The flow's own intents underneath, the model's descriptions on top.
+    narration = {**intent_descriptions(run_dir, results),
+                 **load_narration(run_dir)}
 
     title, description = _flow_heading(run_dir)
     out: list[str] = [f"# {title}", ""]
@@ -603,19 +645,26 @@ def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
     if result.get("error"):
         out += ["", f"> **Error** {_escape(result['error'])}"]
 
-    variables = {k: v for k, v in (result.get("variables") or {}).items()}
-    out += ["", "### Prompt", ""] + _fence((variables.pop("prompt", "") or "").strip())
-    if variables:
-        out += ["", "Other variables:", ""]
-        out += [f"- `{k}` = {v}" for k, v in sorted(variables.items())]
-
     turns = exchanges(result)
+    variables = dict(result.get("variables") or {})
+    prompt = (variables.pop("prompt", "") or "").strip()
+    if prompt:
+        out += ["", "### Prompt", ""] + _fence(prompt)
+
+    # Not the ones that were said: those are the conversation below, and
+    # listing them twice makes the reader check whether they differ.
+    said = {turn.prompt.strip() for turn in turns}
+    other = {k: v for k, v in variables.items() if str(v).strip() not in said}
+    if other:
+        out += ["", "Other variables:", ""]
+        out += [f"- `{k}` = {v}" for k, v in sorted(other.items())]
+
     if len(turns) > 1:
         # A session rather than a single question. The prompt above is the
         # variable that was substituted; these are the things actually said.
         out += ["", f"### The conversation — {len(turns)} exchanges", ""]
         for turn in turns:
-            out += [f"**{turn.number}. Said** _(step {turn.step})_", ""]
+            out += ["", f"**{turn.number}. Said** _(step {turn.step})_", ""]
             out += _fence(turn.prompt.strip())
             out += ["", f"**{turn.number}. Replied**", ""]
             reply = turn.response.strip()
@@ -656,6 +705,10 @@ def _timeline_markdown(run_dir: Path, result: dict[str, Any], embed: bool,
     if not entries:
         return []
 
+    # Which steps are turns in a conversation. Typing a prompt and typing a
+    # filename are both "type", and only one of them has a reply.
+    turns = {turn.step: turn.number for turn in exchanges(result)}
+
     out = ["", "### Step by step", ""]
     for entry in entries:
         if entry.number == 0:
@@ -676,12 +729,15 @@ def _timeline_markdown(run_dir: Path, result: dict[str, Any], embed: bool,
         if meta:
             out += [f"_{' · '.join(meta)}_", ""]
 
+        turn = turns.get(entry.number)
         if entry.typed:
-            out += ["Typed:", ""] + _fence(entry.typed) + [""]
+            label = f"Prompt {turn}:" if turn else "Typed:"
+            out += [label, ""] + _fence(entry.typed) + [""]
         if entry.keys:
             out += [f"Pressed `{entry.keys}`", ""]
         for name, text in entry.reads:
-            out += [f"Read as `{name}`:", ""] + _fence(text or "(nothing captured)") + [""]
+            label = f"Reply {turn}:" if turn else f"Read as `{name}`:"
+            out += [label, ""] + _fence(text or "(nothing captured)") + [""]
         for name, relative in entry.read_images:
             out += [f"The pixels `{name}` was read from:", "",
                     _image(run_dir, relative, RESPONSE_IMAGE_WIDTH, embed), ""]

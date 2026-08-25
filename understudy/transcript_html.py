@@ -32,6 +32,7 @@ from understudy.transcript import (
     action_numbers,
     describe_step,
     exchanges,
+    intent_descriptions,
     load_results,
     numbered_steps,
     screenshot_captions,
@@ -288,6 +289,10 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
     if not entries:
         return ""
 
+    # Which steps are turns in a conversation. Typing a prompt and typing a
+    # filename are both "type", and only one of them has a reply.
+    turns = {turn.step: turn.number for turn in exchanges(result)}
+
     out = ["<h3>Step by step</h3>", '<ol class="timeline">']
     for entry in entries:
         classes = "entry" + (" failed" if entry.failed else "")
@@ -311,15 +316,18 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
         body = [f'<li class="{classes}"><div class="head">{head}</div>',
                 f'<div class="entry-meta">{" · ".join(meta)}</div>' if meta else ""]
 
+        turn = turns.get(entry.number)
         if entry.typed:
-            body.append(f'<div class="typed"><span class="tag">typed</span>'
+            tag = f"prompt {turn}" if turn else "typed"
+            body.append(f'<div class="typed"><span class="tag">{_e(tag)}</span>'
                         f"<pre>{_e(entry.typed)}</pre></div>")
         if entry.keys:
             body.append(f'<div class="typed"><span class="tag">keys</span>'
                         f"<pre>{_e(entry.keys)}</pre></div>")
 
         for name, text in entry.reads:
-            body.append(f'<div class="typed"><span class="tag">{_e(name)}</span>'
+            tag = f"reply {turn}" if turn else name
+            body.append(f'<div class="typed"><span class="tag">{_e(tag)}</span>'
                         f"<pre>{_e(text) or '<em>nothing captured</em>'}</pre></div>")
         for name, relative in entry.read_images:
             body.append(f"<figure class=\"region\">{_img(run_dir, relative, embed)}"
@@ -379,15 +387,20 @@ def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
                    f'{_e(result["pointer_note"])}. Nothing filming the screen '
                    f'would have seen the cursor move.</p>')
 
+    turns = exchanges(result)
     variables = dict(result.get("variables") or {})
     prompt = (variables.pop("prompt", "") or "").strip()
-    out.append(f"<h3>Prompt</h3><pre>{_e(prompt)}</pre>")
-    if variables:
-        items = "".join(f"<li><code>{_e(k)}</code> = {_e(v)}</li>"
-                        for k, v in sorted(variables.items()))
-        out.append(f"<h3>Other variables</h3><ul>{items}</ul>")
+    if prompt:
+        out.append(f"<h3>Prompt</h3><pre>{_e(prompt)}</pre>")
 
-    turns = exchanges(result)
+    # Not the ones that were said: those are the conversation below, and
+    # listing them twice makes the reader check whether they differ.
+    said = {turn.prompt.strip() for turn in turns}
+    other = {k: v for k, v in variables.items() if str(v).strip() not in said}
+    if other:
+        items = "".join(f"<li><code>{_e(k)}</code> = {_e(v)}</li>"
+                        for k, v in sorted(other.items()))
+        out.append(f"<h3>Other variables</h3><ul>{items}</ul>")
     if len(turns) > 1:
         # A session, not a single question. The prompt above is the variable
         # that was substituted in; these are the things actually said.
@@ -453,7 +466,9 @@ def render_html(
     run_dir = Path(run_dir)
     results = load_results(run_dir) if results is None else results
     summary = summarise(run_dir, results)
-    narration = load_narration(run_dir)
+    # The flow's own intents underneath, the model's descriptions on top.
+    narration = {**intent_descriptions(run_dir, results),
+                 **load_narration(run_dir)}
     title, description = _flow_heading(run_dir)
 
     files = [name for name in

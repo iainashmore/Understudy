@@ -127,8 +127,21 @@ class TestWhatWasUnderTest:
         )
 
         assert subject.app == "Fixture chat"
-        # And the release, which the flow says nothing about, still carries.
-        assert subject.release == "R33"
+        # And nothing else carries either. Half of one flow's subject and half
+        # of another's describes a thing that does not exist: the first run of
+        # this reported "Fixture chat R33 · fixture 2027x FD02", an app from
+        # here and a version from a CATIA run an hour earlier.
+        assert subject.release == ""
+
+    def test_a_flow_that_declares_nothing_still_gets_the_carry_over(self, tmp_path):
+        """Which is what the carry-over is for: testing several flows against
+        one release should mean typing the release once."""
+        from understudy.subject import Subject, resolve_subject
+
+        store = self.store(tmp_path, {"last": {"app": "CATIA V5", "release": "R33"}})
+        subject = resolve_subject("never-run", Subject(), Subject(), path=store)
+
+        assert subject.app == "CATIA V5" and subject.release == "R33"
 
     def test_what_this_flow_recorded_beats_its_own_declaration(self, tmp_path):
         """The declaration is a default. Somebody who ran this flow against

@@ -173,6 +173,30 @@ class TestAConversationRatherThanOneQuestion:
 
         assert [t.prompt for t in turns] == ["How wide is Bracket?"]
 
+    def test_the_things_that_were_said_are_not_also_listed_as_variables(self, tmp_path):
+        """A conversation flow has one variable per turn. Printing them as a
+        list of variables and again as the conversation makes a reader check
+        whether the two differ."""
+        run = make_run(tmp_path, [a_conversation(
+            variables={"opening": "Add a 10mm hole.", "followup": "Now fillet it.",
+                       "style": "terse"},
+        )])
+        text = render_markdown(run)
+
+        assert "`style` = terse" in text
+        assert "`opening`" not in text, "said once, listed twice"
+
+    def test_a_flow_with_no_prompt_variable_has_no_empty_prompt_block(self, tmp_path):
+        """A conversation names its turns opening/followup/closing. There is
+        no variable called `prompt`, and an empty code fence under a Prompt
+        heading reads as a run that sent nothing."""
+        run = make_run(tmp_path, [a_conversation(
+            variables={"opening": "Add a 10mm hole.", "followup": "Now fillet it."},
+        )])
+        text = render_markdown(run)
+
+        assert "### Prompt\n" not in text
+
     def test_the_transcript_shows_both_turns(self, tmp_path):
         run = make_run(tmp_path, [a_conversation()])
         text = render_markdown(run)
