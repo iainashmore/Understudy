@@ -243,6 +243,39 @@ class TestFindingThingsByLookingAtThem:
         x, y = handle.point
         assert 0 <= x < window.shape[1] and 0 <= y < window.shape[0]
 
+    def test_typing_through_an_anchor_arrives_in_order(self, driver, tmp_path):
+        """The one that matters for a CAD panel: everything above resolves an
+        anchor, this types through one.
+
+        It came back reversed from the click point -- "Found by picture, typed
+        by keystroke" as "Found by pic.ekortsyek yb depyt ,erut" -- because the
+        anchor's type_keys clicked before every send and human-speed typing
+        sends one character at a time.
+        """
+        from understudy.vision import crop
+        from harness.image import load_rgb, to_png_bytes
+
+        # Anchor on the menu bar: it has text, so it has features to match on,
+        # and it does not change as the text area fills up.
+        window = load_rgb(driver.screenshot())
+        anchor = tmp_path / "menu.png"
+        anchor.write_bytes(to_png_bytes(
+            crop(window, {"x": 0, "y": 0, "width": 200, "height": 50})))
+
+        by_picture = Target(name="by_picture", strategies={"native": (
+            Strategy(backend="native", fields={
+                "image": str(anchor), "threshold": 0.9,
+                "offset": {"dx": 0, "dy": 120},
+            }),
+        )})
+
+        typed = "left to right, in that order"
+        driver.type(by_picture, typed, 8000)
+        time.sleep(0.4)
+
+        text, _ = driver.read(EDIT_AREA, 5000)
+        assert typed in text, f"read back {text!r}"
+
     def test_reading_text_off_the_pixels(self, driver):
         """OCR, the last rung. Notepad has real UIA text, so this is checking
         the mechanism rather than the necessity -- but on a custom-drawn panel

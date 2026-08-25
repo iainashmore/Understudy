@@ -134,6 +134,58 @@ class TestAnchorPoints:
             point.get_value()
 
 
+class TestTypingAtAPixel:
+    """An anchor is a location, not a control, so focusing it means clicking
+    it. Human-speed typing sends one character at a time -- so a click inside
+    typing puts the caret back where the click landed, on every keystroke."""
+
+    def fake_pywinauto(self, monkeypatch):
+        import sys, types
+
+        events = []
+        mouse = types.ModuleType("pywinauto.mouse")
+        mouse.click = lambda **kw: events.append(("click", kw.get("coords")))
+        mouse.move = lambda **kw: events.append(("move", kw.get("coords")))
+        keyboard = types.ModuleType("pywinauto.keyboard")
+        keyboard.send_keys = lambda keys, **kw: events.append(("keys", keys))
+        package = types.ModuleType("pywinauto")
+        package.mouse, package.keyboard = mouse, keyboard
+        for name, module in (("pywinauto", package),
+                             ("pywinauto.mouse", mouse),
+                             ("pywinauto.keyboard", keyboard)):
+            monkeypatch.setitem(sys.modules, name, module)
+        return events
+
+    def a_point(self):
+        driver = NativeDriver()
+        driver.to_screen = lambda x, y: (x, y)
+        driver.move_pointer_to = lambda x, y: None
+        return _Point(driver, Match(x=10, y=10, width=20, height=10, score=1.0))
+
+    def test_typing_does_not_click(self, monkeypatch):
+        """The bug: "Found by picture, typed by keystroke" came back as
+        "Found by pic.ekortsyek yb depyt ,erut" -- reversed from the click
+        point, one character at a time."""
+        events = self.fake_pywinauto(monkeypatch)
+        point = self.a_point()
+
+        for character in "abc":
+            point.type_keys(character)
+
+        assert [kind for kind, _ in events] == ["keys", "keys", "keys"], \
+            f"something moved the mouse mid-typing: {events}"
+
+    def test_focusing_a_pixel_clicks_it(self, monkeypatch):
+        """Because that is the only way a location can take focus. It just
+        has to happen once, before the typing, not inside it."""
+        events = self.fake_pywinauto(monkeypatch)
+        point = self.a_point()
+
+        point.set_focus()
+
+        assert ("click", (20, 15)) in events, events
+
+
 class TestWhenTheWindowIsAmbiguous:
     """Two windows matching one pattern is not an edge case on a CAD
     workstation: CATIA V5 and 3DX side by side, two documents open, a splash

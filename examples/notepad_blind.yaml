@@ -64,5 +64,9 @@ steps:
   # a custom-drawn panel, and the only one available when UIA sees nothing.
   - action: read
     mode: ocr
-    region: {x: 0, y: 60, width: 700, height: 220}
+    # Measured against a real capture, not guessed. y: 60 clipped the tops of
+    # the glyphs and OCR came back with "EE EE EE EEE IEEE"; y: 48 reads the
+    # line exactly. x: 8 keeps the window border out of the crop -- included,
+    # it produces the same noise on its own.
+    region: {x: 8, y: 48, width: 730, height: 200}
     store_as: response

@@ -240,6 +240,11 @@ class NullRecorder:
         return Recording(backend=self.backend, error=self.reason)
 
 
+#: Under this it is not a recording. An mp4 with only its header is around 50
+#: bytes; the shortest real capture this produces is tens of kilobytes.
+PLAUSIBLE_BYTES = 2048
+
+
 class FfmpegRecorder:
     """Screen capture for the native backend."""
 
@@ -298,9 +303,19 @@ class FfmpegRecorder:
         code = self.current.stop()
         tail = self.current.stderr_tail
         self.current = None
-        if self.path and self.path.exists() and self.path.stat().st_size > 0:
+        size = self.path.stat().st_size if self.path and self.path.exists() else 0
+        if size >= PLAUSIBLE_BYTES:
             return Recording(path=self.path, backend=self.backend)
+        if size:
+            # A container header and nothing in it. The transcript would embed
+            # it as a video and it would play as nothing: worse than no file,
+            # because it looks like a recording that exists.
+            return Recording(
+                backend=self.backend,
+                error=f"ffmpeg wrote {size} bytes, which is a header and no "
+                      f"frames (exit {code}): {tail[-300:]}",
+            )
         return Recording(
             backend=self.backend,
-            error=f"ffmpeg produced no file (exit {code}): {tail[-200:]}",
+            error=f"ffmpeg produced no file (exit {code}): {tail[-300:]}",
         )

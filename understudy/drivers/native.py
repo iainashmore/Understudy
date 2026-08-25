@@ -571,6 +571,10 @@ class NativeDriver:
             _act(lambda: self.window.type_keys(keys))
             return None
         handle, resolution = self.resolve(target, timeout_ms)
+        # Focus first, explicitly. A real wrapper's type_keys does it itself;
+        # an anchor's cannot, because for a pixel focusing means clicking, and
+        # a click inside typing moves the caret.
+        _focus(handle)
         _act(lambda: handle.type_keys(keys))
         return resolution
 
@@ -662,11 +666,24 @@ class _Point:
         self.driver.move_pointer_to(*self.screen_point)
         mouse.click(coords=self.screen_point)
 
-    def type_keys(self, keys: str, **kwargs) -> None:
-        from pywinauto import keyboard, mouse
+    #: A pixel has no focus of its own, so focusing one means clicking it.
+    set_focus = click_input
 
-        self.driver.move_pointer_to(*self.screen_point)
-        mouse.click(coords=self.screen_point)
+    def type_keys(self, keys: str, **kwargs) -> None:
+        """Keys only. Emphatically not a click.
+
+        This used to click first, mirroring pywinauto's own type_keys, which
+        calls set_focus. On a real control that is free. On a pixel it is a
+        mouse click, and human-speed typing sends one character at a time --
+        so every keystroke put the caret back where the click landed, and
+        "Found by picture, typed by keystroke" arrived as
+        "Found by pic.ekortsyek yb depyt ,erut". Reversed, one character at a
+        time, from the click point onwards.
+
+        Focus is the caller's business: type() and key() click once, first.
+        """
+        from pywinauto import keyboard
+
         keyboard.send_keys(keys, **kwargs)
 
     def capture_as_image(self):
@@ -686,6 +703,19 @@ class _Point:
             "this target is an image anchor: it has no text to read. Use "
             "wait_for_stable with mode: pixels, or read from a different target."
         )
+
+
+def _focus(handle) -> None:
+    """Best effort. A real wrapper's type_keys focuses itself, so failing here
+    costs nothing; an anchor has no other way to get focus, so it is worth
+    trying. Either way, not a reason to fail the step."""
+    focus = getattr(handle, "set_focus", None)
+    if focus is None:
+        return
+    try:
+        focus()
+    except Exception:
+        pass
 
 
 def _act(operation) -> None:

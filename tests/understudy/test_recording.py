@@ -166,6 +166,29 @@ class TestRecorders:
                                   ffmpeg="ffmpeg")
         assert recorder.start(tmp_path / "out.mp4") is False
 
+    def test_a_header_with_no_frames_in_it_is_not_a_recording(self, tmp_path):
+        """A 48-byte mp4 came back from a runner and the transcript embedded it
+        as a video. It plays as nothing. A file that exists is worse than no
+        file when it looks like a recording and is not one."""
+        recorder = FfmpegRecorder(ffmpeg="ffmpeg")
+        recorder.current = FfmpegProcess(["ffmpeg"])
+        recorder.current.start(spawn=lambda *a, **k: FakeProcess())
+        recorder.path = tmp_path / "stub.mp4"
+        recorder.path.write_bytes(b"\x00" * 48)
+
+        outcome = recorder.stop()
+        assert outcome.ok is False
+        assert "48 bytes" in outcome.error
+
+    def test_a_real_sized_file_is_accepted(self, tmp_path):
+        recorder = FfmpegRecorder(ffmpeg="ffmpeg")
+        recorder.current = FfmpegProcess(["ffmpeg"])
+        recorder.current.start(spawn=lambda *a, **k: FakeProcess())
+        recorder.path = tmp_path / "real.mp4"
+        recorder.path.write_bytes(b"\x00" * 60_000)
+
+        assert recorder.stop().ok is True
+
     def test_a_recording_that_produced_no_file_reports_that(self, tmp_path):
         recorder = FfmpegRecorder(ffmpeg="ffmpeg")
         recorder.current = FfmpegProcess(["ffmpeg"])

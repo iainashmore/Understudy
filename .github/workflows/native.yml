@@ -132,6 +132,29 @@ jobs:
           python -m understudy.cli run examples/notepad_blind.yaml \
             --backend native --out runs/notepad-blind --record
 
+      - name: Check the blind run actually read what it typed
+        shell: bash
+        run: |
+          # Without this the job passes on nonsense. It did: the flow typed
+          # "Found by picture, typed by keystroke, read by OCR." and the
+          # transcript recorded "en A eee eee Ree eee aa. i" as the response,
+          # status pass. A green tick on a garbage read is worse than a red
+          # one, because the whole point of the run is the read.
+          python -c "
+          import difflib, json, sys
+          rows = [json.loads(line) for line in open('runs/notepad-blind/results.jsonl')]
+          worst = 1.0
+          for row in rows:
+              got, want = row['response'], row['prompt']
+              score = difflib.SequenceMatcher(None, got, want).ratio()
+              worst = min(worst, score)
+              print(f'{score:.2f}  wanted {want!r}')
+              print(f'      read   {got!r}')
+          # OCR is allowed to be imperfect -- a comma for a full stop, a
+          # dropped space. It is not allowed to be unrecognisable.
+          sys.exit(0 if worst >= 0.9 else 1)
+          "
+
       - name: Show what it produced
         if: always()
         shell: bash
