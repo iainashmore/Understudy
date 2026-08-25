@@ -31,6 +31,11 @@ DEFAULT_PATH = Path.home() / ".understudy" / "credentials.json"
 ENV_KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 #: Anything not on this list is refused rather than quietly stored.
 ALLOWED_FIELDS = ("api_key", "base_url", "model")
+#: Git access tokens, one per host, kept in the same file for the same reasons:
+#: outside the workspace, owner-only, never returned to the browser. A token
+#: for github.com must never be sent to gitlab.example.com, so they are stored
+#: and looked up by host rather than as a single "the token".
+GIT_TOKENS_FIELD = "git_tokens"
 
 
 @dataclass
@@ -38,7 +43,14 @@ class Credentials:
     api_key: str = ""
     base_url: str = ""
     model: str = ""
+    git_tokens: dict[str, str] = field(default_factory=dict)
     path: Path = field(default=DEFAULT_PATH)
+
+    def git_token(self, host: str) -> str:
+        """The token for one host, or empty. Never falls back to another
+        host's: sending a GitHub token to a self-hosted GitLab would hand a
+        credential to a service that has no business seeing it."""
+        return self.git_tokens.get((host or "").lower(), "")
 
     @property
     def has_key(self) -> bool:
@@ -61,7 +73,20 @@ class Credentials:
             "model": self.model,
             "path": str(self.path),
             "env_override": active_env_source(),
+            "git_hosts": [
+                {"host": host, "masked": _mask(token)}
+                for host, token in sorted(self.git_tokens.items())
+            ],
         }
+
+
+def _mask(secret: str) -> str:
+    """Enough to recognise which token it is, not enough to use it."""
+    if not secret:
+        return ""
+    if len(secret) <= 12:
+        return "*" * len(secret)
+    return f"{secret[:7]}...{secret[-4:]}"
 
 
 def active_env_source() -> str:
@@ -79,10 +104,15 @@ def load(path: Path | str | None = None) -> Credentials:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return Credentials(path=path)
+    tokens = data.get(GIT_TOKENS_FIELD) or {}
     return Credentials(
         api_key=str(data.get("api_key", "") or ""),
         base_url=str(data.get("base_url", "") or ""),
         model=str(data.get("model", "") or ""),
+        git_tokens={
+            str(host).lower(): str(token)
+            for host, token in tokens.items() if host and token
+        },
         path=path,
     )
 
@@ -98,10 +128,15 @@ def save(values: dict[str, Any], path: Path | str | None = None) -> Credentials:
     if unknown:
         raise ValueError(f"unknown credential field(s): {', '.join(unknown)}")
 
-    payload = {
+    payload: dict[str, Any] = {
         field_name: str(values.get(field_name, "") or "").strip()
         for field_name in ALLOWED_FIELDS
     }
+    # Saving the API key must not silently drop the git tokens sitting beside
+    # it: the two are edited from different parts of the UI.
+    existing = load(path).git_tokens
+    if existing:
+        payload[GIT_TOKENS_FIELD] = existing
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     try:
@@ -109,6 +144,53 @@ def save(values: dict[str, Any], path: Path | str | None = None) -> Credentials:
     except OSError:
         # Windows and some network shares do not honour this. Not fatal, but
         # it is the reason the default location is a per-user directory.
+        pass
+    return load(path)
+
+
+def save_git_token(host: str, token: str,
+                   path: Path | str | None = None) -> Credentials:
+    """Store one host's access token, leaving everything else alone.
+
+    There is deliberately no way to read one back out: the UI can say a token
+    is saved for a host, and can replace or delete it, but nothing returns it
+    to the browser -- including a screenshot of the browser.
+    """
+    host = (host or "").strip().lower()
+    if not host:
+        raise ValueError("a git token needs a host, such as github.com")
+    if not token.strip():
+        raise ValueError("a git token cannot be empty; delete it instead")
+
+    path = Path(path) if path else DEFAULT_PATH
+    current = load(path)
+    tokens = dict(current.git_tokens)
+    tokens[host] = token.strip()
+    return _write(current, tokens, path)
+
+
+def clear_git_token(host: str, path: Path | str | None = None) -> Credentials:
+    path = Path(path) if path else DEFAULT_PATH
+    current = load(path)
+    tokens = dict(current.git_tokens)
+    tokens.pop((host or "").strip().lower(), None)
+    return _write(current, tokens, path)
+
+
+def _write(current: "Credentials", tokens: dict[str, str],
+           path: Path) -> Credentials:
+    payload: dict[str, Any] = {
+        "api_key": current.api_key,
+        "base_url": current.base_url,
+        "model": current.model,
+    }
+    if tokens:
+        payload[GIT_TOKENS_FIELD] = tokens
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
         pass
     return load(path)
 

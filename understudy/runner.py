@@ -79,6 +79,10 @@ class VariantResult:
     duration_ms: int
     backend: str
     timestamp: str
+    #: Which flow produced this. Obvious while the run directory is in front of
+    #: you, and gone the moment a result is read anywhere else -- a commit
+    #: subject, a suite index, a spreadsheet of last month's regressions.
+    flow: str = ""
     repeat_index: int = 0
     recording: str | None = None
     recording_error: str | None = None
@@ -146,6 +150,7 @@ class VariantResult:
             "agent_resolutions": self.agent_resolutions,
             "learned_anchors": self.learned_anchors,
             "backend": self.backend,
+            "flow": self.flow,
             "timestamp": self.timestamp,
             "error": self.error,
         }
@@ -231,6 +236,7 @@ class Runner:
             status=Status.OK,
             duration_ms=0,
             backend=self.driver.backend,
+            flow=self.flow.name,
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         counter = {"n": 0}

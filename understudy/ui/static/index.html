@@ -7,6 +7,10 @@
     --dim:#9aa5b1; --accent:#4f9dd9; --ok:#4fd98a; --bad:#e05c5c; --warn:#e0a94f;
   }
   * { box-sizing: border-box; }
+  /* A class that sets display beats the browser's own rule for [hidden], so
+     `class="row" hidden` stays visible. Every hidden thing in this page is a
+     row or a flex container, so this is not an edge case. */
+  [hidden] { display: none !important; }
   body { margin:0; height:100vh; display:grid; grid-template-rows:auto 1fr;
          font:13px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
   header { display:flex; align-items:center; gap:12px; padding:8px 14px;
@@ -86,6 +90,18 @@
   .notice { border-left:3px solid var(--warn); padding:8px 12px;
             background:rgba(224,169,79,.08); border-radius:0 4px 4px 0; }
   button.toggle { opacity:.55; }
+  .segmented { display:inline-flex; border:1px solid var(--line); border-radius:5px;
+               overflow:hidden; }
+  .segmented button { border:none; border-radius:0; background:#1a1e23;
+                      color:var(--dim); padding:5px 12px; }
+  .segmented button + button { border-left:1px solid var(--line); }
+  .segmented button.on { background:var(--accent); color:#0d1319; font-weight:600; }
+  .source-field { transition:opacity .12s ease; }
+  .source-field.off { opacity:.35; }
+  .source-field.off input { cursor:not-allowed; }
+  .badge { display:inline-block; min-width:8px; padding:0 5px; border-radius:8px;
+           font-size:11px; color:var(--dim); }
+  .badge.on { background:var(--accent); color:#0d1319; font-weight:700; }
   button.toggle.on { opacity:1; border-color:var(--accent); color:var(--text); }
   #transcriptFrame { width:100%; height:calc(100vh - 190px); min-height:420px;
                      border:1px solid var(--line); border-radius:6px;
@@ -122,6 +138,7 @@
       <button data-tab="output">Output</button>
       <button data-tab="transcript">Transcript</button>
       <button data-tab="record"><span class="rec-dot"></span>Record</button>
+      <button data-tab="repo">Repository <span id="repoBadge" class="badge"></span></button>
       <button data-tab="credentials">Credentials</button>
     </nav>
     <div class="pane">
@@ -196,6 +213,108 @@
         </div>
       </section>
 
+      <section id="tab-repo">
+        <div class="card">
+          <div class="row">
+            <label style="width:78px">Workspace</label>
+            <code id="repoRoot" class="grow"></code>
+            <select id="repoRecent" style="max-width:280px"></select>
+            <button id="repoConnectToggle">Change…</button>
+          </div>
+
+          <div id="repoConnect" hidden>
+            <div class="row" style="margin-top:6px">
+              <label style="width:78px">Source</label>
+              <div class="segmented">
+                <button data-kind="local" class="on">Local folder</button>
+                <button data-kind="github">GitHub</button>
+                <button data-kind="gitlab">GitLab</button>
+              </div>
+            </div>
+            <div class="row source-field" data-for="github gitlab">
+              <label style="width:78px"><span id="projectLabel">Repository</span></label>
+              <input id="repoProject" class="grow" placeholder="owner/repo">
+            </div>
+            <div class="row source-field" data-for="gitlab">
+              <label style="width:78px">Host</label>
+              <input id="repoHost" class="grow"
+                     placeholder="gitlab.com — or your company's instance">
+            </div>
+            <div class="row">
+              <label style="width:78px"><span id="dirLabel">Folder</span></label>
+              <input id="repoDirectory" class="grow" placeholder="C:\Users\you\flows">
+              <button id="repoConnectGo" class="primary">Connect</button>
+            </div>
+            <p class="muted source-field" data-for="github gitlab">
+              Cloned with your saved token for that host, or your credential
+              helper or SSH key. An existing checkout is opened, not re-cloned.</p>
+            <p class="muted source-field" data-for="local">
+              A plain folder. Only committing and publishing need a repository.</p>
+          </div>
+          <div id="repoOpenOut"></div>
+        </div>
+
+        <div id="repoReadOnly" class="notice" hidden></div>
+
+        <div id="repoNotRepo" class="notice" hidden>
+          <strong>This workspace is not a git checkout.</strong>
+          <p>Understudy keeps flows and their evidence in a repository by
+          driving the <code>git</code> you already have, so it works the same
+          against GitHub, GitLab, a self-hosted GitLab, or anything else that
+          speaks git — and inherits your credential helper, proxy and SSH
+          setup.</p>
+          <p>Clone your flow repository and start Understudy with
+          <code>--workspace</code> pointing at it, or run
+          <code>git init</code> here and add a remote.</p>
+        </div>
+
+        <div id="repoPanel" hidden>
+          <div class="row">
+            <label>Branch</label>
+            <select id="repoBranch"></select>
+            <span id="repoTracking" class="muted"></span>
+            <span class="grow"></span>
+            <button id="repoPull">Pull</button>
+            <button id="repoPush" class="primary">Push</button>
+          </div>
+          <div class="row">
+            <span id="repoRemote" class="muted"></span>
+            <span class="grow"></span>
+            <a id="repoOpen" target="_blank" rel="noopener"><button class="link">Open on the web</button></a>
+          </div>
+          <div id="repoStatus"></div>
+
+          <div class="card">
+            <h3>Changes <span id="repoCount" class="muted"></span></h3>
+            <div id="repoChanges" class="muted">Nothing has changed.</div>
+            <div class="row" style="margin-top:10px">
+              <input id="repoMessage" class="grow" placeholder="Commit message">
+              <button id="repoCommit" class="primary">Commit selected</button>
+            </div>
+            <p class="muted">Only the files you tick are staged — never
+              <code>git add -A</code> in a repository you are also working in.</p>
+          </div>
+
+          <div class="card">
+            <h3>Publish a run</h3>
+            <p class="muted">Commits the transcript, results and screenshots.
+              Recordings are left out by default — they are the largest part of
+              a run and git keeps them forever.</p>
+            <div class="row">
+              <select id="repoRun" class="grow"></select>
+              <label><input id="repoWithVideo" type="checkbox"> include video</label>
+              <button id="repoPublish" class="primary">Publish</button>
+            </div>
+            <div id="repoPublishOut"></div>
+          </div>
+
+          <div class="card">
+            <h3>Recent commits</h3>
+            <div id="repoLog" class="muted">No history yet.</div>
+          </div>
+        </div>
+      </section>
+
       <section id="tab-credentials">
         <div class="card" style="max-width:720px">
           <h3>Claude API access</h3>
@@ -231,6 +350,42 @@
             <p class="muted">Committed as <code>credentials.example.json</code>.
               A real one belongs at the path above, never in the repository.</p>
           </details>
+        </div>
+
+        <div class="card" style="max-width:720px">
+          <h3>Git access tokens</h3>
+          <p class="muted">Only needed if pushing over HTTPS without a
+            credential helper. An SSH remote, or Git Credential Manager on
+            Windows, needs nothing here.</p>
+          <div id="gitTokens" class="muted">No tokens saved.</div>
+          <div class="row" style="margin-top:10px">
+            <label style="width:90px">Host</label>
+            <input id="gitHost" placeholder="github.com" style="flex:1" list="gitHostHints">
+            <datalist id="gitHostHints">
+              <option value="github.com"><option value="gitlab.com">
+            </datalist>
+          </div>
+          <div class="row">
+            <label style="width:90px">Token</label>
+            <input id="gitToken" type="password" placeholder="ghp_… or glpat-…" style="flex:1">
+          </div>
+          <div class="row">
+            <button id="saveGitToken" class="primary">Save token</button>
+            <span id="gitTokenHelp" class="muted"></span>
+          </div>
+          <div id="gitTokenResult"></div>
+          <p class="muted" style="margin-top:14px">
+            Stored per host in the same owner-only file, and never returned to
+            this page. A token saved for one host is never sent to another — a
+            GitHub token must not reach a self-hosted GitLab. When Understudy
+            uses one it passes it as a header for the length of a single
+            command; it is never written into <code>.git/config</code> or into
+            a remote URL, where it would sit in the checkout for anyone to
+            find.</p>
+          <p class="muted"><strong>GitHub:</strong> a fine-grained token with
+            <em>Contents: read and write</em> on the flow repository.
+            <strong>GitLab:</strong> a project or personal access token with
+            the <code>write_repository</code> scope.</p>
         </div>
       </section>
     </div>
@@ -637,6 +792,294 @@ function download(path) {
   link.click();
 }
 
+/* ---------- repository ---------- */
+
+function repoMessage(node, text, kind) {
+  node.innerHTML = text ? `<span class="${kind || "muted"}">${escapeHtml(text)}</span>` : "";
+}
+
+async function loadRepo() {
+  let state;
+  try {
+    state = await api("/api/repo");
+  } catch (error) {
+    return;
+  }
+  state_repo = state;
+  $("repoRoot").textContent = state.root || "";
+  try {
+    const known = await api("/api/workspace");
+    renderRecent(known.recent || [], known.workspace);
+  } catch (error) { /* the panel is still useful without it */ }
+  const blocked = !!state.read_only;
+  $("repoReadOnly").hidden = !blocked;
+  if (blocked) $("repoReadOnly").textContent = state.read_only_reason;
+  $("repoNotRepo").hidden = state.is_repo || blocked;
+  $("repoPanel").hidden = !state.is_repo || blocked;
+  if (blocked) { $("repoBadge").textContent = ""; return; }
+  const badge = $("repoBadge");
+  if (!state.is_repo) { badge.textContent = ""; badge.className = "badge"; return; }
+
+  const counts = [];
+  if (state.changes.length) counts.push(`${state.changes.length}`);
+  if (state.ahead) counts.push(`\u2191${state.ahead}`);
+  if (state.behind) counts.push(`\u2193${state.behind}`);
+  badge.textContent = counts.join(" ");
+  badge.className = "badge" + (state.changes.length || state.ahead ? " on" : "");
+
+  const select = $("repoBranch");
+  select.innerHTML = state.branches
+    .map((b) => `<option${b === state.branch ? " selected" : ""}>${escapeHtml(b)}</option>`)
+    .join("") || `<option>${escapeHtml(state.branch)}</option>`;
+  $("repoTracking").textContent = state.upstream
+    ? `tracking ${state.upstream}` + (state.ahead ? `, ${state.ahead} to push` : "")
+      + (state.behind ? `, ${state.behind} to pull` : "")
+    : "no upstream yet — the first push sets one";
+
+  const remote = state.remote;
+  $("repoRemote").textContent = remote.url
+    ? `${remote.provider === "unknown" ? "remote" : remote.provider}: ${remote.url}`
+      + (remote.provider === "unknown" || state.has_token ? "" : " — no token saved")
+    : "no remote configured";
+  $("repoOpen").href = remote.web_url || "#";
+  $("repoOpen").hidden = !remote.web_url;
+
+  renderChanges(state.changes);
+  $("repoLog").innerHTML = state.recent.length
+    ? state.recent.map((c) => `<div><code>${c.sha.slice(0, 8)}</code>
+        ${escapeHtml(c.subject)}
+        <span class="muted">${escapeHtml(c.author)} · ${c.date.slice(0, 10)}</span></div>`).join("")
+    : "No history yet.";
+
+  let runs = [];
+  try {
+    runs = (await api("/api/files")).runs || [];
+  } catch (error) {
+    runs = [];
+  }
+  const previous = $("repoRun").value;
+  $("repoRun").innerHTML = runs.length
+    ? runs.map((r) => `<option>${escapeHtml(r)}</option>`).join("")
+    : `<option value="">no runs yet</option>`;
+  if (runs.includes(previous)) $("repoRun").value = previous;
+  // onchange does not fire for a list the page filled in, and the preview is
+  // the thing that makes Publish safe to press.
+  showPublishPreview();
+}
+
+let state_repo = null;
+
+function renderChanges(changes) {
+  $("repoCount").textContent = changes.length ? `(${changes.length})` : "";
+  if (!changes.length) {
+    $("repoChanges").className = "muted";
+    $("repoChanges").textContent = "Nothing has changed.";
+    return;
+  }
+  $("repoChanges").className = "";
+  $("repoChanges").innerHTML = changes.map((change) => `
+    <label class="row" style="margin:1px 0; gap:6px">
+      <input type="checkbox" class="repo-file" value="${escapeHtml(change.path)}"
+             ${change.path.startsWith("runs/") ? "" : "checked"}>
+      <span class="pill ${change.state === "conflicted" ? "bad" : "warn"}"
+            style="min-width:74px; text-align:center">${change.state}</span>
+      <code>${escapeHtml(change.path)}</code>
+    </label>`).join("");
+  suggestCommitMessage();
+}
+
+function selectedFiles() {
+  return [...document.querySelectorAll(".repo-file:checked")].map((n) => n.value);
+}
+
+let sourceKind = "local";
+
+function showSourceKind(kind) {
+  sourceKind = kind;
+  document.querySelectorAll("#repoConnect .segmented button").forEach((b) =>
+    b.classList.toggle("on", b.dataset.kind === kind));
+  // Dimmed rather than hidden: the fields the other sources would ask for stay
+  // visible, so the choice is legible and the panel does not jump about as you
+  // click between them. Disabled too, so a dimmed box cannot be typed into or
+  // submitted by tabbing to it.
+  document.querySelectorAll("#repoConnect .source-field").forEach((node) => {
+    const applies = node.dataset.for.split(" ").includes(kind);
+    node.classList.toggle("off", !applies);
+    node.querySelectorAll("input, select, button").forEach((control) => {
+      control.disabled = !applies;
+    });
+  });
+  $("projectLabel").textContent = kind === "gitlab" ? "Project" : "Repository";
+  $("repoProject").placeholder =
+    kind === "gitlab" ? "group/project (groups may nest)" : "owner/repo";
+  $("dirLabel").textContent = kind === "local" ? "Folder" : "Clone into";
+}
+
+document.querySelectorAll("#repoConnect .segmented button").forEach((button) => {
+  button.onclick = () => showSourceKind(button.dataset.kind);
+});
+
+// Somebody will paste a full URL into the repository box. Take it apart rather
+// than rejecting it.
+$("repoProject").onblur = () => {
+  const value = $("repoProject").value.trim();
+  if (!value.includes("://")) return;
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/^\/|\.git$|\/$/g, "");
+    $("repoProject").value = path;
+    if (url.hostname === "github.com") showSourceKind("github");
+    else if (url.hostname === "gitlab.com") showSourceKind("gitlab");
+    else if (url.hostname.includes("gitlab")) {
+      showSourceKind("gitlab");
+      $("repoHost").value = url.hostname;
+    }
+    if (!$("repoDirectory").value.trim()) {
+      $("repoDirectory").placeholder = path.split("/").pop();
+    }
+  } catch (error) { /* not a URL after all */ }
+};
+
+$("repoConnectToggle").onclick = () => {
+  $("repoConnect").hidden = !$("repoConnect").hidden;
+  if (!$("repoConnect").hidden) showSourceKind(sourceKind);
+};
+
+$("repoConnectGo").onclick = async () => {
+  repoMessage($("repoOpenOut"),
+    sourceKind === "local" ? "opening…" : "cloning… this can take a minute");
+  const done = await post("/api/workspace/connect", {
+    kind: sourceKind,
+    directory: $("repoDirectory").value.trim(),
+    project: $("repoProject").value.trim(),
+    host: $("repoHost").value.trim(),
+  });
+  if (done.error) return repoMessage($("repoOpenOut"), done.error, "bad");
+  repoMessage($("repoOpenOut"), `workspace is now ${done.workspace}`, "ok");
+  $("repoConnect").hidden = true;
+  renderRecent(done.recent || []);
+  await loadTree().catch(() => {});
+  loadRepo();
+};
+
+function renderRecent(entries, current) {
+  const select = $("repoRecent");
+  select.hidden = entries.length < 2;
+  select.innerHTML = `<option value="">recent workspaces…</option>` +
+    entries.map((entry) => {
+      const label = entry.project
+        ? `${entry.kind}: ${entry.project}`
+        : entry.directory;
+      return `<option value="${escapeHtml(entry.directory)}"
+        ${entry.directory === current ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+}
+
+$("repoRecent").onchange = async () => {
+  const path = $("repoRecent").value;
+  if (!path) return;
+  const done = await post("/api/workspace/open", { path });
+  if (done.error) return repoMessage($("repoOpenOut"), done.error, "bad");
+  await loadTree().catch(() => {});
+  loadRepo();
+};
+
+// Write a subject from what is actually ticked, so leaving it alone still
+// produces something worth reading in a log six months from now.
+async function suggestCommitMessage() {
+  const box = $("repoMessage");
+  if (box.dataset.edited === "1") return;
+  const paths = selectedFiles();
+  if (!paths.length) { box.value = ""; return; }
+  const { message } = await post("/api/repo/suggest-message", { paths });
+  box.value = message || "";
+}
+$("repoMessage").oninput = () => {
+  $("repoMessage").dataset.edited = $("repoMessage").value ? "1" : "";
+};
+document.addEventListener("change", (event) => {
+  if (event.target.classList && event.target.classList.contains("repo-file")) {
+    suggestCommitMessage();
+  }
+});
+
+$("repoCommit").onclick = async () => {
+  const paths = selectedFiles();
+  const message = $("repoMessage").value.trim();
+  if (!paths.length) return repoMessage($("repoStatus"), "tick at least one file", "bad");
+  if (!message) return repoMessage($("repoStatus"), "a commit needs a message", "bad");
+
+  repoMessage($("repoStatus"), "committing…");
+  const done = await post("/api/repo/commit", { paths, message });
+  if (done.error) return repoMessage($("repoStatus"), done.error, "bad");
+  if (!done.committed) return repoMessage($("repoStatus"), done.reason || "nothing to commit");
+  $("repoMessage").value = "";
+  $("repoMessage").dataset.edited = "";
+  repoMessage($("repoStatus"), `committed ${done.sha.slice(0, 8)}`, "ok");
+  loadRepo();
+};
+
+$("repoPush").onclick = async () => {
+  repoMessage($("repoStatus"), "pushing…");
+  const done = await post("/api/repo/push", {});
+  repoMessage($("repoStatus"), done.error || "pushed", done.error ? "bad" : "ok");
+  loadRepo();
+};
+
+$("repoPull").onclick = async () => {
+  repoMessage($("repoStatus"), "pulling…");
+  const done = await post("/api/repo/pull", {});
+  repoMessage($("repoStatus"), done.error || "up to date", done.error ? "bad" : "ok");
+  loadRepo();
+};
+
+$("repoBranch").onchange = async () => {
+  const done = await post("/api/repo/checkout", { branch: $("repoBranch").value });
+  if (done.error) repoMessage($("repoStatus"), done.error, "bad");
+  loadRepo();
+};
+
+// Shown as soon as a run is picked rather than behind a button: committing is
+// not undoable in any way a person would call undoing, so what is about to go
+// in should already be on screen.
+async function showPublishPreview() {
+  const run_dir = $("repoRun").value;
+  if (!run_dir) { $("repoPublishOut").innerHTML = ""; return; }
+  const preview = await post("/api/repo/publish/preview",
+    { run_dir, include_video: $("repoWithVideo").checked });
+  if (preview.error) return repoMessage($("repoPublishOut"), preview.error, "bad");
+  const skipped = Object.entries(preview.excluded || {})
+    .map(([reason, paths]) => `${paths.length} skipped (${escapeHtml(reason)})`)
+    .join(", ");
+  $("repoPublishOut").innerHTML = `
+    <div style="margin-top:8px">${preview.include.length} file(s) ·
+      ${(preview.total_bytes / 1024).toFixed(0)} KB${skipped ? " · " + skipped : ""}</div>
+    <div class="muted">message: ${escapeHtml(preview.message)}</div>
+    <details><summary class="muted">${preview.include.length} file(s)</summary>
+      <pre>${preview.include.map(escapeHtml).join("\n")}</pre></details>`;
+}
+$("repoRun").onchange = showPublishPreview;
+$("repoWithVideo").onchange = showPublishPreview;
+
+$("repoPublish").onclick = async () => {
+  const run_dir = $("repoRun").value;
+  if (!run_dir) return;
+  repoMessage($("repoPublishOut"), "publishing…");
+  const done = await post("/api/repo/publish",
+    { run_dir, include_video: $("repoWithVideo").checked });
+  if (done.error) return repoMessage($("repoPublishOut"), done.error, "bad");
+  if (!done.committed) return repoMessage($("repoPublishOut"), done.reason || "nothing to publish");
+  const link = done.url
+    ? ` <a href="${done.url}" target="_blank" rel="noopener">${done.sha.slice(0, 8)}</a>`
+    : ` ${done.sha.slice(0, 8)}`;
+  $("repoPublishOut").innerHTML =
+    `<span class="ok">published</span>${link}` +
+    (done.pushed === false
+      ? ` <span class="bad">but the push failed: ${escapeHtml(done.push_error || "")}</span>`
+      : " and pushed");
+  loadRepo();
+};
+
 /* ---------- credentials ---------- */
 
 async function loadCredentials() {
@@ -653,7 +1096,53 @@ async function loadCredentials() {
     ? `<span class="pill ok">key saved</span> <code>${escapeHtml(info.masked_key)}</code>`
     : `<span class="pill bad">no key saved</span>`);
   $("credState").innerHTML = parts.join(" &nbsp; ");
+  renderGitTokens(info.git_hosts || []);
 }
+
+function renderGitTokens(hosts) {
+  if (!hosts.length) {
+    $("gitTokens").className = "muted";
+    $("gitTokens").textContent = "No tokens saved.";
+    return;
+  }
+  $("gitTokens").className = "";
+  $("gitTokens").innerHTML = hosts.map((entry) => `
+    <div class="row" style="margin:2px 0">
+      <span class="pill ok">saved</span>
+      <code>${escapeHtml(entry.host)}</code>
+      <span class="muted">${escapeHtml(entry.masked)}</span>
+      <button class="link" data-forget="${escapeHtml(entry.host)}">Forget</button>
+    </div>`).join("");
+  $("gitTokens").querySelectorAll("[data-forget]").forEach((button) => {
+    button.onclick = async () => {
+      const info = await post("/api/credentials/git/delete",
+        { host: button.dataset.forget });
+      renderGitTokens(info.git_hosts || []);
+      loadRepo();
+    };
+  });
+}
+
+$("saveGitToken").onclick = async () => {
+  const host = $("gitHost").value.trim();
+  const token = $("gitToken").value;
+  const out = $("gitTokenResult");
+  if (!host || !token) {
+    out.innerHTML = `<span class="bad">a host and a token are both needed</span>`;
+    return;
+  }
+  const info = await post("/api/credentials/git", { host, token });
+  if (info.error) {
+    out.innerHTML = `<span class="bad">${escapeHtml(info.error)}</span>`;
+    return;
+  }
+  // Clear the field the moment it is saved: a token left in a text box is a
+  // token in the next screenshot.
+  $("gitToken").value = "";
+  out.innerHTML = `<span class="ok">saved for ${escapeHtml(host)}</span>`;
+  renderGitTokens(info.git_hosts || []);
+  loadRepo();
+};
 
 $("saveCreds").onclick = async () => {
   await post("/api/credentials", { api_key: $("apiKey").value,
@@ -681,4 +1170,10 @@ loadTree().then(() => {
   if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
 }).catch((error) => logLine("could not list flows: " + error.message, "bad"));
 loadCredentials().catch(() => {});
+showSourceKind("local");     // a plain folder is the default and needs nothing
+loadRepo().catch(() => {});
+// The panel is only right while nobody else is touching the checkout, and
+// somebody usually is -- an editor saving a flow, a run finishing, a git pull
+// in another window. Cheap enough to just re-read.
+setInterval(() => { if ($("tab-repo").classList.contains("active")) loadRepo(); }, 5000);
 </script>

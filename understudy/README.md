@@ -415,6 +415,95 @@ a finished answer from a long pause mid-stream.
 A timeout is a step status, never a crash. The run still produces its row, its
 screenshots, and whatever text had arrived.
 
+## Keeping it in a repository
+
+The workspace can be a git checkout, and the UI grows a Repository tab: branch,
+what has changed, commit, push, pull, and a Publish button for a run.
+
+This is **git, not a GitHub integration**. The tool drives the `git` binary you
+already have, so it behaves identically against GitHub, GitLab, a self-hosted
+GitLab or anything else that speaks git — and inherits your credential helper,
+your proxy and your SSH keys, none of which would work if this were a REST
+client. The provider only matters for the two things that genuinely differ:
+where a personal access token comes from, and what URL opens a file on the web.
+
+```bash
+python3 -m understudy.cli repo    --workspace ~/flows
+python3 -m understudy.cli publish runs/2026-09-01T14-22 --workspace ~/flows
+```
+
+### Which repository
+
+Yours, and you pick how. The Repository tab offers three sources:
+
+- **Local folder** — the default, and it needs nothing else. Flows and runs
+  work exactly the same; only committing and publishing want a repository.
+- **GitHub** — `owner/repo`, cloned into a folder you name.
+- **GitLab** — `group/project`, which may nest, plus the hostname of your
+  instance. That field is the reason the two are asked separately: a company
+  GitLab is not gitlab.com, and a single "clone URL" box quietly sends people
+  to the wrong one.
+
+The fields the other two would ask for stay visible but dimmed and disabled,
+so the choice is legible and the panel does not jump about as you click between
+them. Whichever you pick, the whole UI follows, and the last few workspaces are
+remembered so restarting does not mean setting it up again.
+
+**Not this one.** Understudy refuses to write to a checkout of its own source,
+because the most likely `.` on the day somebody first runs the tool is the
+folder they cloned to get it, and publishing there would commit their CAD
+screenshots into a source repository and push them to whoever owns it. The
+refusal explains itself and says how to point somewhere sensible. If flows
+genuinely do belong in that checkout, a `.understudy-workspace` file says so.
+
+### Commit messages
+
+Written for you from what is actually being committed — `Update rename-and-ask`,
+`Publish run 2026-09-01T14-22`, `Update 3 flows` — and editable before you
+commit. Not a placeholder like "Update files": somebody reads this in a log six
+months from now, trying to find the day the click path changed.
+
+**Only the files you tick are staged.** Never `git add -A`: this is a
+repository somebody is also working in, and a tool that stages everything will
+one day commit something they were halfway through, and they will not forgive
+it. `pull` is `--ff-only` for the same reason — a merge commit invented by a
+background tool is a surprise nobody wants.
+
+### What gets published
+
+A run is mostly evidence: a transcript, the screenshots it links, the results a
+machine reads — and one video per variant, which is by far the largest thing in
+it and the one thing git handles worst. Committing everything is the obvious
+choice and the wrong one: a year of daily regression runs puts gigabytes of mp4
+into a history that cannot be trimmed without rewriting it, and every clone pays
+for it forever.
+
+So **video is left out by default and linked instead**, and a
+`recordings-not-committed.txt` goes in beside the transcript saying where it
+went — a transcript linking a recording that is not there looks like a broken
+link rather than a decision somebody made. A full CAD run costs about 400KB
+that way. `--include-video` overrides it for the run worth keeping whole;
+consider Git LFS first.
+
+Anything unusually large is skipped whatever its type and reported rather than
+dropped quietly, and `credentials.json` is never committed by any path through
+this code.
+
+### Tokens
+
+Nothing is needed for an SSH remote or a working credential helper, which is
+most setups. Where a token is needed it is stored **per host** in the same
+owner-only file as the API key, and:
+
+- it is never returned to the browser, only a masked form;
+- a token saved for one host is never sent to another — a GitHub token must not
+  reach a self-hosted GitLab;
+- when git needs it, it is passed as a header for the length of one command. It
+  is never written into `.git/config` or into a remote URL, either of which
+  would leave it sitting in the checkout;
+- anything that looks like a token is scrubbed out of git's own output before
+  it is shown, logged or raised.
+
 ## Paths in a flow
 
 Anchor images and `target_app.web.url` both resolve **relative to the flow

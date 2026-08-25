@@ -19,6 +19,8 @@ from understudy.authoring import AuthoringError, duplicate_file
 from understudy.narrate import ClaudeNarrator, narrate_run
 from understudy.prompts import PromptsError, prompts_for
 from understudy.pdf import write_pdf
+from understudy.vcs.backend import Repository
+from understudy.vcs.git import GitError
 from understudy.transcript import write_transcript, write_suite_index
 from understudy.transcript_html import write_html
 from understudy.resolvers import build as build_resolver, credentials_available
@@ -172,6 +174,78 @@ def _write_transcripts(run_dir, embed: bool, pdf: bool) -> int:
     return 0
 
 
+def command_repo(args) -> int:
+    """What the checkout looks like, in the terms the UI shows."""
+    state = Repository(args.workspace).state()
+    if not state["is_repo"]:
+        print(state["note"] or "not a git checkout")
+        return 1
+
+    remote = state["remote"]
+    print(f"branch    {state['branch']}"
+          + (f"  (ahead {state['ahead']}, behind {state['behind']})"
+             if state["upstream"] else "  (no upstream)"))
+    print(f"remote    {remote['url'] or '(none)'}")
+    if remote["provider"] != "unknown":
+        print(f"provider  {remote['provider']}"
+              + ("  token saved" if state["has_token"] else "  no token saved"))
+    if not state["changes"]:
+        print("clean")
+        return 0
+    print(f"\n{len(state['changes'])} change(s):")
+    for change in state["changes"]:
+        print(f"  {change['state']:<10} {change['path']}")
+    return 0
+
+
+def command_publish(args) -> int:
+    """Commit one run's evidence to the repository."""
+    repository = Repository(args.workspace)
+    run_dir = _relative_to(args.run_dir, repository.root)
+
+    preview = repository.preview_publish(
+        run_dir, include_video=args.include_video)
+    print(f"{preview['summary']}  ({preview['total_bytes'] / 1024:.0f} KB)")
+    for reason, paths in sorted(preview["excluded"].items()):
+        for path in paths:
+            print(f"  skipped ({reason}): {path}")
+    if args.dry_run:
+        for path in preview["include"]:
+            print(f"  would commit: {path}")
+        return 0
+
+    try:
+        outcome = repository.publish(
+            run_dir, message=args.message or "",
+            include_video=args.include_video, push=not args.no_push,
+        )
+    except GitError as exc:
+        print(f"publish failed: {exc}", file=sys.stderr)
+        return 1
+
+    if not outcome.get("committed"):
+        print(outcome.get("reason", "nothing to commit"))
+        return 0
+    print(f"committed {outcome['sha'][:8]}"
+          + (f"  {outcome['url']}" if outcome.get("url") else ""))
+    if outcome.get("pushed") is False:
+        print(f"push failed: {outcome.get('push_error')}", file=sys.stderr)
+        return 1
+    if outcome.get("pushed"):
+        print("pushed")
+    return 0
+
+
+def _relative_to(run_dir: str, root: Path) -> str:
+    resolved = Path(run_dir).resolve()
+    try:
+        return str(resolved.relative_to(root)).replace("\\", "/")
+    except ValueError:
+        raise SystemExit(
+            f"{run_dir} is not inside the workspace {root}. Pass --workspace."
+        ) from None
+
+
 def command_transcript(args) -> int:
     return _write_transcripts(args.run_dir, args.embed_transcript, args.pdf)
 
@@ -264,6 +338,25 @@ def main(argv: list[str] | None = None) -> int:
     transcript.add_argument("--pdf", action="store_true",
                             help="also print the transcript to PDF")
     transcript.set_defaults(handler=command_transcript)
+
+    repo = sub.add_parser("repo", help="what the workspace checkout looks like")
+    repo.add_argument("--workspace", default=".")
+    repo.set_defaults(handler=command_repo)
+
+    publish = sub.add_parser(
+        "publish", help="commit a run's transcript and screenshots to the repository")
+    publish.add_argument("run_dir")
+    publish.add_argument("--workspace", default=".")
+    publish.add_argument("-m", "--message", default="",
+                         help="commit subject; one is written for you if omitted")
+    publish.add_argument("--include-video", action="store_true",
+                         help="commit the recordings too (they are large and "
+                              "permanent; consider Git LFS first)")
+    publish.add_argument("--no-push", action="store_true",
+                         help="commit but do not push")
+    publish.add_argument("--dry-run", action="store_true",
+                         help="list what would be committed and stop")
+    publish.set_defaults(handler=command_publish)
 
     copy = sub.add_parser("duplicate", help="copy a flow under a new identity")
     copy.add_argument("flow")

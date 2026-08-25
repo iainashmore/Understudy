@@ -32,6 +32,12 @@ from understudy.suite import SuiteError, is_suite_file, load_suite
 from understudy.pdf import write_pdf
 from understudy.transcript import write_transcript
 from understudy.transcript_html import write_html
+from understudy.vcs.backend import Repository
+from understudy.vcs.git import Git, GitError
+from understudy.vcs.remote import parse_remote
+from understudy.vcs import recent as recent_workspaces
+from understudy.vcs.source import SourceError, WorkspaceSource
+from understudy.vcs.source import parse as parse_source
 from understudy.resolvers import build as build_resolver
 from understudy.runner import Runner, Status, run_directory, write_csv
 
@@ -457,6 +463,144 @@ flows: []
     def test_credentials(self) -> dict[str, Any]:
         return credentials.check()
 
+    # -- repository -----------------------------------------------------------
+
+    @property
+    def repository(self) -> Repository:
+        return Repository(self.workspace.root)
+
+    def open_workspace(self, path: str) -> dict[str, Any]:
+        """Point the whole UI at a different folder.
+
+        An absolute path, deliberately: this is the one place the workspace's
+        own path guard cannot apply, because changing the workspace is exactly
+        what is being asked for. It is a local tool bound to the loopback
+        interface, and the person driving it already has a shell.
+        """
+        target = Path(path).expanduser()
+        if not target.is_absolute():
+            return {"error": "give an absolute path to the folder"}
+        if not target.exists():
+            return {"error": f"{target} does not exist"}
+        if not target.is_dir():
+            return {"error": f"{target} is not a folder"}
+
+        self.workspace = Workspace(target)
+        return {"workspace": str(self.workspace.root), "repo": self.repo_state()}
+
+    def connect_workspace(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Point the UI at a local folder, a GitHub repo, or a GitLab repo.
+
+        Cloning is the same git command for both providers; asking separately
+        is so each can ask for what it actually needs -- owner/repo for GitHub,
+        a project path and possibly a hostname for a company GitLab, and
+        neither for a folder.
+        """
+        try:
+            source = parse_source(payload)
+        except SourceError as exc:
+            return {"error": str(exc)}
+
+        target = Path(source.directory).expanduser()
+        if source.kind == "local":
+            outcome = self.open_workspace(str(target))
+        else:
+            if target.exists() and any(target.iterdir()):
+                # Already cloned: opening it is almost certainly what was
+                # meant, and refusing would send them to a shell to find out.
+                outcome = self.open_workspace(str(target))
+            else:
+                host = source.resolved_host
+                token = credentials.load().git_token(host)
+                try:
+                    Git.clone(source.clone_url, target, token=token, host=host,
+                              branch=source.branch)
+                except GitError as exc:
+                    return {"error": str(exc)}
+                outcome = self.open_workspace(str(target))
+
+        if "error" in outcome:
+            return outcome
+        outcome["recent"] = recent_workspaces.remember({
+            "kind": source.kind,
+            "directory": str(target),
+            # A folder is a folder. Carrying a repository name that was typed
+            # into the form and then not used makes the recent list lie.
+            "project": source.project if source.kind != "local" else "",
+            "host": source.host if source.kind != "local" else "",
+        })
+        return outcome
+
+    def recent_workspaces(self) -> dict[str, Any]:
+        return {"recent": recent_workspaces.load(),
+                "workspace": str(self.workspace.root)}
+
+    def forget_workspace(self, directory: str) -> dict[str, Any]:
+        return {"recent": recent_workspaces.forget(directory)}
+
+    def repo_state(self) -> dict[str, Any]:
+        return self.repository.state()
+
+    def repo_commit(self, paths: list[str], message: str) -> dict[str, Any]:
+        """Commit exactly the paths the user ticked.
+
+        Never everything that happens to be dirty: this is somebody's working
+        repository, and a tool that stages the lot will one day commit
+        something they were halfway through.
+        """
+        try:
+            outcome = self.repository.commit(list(paths or []), message)
+        except GitError as exc:
+            return {"error": str(exc)}
+        outcome["state"] = self.repo_state()
+        return outcome
+
+    def repo_push(self) -> dict[str, Any]:
+        try:
+            return self.repository.push()
+        except GitError as exc:
+            return {"error": str(exc), "state": self.repo_state()}
+
+    def repo_pull(self) -> dict[str, Any]:
+        try:
+            return self.repository.pull()
+        except GitError as exc:
+            return {"error": str(exc), "state": self.repo_state()}
+
+    def repo_checkout(self, branch: str, create: bool = False) -> dict[str, Any]:
+        try:
+            return {"state": self.repository.checkout(branch, create=create)}
+        except GitError as exc:
+            return {"error": str(exc), "state": self.repo_state()}
+
+    def repo_preview_publish(self, run_dir: str,
+                             include_video: bool = False) -> dict[str, Any]:
+        self.workspace.resolve(run_dir)
+        try:
+            return self.repository.preview_publish(
+                run_dir, include_video=include_video)
+        except (GitError, ValueError) as exc:
+            return {"error": str(exc)}
+
+    def repo_publish(self, run_dir: str, message: str = "",
+                     include_video: bool = False,
+                     push: bool = True) -> dict[str, Any]:
+        self.workspace.resolve(run_dir)
+        try:
+            return self.repository.publish(
+                run_dir, message=message, include_video=include_video, push=push)
+        except (GitError, ValueError) as exc:
+            return {"error": str(exc)}
+
+    def save_git_token(self, host: str, token: str) -> dict[str, Any]:
+        try:
+            return credentials.save_git_token(host, token).public()
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+    def clear_git_token(self, host: str) -> dict[str, Any]:
+        return credentials.clear_git_token(host).public()
+
     def rebuild_transcript(self, run_dir: str) -> dict[str, Any]:
         resolved = self.workspace.resolve(run_dir)
         return {
@@ -519,6 +663,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.list_files())
             elif route == "/api/credentials":
                 self._json(self.api.read_credentials())
+            elif route == "/api/repo":
+                self._json(self.api.repo_state())
+            elif route == "/api/workspace":
+                self._json(self.api.recent_workspaces())
             elif route == "/api/flows":
                 self._json({"flows": self.api.describe_flows()})
             elif route == "/api/suites":
@@ -566,6 +714,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.rebuild_transcript(body["run_dir"]))
             elif route == "/api/transcript/pdf":
                 self._json(self.api.export_pdf(body["run_dir"]))
+            elif route == "/api/workspace/open":
+                self._json(self.api.open_workspace(body["path"]))
+            elif route == "/api/workspace/connect":
+                self._json(self.api.connect_workspace(body))
+            elif route == "/api/workspace/forget":
+                self._json(self.api.forget_workspace(body["directory"]))
+            elif route == "/api/repo/suggest-message":
+                self._json({"message": self.api.repository.suggest_message(
+                    body.get("paths") or [])})
+            elif route == "/api/repo/commit":
+                self._json(self.api.repo_commit(
+                    body.get("paths") or [], body.get("message", "")))
+            elif route == "/api/repo/push":
+                self._json(self.api.repo_push())
+            elif route == "/api/repo/pull":
+                self._json(self.api.repo_pull())
+            elif route == "/api/repo/checkout":
+                self._json(self.api.repo_checkout(
+                    body["branch"], bool(body.get("create"))))
+            elif route == "/api/repo/publish/preview":
+                self._json(self.api.repo_preview_publish(
+                    body["run_dir"], bool(body.get("include_video"))))
+            elif route == "/api/repo/publish":
+                self._json(self.api.repo_publish(
+                    body["run_dir"], body.get("message", ""),
+                    bool(body.get("include_video")),
+                    bool(body.get("push", True))))
+            elif route == "/api/credentials/git":
+                self._json(self.api.save_git_token(body["host"], body["token"]))
+            elif route == "/api/credentials/git/delete":
+                self._json(self.api.clear_git_token(body["host"]))
             elif route == "/api/transcript/standalone":
                 self._json(self.api.export_standalone(body["run_dir"]))
             elif route == "/api/credentials":
