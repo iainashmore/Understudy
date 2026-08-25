@@ -23,6 +23,9 @@ from understudy.ui.server import Api, Handler, Workspace
 FLOW = """version: 1
 name: page-test
 title: Page test
+target_app:
+  web:
+    url: "about:blank"
 targets:
   box:
     web:
@@ -106,9 +109,35 @@ def test_the_flow_list_is_populated(page):
 
 
 def test_a_flow_lists_its_runs_underneath(page):
+    """And on the first draw, not after something else happens to redraw it.
+    The tree draws each flow's runs under it; drawn before the runs arrive it
+    said "no runs yet" over a workspace full of them."""
     page.locator(".tree-item").first.click()
     page.wait_for_timeout(300)
     assert page.locator(".run-list:not([hidden]) .run").count() == 1
+
+
+def test_showing_the_browser_is_not_offered_for_a_windows_flow(run_tab):
+    """There is no browser to show. An option that cannot mean anything is a
+    question the reader has to answer before they can ignore it."""
+    page = run_tab
+    assert page.locator("#headedLabel").is_visible(), "this flow drives a page"
+
+    page.evaluate("() => { document.getElementById('backend').value = 'native'; "
+                  "backendChanged(); }")
+    assert page.locator("#headedLabel").is_hidden()
+
+
+def test_the_form_says_what_the_flow_drives_rather_than_asking(run_tab):
+    """The flow file already says. Asking again is a question with one right
+    answer, and the wrong one fails at the first step with "flow has no
+    target_app.web section"."""
+    page = run_tab
+    page.locator(".tree-item").first.click()
+    page.wait_for_timeout(300)
+    page.click('nav button[data-tab="run"]')
+    assert page.locator("#backend").is_hidden(), "a choice with one option"
+    assert "web page" in page.locator("#drivesLabel").inner_text()
 
 
 def test_the_tag_box_offers_what_has_been_used_before(page):
@@ -162,7 +191,7 @@ class TestTheTagBox:
         page = run_tab
         page.click("#tagInput")
         page.type("#tagInput", "FD09")
-        page.click("#backend")
+        page.click("#drivesLabel")
         assert "FD09" in self.chips(page)
 
     def test_opening_a_flow_shows_what_it_was_last_run_against(self, run_tab):

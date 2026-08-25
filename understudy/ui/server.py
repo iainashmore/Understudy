@@ -157,8 +157,8 @@ class Api:
             entry: dict[str, Any] = {"path": relative, "name": "",
                                      "title": relative,
                                      "description": "", "tags": [],
-                                     "variants": 0, "embedded": False,
-                                     "error": None}
+                                     "variants": 0, "backends": [],
+                                     "embedded": False, "error": None}
             try:
                 flow = load_flow(self.workspace.resolve(relative))
                 entry.update(
@@ -167,6 +167,9 @@ class Api:
                     title=flow.title or flow.name, description=flow.description,
                     tags=list(flow.tags), steps=len(flow.steps),
                     variants=len(flow.embedded_prompts),
+                    # What this flow can be driven as. The flow says so; the
+                    # form has no business asking.
+                    backends=sorted(flow.target_app),
                     embedded=bool(flow.embedded_prompts),
                 )
             except Exception as exc:

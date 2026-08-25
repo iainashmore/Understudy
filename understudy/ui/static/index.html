@@ -194,16 +194,15 @@
 
       <section id="tab-run">
         <div class="row">
-          <label>Backend</label>
-          <select id="backend"><option value="web">web</option>
-            <option value="native">native</option></select>
-          <label title="Whether a model may resolve a control the deterministic strategies could not find">Agent</label>
-          <select id="agent" title="off: deterministic only. fallback: ask a model only when everything else fails. only: let a model resolve everything.">
-            <option value="off">off</option>
-            <option value="fallback">fallback</option><option value="only">only</option></select>
+          <label id="drivesLabel" title="What this flow drives. The flow file says which; this is only a choice when it describes both.">Drives</label>
+          <select id="backend" title="What this flow drives">
+            <option value="web">a web page</option>
+            <option value="native">a Windows application</option>
+          </select>
           <label id="headedLabel" title="Show the browser while it replays, instead of running it invisibly. Web flows only — a native application is always on screen."><input id="headed" type="checkbox"> show the browser</label>
           <label title="Capture a screenshot after every step, not only where the flow asks for one"><input id="captureSteps" type="checkbox"> screenshots</label>
           <label title="Record the replay to video"><input id="record" type="checkbox"> record video</label>
+          <label title="When the flow's own strategies cannot find a control, let a model look at the screen and find it. Off means the step fails instead — which is what you want when you are testing whether the flow still works."><input id="agentFallback" type="checkbox"> use agent</label>
         </div>
         <div class="row">
           <label style="width:74px" title="Recorded against every reply, so two runs can be compared later">Under test</label>
@@ -683,6 +682,7 @@ async function openFlow(path) {
   $("currentDesc").textContent = flow.description || "";
   markActive();
   loadSubject(path);
+  showWhatItDrives(flow);
   showTab("flow");
 }
 
@@ -778,6 +778,25 @@ async function removeCollection(path, name) {
 
 /* ---------- validate / run ---------- */
 
+function showWhatItDrives(flow) {
+  // The flow file already says what it drives. Asking again is a question
+  // with one right answer, and getting it wrong fails at the first step with
+  // "flow has no target_app.web section".
+  const backends = (flow && flow.backends) || [];
+  const picker = $("backend"), label = $("drivesLabel");
+  if (backends.length === 1) {
+    picker.value = backends[0];
+    picker.hidden = true;
+    label.textContent = "Drives " + (backends[0] === "native"
+      ? "a Windows application" : "a web page");
+  } else {
+    picker.hidden = false;
+    label.textContent = "Drives";
+    if (backends.length) picker.value = backends[0];
+  }
+  backendChanged();
+}
+
 $("validate").onclick = async () => {
   if (!state.flow) return alert("Open a flow first.");
   const result = await post("/api/validate", { flow: state.flow, backend: $("backend").value });
@@ -796,14 +815,12 @@ $("validate").onclick = async () => {
 };
 
 function backendChanged() {
-  // A native application is on screen by definition. Leaving a checkbox that
-  // does nothing is how somebody concludes the tool ignored them.
+  // There is no browser to show when the flow drives a Windows application,
+  // and an option that cannot mean anything is worse than a missing one: it
+  // is a question the reader has to answer before they can ignore it.
   const native = $("backend").value === "native";
-  $("headed").disabled = native;
-  $("headedLabel").classList.toggle("muted", native);
-  $("headedLabel").title = native
-    ? "A native application is always on screen — nothing to show or hide."
-    : "Show the browser while it replays, instead of running it invisibly.";
+  $("headedLabel").hidden = native;
+  if (native) $("headed").checked = false;
 }
 $("backend").addEventListener("change", backendChanged);
 backendChanged();
@@ -827,7 +844,8 @@ $("run").onclick = async () => {
       flow: state.flow, backend: $("backend").value,
       // Every prompt, every time. A run of some of them is not a run of the
       // flow, and two runs to compare have to have asked the same questions.
-      agent: $("agent").value, headed: $("headed").checked,
+      agent: $("agentFallback").checked ? "fallback" : "off",
+      headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
       record: $("record").checked,
       subject: readSubject(),
@@ -861,7 +879,7 @@ function listen(runId) {
       logLine(`done: ${event.ok}/${event.total} ok`,
               event.ok === event.total ? "ok" : "warn");
       loadTranscript(event.transcript, event.transcript_html);
-      loadRuns();
+      loadRuns().then(loadTree).catch(() => {});
     }
     if (event.type === "failed") logLine("failed: " + event.error, "bad");
     if (event.type === "end") { events.close(); $("run").disabled = false; }
@@ -1529,12 +1547,18 @@ $("testCreds").onclick = async () => {
     : `<p class="bad">${escapeHtml(result.error)}</p>`;
 };
 
-loadTree().then(() => {
-  if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
-}).catch((error) => logLine("could not list flows: " + error.message, "bad"));
+// Runs first: the tree draws each flow's runs underneath it, and a tree drawn
+// before the runs arrive shows "no runs yet" over a workspace full of them
+// until something else happens to redraw it.
+loadRuns()
+  .catch(() => {})
+  .then(loadTree)
+  .then(() => {
+    if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
+  })
+  .catch((error) => logLine("could not list flows: " + error.message, "bad"));
 loadCredentials().catch(() => {});
 showSourceKind("local");     // a plain folder is the default and needs nothing
-loadRuns().catch(() => {});
 loadRepo().catch(() => {});
 // The panel is only right while nobody else is touching the checkout, and
 // somebody usually is -- an editor saving a flow, a run finishing, a git pull
