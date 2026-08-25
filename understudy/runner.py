@@ -253,7 +253,7 @@ class Runner:
         )
         counter = {"n": 0}
         result.pointer_note = getattr(self.driver, "pointer_note", None)
-        recording_started = self._start_recording(folder)
+        recording_started = self._start_recording(folder, result)
 
         try:
             if self.reset_level >= 2:
@@ -280,16 +280,29 @@ class Runner:
         result.duration_ms = int((time.monotonic() - started) * 1000)
         return result
 
-    def _start_recording(self, folder: str) -> bool:
+    def _start_recording(self, folder: str, result: VariantResult) -> bool:
+        """Begin recording, and say so in the result when it could not.
+
+        A run asked to record that quietly produces no video is worse than one
+        that fails: nothing in the transcript, the results or the console says
+        anything is missing, so it looks like a video nobody thought to open.
+        A refusal now carries its reason.
+        """
         if not self.record:
             return False
         starter = getattr(self.driver, "start_recording", None)
         if starter is None:
+            result.recording_error = "this backend cannot record"
             return False
         try:
-            return bool(starter(self.out_dir / folder / "recording.mp4"))
-        except Exception:
+            started = bool(starter(self.out_dir / folder / "recording.mp4"))
+        except Exception as exc:
+            result.recording_error = f"{type(exc).__name__}: {exc}"
             return False
+        if not started:
+            why = getattr(self.driver, "recording_unavailable", lambda: None)()
+            result.recording_error = why or "the recorder would not start"
+        return started
 
     def _stop_recording(self, result: VariantResult) -> None:
         stopper = getattr(self.driver, "stop_recording", None)

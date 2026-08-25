@@ -48,7 +48,9 @@ def main() -> int:
         # match everywhere or nowhere. This is exactly the lesson from the CAD
         # fixture: anchor on something that does not change, and act at an
         # offset from it.
-        menu = crop(window, x=0, y=0, width=min(220, width), height=min(60, height))
+        menu = crop(window, {"x": 0, "y": 0,
+                             "width": min(220, width),
+                             "height": min(60, height)})
         (ANCHORS / "menu_bar.png").write_bytes(to_png_bytes(menu))
         print(f"  menu_bar.png   {menu.shape[1]}x{menu.shape[0]}")
 

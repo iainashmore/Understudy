@@ -265,6 +265,11 @@ class NativeDriver:
     def stop_recording(self) -> Recording:
         return self.recorder.stop()
 
+    def recording_unavailable(self) -> str | None:
+        if getattr(self.recorder, "available", False):
+            return None
+        return getattr(self.recorder, "reason", None) or "the recorder is not ready"
+
     # -- pointer --------------------------------------------------------------
 
     def pointer_position(self) -> tuple[int, int]:

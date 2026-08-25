@@ -228,6 +228,7 @@ class NullRecorder:
     """Records nothing, and says why."""
 
     backend = "none"
+    available = False
 
     def __init__(self, reason: str = "recording is off") -> None:
         self.reason = reason
@@ -258,6 +259,14 @@ class FfmpegRecorder:
     @property
     def available(self) -> bool:
         return bool(self.ffmpeg)
+
+    @property
+    def reason(self) -> str | None:
+        """Why it cannot record, or None when it can."""
+        if self.ffmpeg:
+            return None
+        return ("ffmpeg was not found: not on PATH, and no copy staged by "
+                "packaging/fetch_payload.py")
 
     def start(self, path: Path) -> bool:
         if not self.ffmpeg:

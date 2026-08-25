@@ -223,7 +223,12 @@ class TestRecording:
         assert results[0].recording is None
 
     def test_a_driver_that_cannot_record_does_not_fail_the_run(self, tmp_path):
-        """A missing recorder is a note in the results, never a lost sweep."""
+        """A missing recorder is a note in the results, never a lost sweep.
+
+        A note, though: a run asked to record and silently producing nothing is
+        worse than one that fails, because nothing anywhere says a video is
+        missing. It looks like one nobody thought to open.
+        """
         flow = make_flow(tmp_path, "?mode=instant&dialog=none")
         driver = build("web")
         driver.start(flow.app_config("web"))
@@ -237,3 +242,21 @@ class TestRecording:
 
         assert result.status is Status.OK
         assert result.recording is None
+        assert result.recording_error, "it recorded nothing and said nothing"
+
+    def test_the_refusal_carries_the_driver_own_reason(self, tmp_path):
+        """Whatever the backend knows about why. "ffmpeg is not installed" is
+        actionable; "the recorder would not start" is a shrug."""
+        flow = make_flow(tmp_path, "?mode=instant&dialog=none")
+        driver = build("web")
+        driver.start(flow.app_config("web"))
+        driver.start_recording = lambda path: False
+        driver.recording_unavailable = lambda: "ffmpeg is not installed"
+        try:
+            runner = Runner(flow, driver, tmp_path / "out", record=True)
+            runner.prepare(PROMPTS)
+            result = runner.run_variant(PROMPTS.variants[0])
+        finally:
+            driver.stop()
+
+        assert result.recording_error == "ffmpeg is not installed"

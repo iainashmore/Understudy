@@ -61,7 +61,26 @@ jobs:
         run: pytest tests/understudy/test_native_live.py -v -m native_live
 
       - name: Fetch ffmpeg, so the recorder can be proven too
-        run: python packaging/fetch_payload.py --skip-browsers --skip-ocr
+        shell: bash
+        run: |
+          python packaging/fetch_payload.py --skip-browsers --skip-ocr
+          # pwd -W, not $PWD: Git Bash reports /d/a/..., which Python -- a
+          # native Windows process -- cannot resolve, so shutil.which never
+          # finds ffmpeg. That is why the first Notepad run recorded nothing.
+          echo "$(pwd -W)/packaging/payload/tools" >> "$GITHUB_PATH"
+
+      - name: Check the recorder can actually see it
+        shell: bash
+        run: |
+          # Fail here rather than producing a run with no video in it. The
+          # whole point of fetching ffmpeg is that the recorder gets exercised.
+          python -c "
+          import sys
+          from understudy.recording import find_ffmpeg
+          found = find_ffmpeg()
+          print('ffmpeg:', found)
+          sys.exit(0 if found else 1)
+          "
 
       - name: Replay a flow against Notepad
         shell: bash
@@ -69,7 +88,6 @@ jobs:
           # The driver tests exercise the driver. This exercises everything
           # above it -- runner, screenshots, reads, transcript, video -- which
           # is the part somebody actually looks at.
-          export PATH="$PWD/packaging/payload/tools:$PATH"
           python -m understudy.cli run examples/notepad.yaml \
             --backend native --out runs/notepad --record --pdf
 
@@ -83,7 +101,6 @@ jobs:
           # found by matching a picture, the text read by OCR off the pixels.
           # Nothing here asks UIA for a control type, a name or an automation
           # id, because a CAD package exposes none of them.
-          export PATH="$PWD/packaging/payload/tools:$PATH"
           python -m understudy.cli run examples/notepad_blind.yaml \
             --backend native --out runs/notepad-blind --record
 

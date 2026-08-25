@@ -315,6 +315,13 @@ class WebDriver:
         self._open_context()
         return True
 
+    def recording_unavailable(self) -> str | None:
+        if self.attached:
+            return ("recording is not available when attached over CDP: the "
+                    "browser context belongs to the host application, and "
+                    "recording one means replacing it")
+        return None
+
     def stop_recording(self) -> Recording:
         if self._recording_to is None:
             return Recording(backend="playwright", error="not started")

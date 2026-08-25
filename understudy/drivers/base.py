@@ -109,3 +109,13 @@ class Driver(Protocol):
     def stop_recording(self) -> Any:
         """Finish and return a `Recording`."""
         ...
+
+    def recording_unavailable(self) -> str | None:
+        """Why `start_recording` would refuse, or None if it would work.
+
+        Optional, and only consulted after a refusal. A run asked to record
+        and silently producing no video is the worst of the three outcomes:
+        the reason belongs in the results next to everything else that did
+        not go to plan.
+        """
+        return None

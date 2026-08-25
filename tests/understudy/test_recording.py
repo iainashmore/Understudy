@@ -156,6 +156,10 @@ class TestRecorders:
         assert recorder.available is False
         assert recorder.start(tmp_path / "out.mp4") is False
         assert recorder.stop().ok is False
+        # And it can say why, which is what the run reports rather than
+        # producing no video and mentioning it nowhere.
+        assert "ffmpeg" in recorder.reason
+        assert FfmpegRecorder(ffmpeg="ffmpeg").reason is None
 
     def test_a_region_that_cannot_be_encoded_fails_to_start_cleanly(self, tmp_path):
         recorder = FfmpegRecorder(region={"x": 0, "y": 0, "width": 1, "height": 1},
