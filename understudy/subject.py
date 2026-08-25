@@ -26,6 +26,10 @@ from typing import Any
 #: about box, and no scheme survives contact with all of them.
 FIELDS = ("app", "app_version", "model", "model_version", "release", "notes")
 
+#: Free-form tags live alongside the fields above rather than among them: they
+#: have no place in "CATIA V5 R33 · LEO", and a list is not a string.
+LIST_FIELDS = ("tags",)
+
 LABELS = {
     "app": "Application",
     "app_version": "Application version",
@@ -44,13 +48,22 @@ class Subject:
     model_version: str = ""
     release: str = ""
     notes: str = ""
+    #: Anything else worth recording about this run: the machine it ran on,
+    #: the ticket it belongs to, "after the hotfix". No schema survives what
+    #: people want to label a run with, so this one does not try.
+    tags: tuple[str, ...] = ()
 
     @property
     def recorded(self) -> bool:
-        return any(getattr(self, field) for field in FIELDS)
+        return any(getattr(self, field) for field in FIELDS) or bool(self.tags)
 
-    def as_dict(self) -> dict[str, str]:
-        return {f: getattr(self, f) for f in FIELDS if getattr(self, f)}
+    def as_dict(self) -> dict[str, Any]:
+        recorded: dict[str, Any] = {
+            f: getattr(self, f) for f in FIELDS if getattr(self, f)
+        }
+        if self.tags:
+            recorded["tags"] = list(self.tags)
+        return recorded
 
     def summary(self) -> str:
         """One line, for a table cell or a commit subject."""
@@ -61,8 +74,8 @@ class Subject:
             parts.append(f"({self.release})")
         return " · ".join(parts)
 
-    def tags(self) -> tuple[tuple[str, str], ...]:
-        """(field, value) for everything recorded, in reading order.
+    def labels(self) -> tuple[tuple[str, str], ...]:
+        """(field, value) for every structured field recorded, in reading order.
 
         The same facts as `summary()`, kept apart instead of joined into a
         sentence, so a reader can pick "FD03" out of a header at a glance and
@@ -77,6 +90,10 @@ class Subject:
             if field != "notes" and getattr(self, field)
         )
 
+    def chips(self) -> tuple[str, ...]:
+        """Everything this run is labelled with, structured or not, to show."""
+        return tuple([value for _, value in self.labels()] + list(self.tags))
+
     def merged_with(self, other: "Subject") -> "Subject":
         """`other` wins where it says anything.
 
@@ -86,19 +103,25 @@ class Subject:
         """
         return replace(self, **{
             field: getattr(other, field)
-            for field in FIELDS if getattr(other, field)
+            for field in FIELDS + LIST_FIELDS if getattr(other, field)
         })
 
     @classmethod
     def from_config(cls, config: dict[str, Any] | None) -> "Subject":
         config = config or {}
-        unknown = sorted(set(config) - set(FIELDS))
+        unknown = sorted(set(config) - set(FIELDS) - set(LIST_FIELDS))
         if unknown:
             raise ValueError(
                 f"unknown subject field(s): {', '.join(unknown)}. "
-                f"Expected any of: {', '.join(FIELDS)}"
+                f"Expected any of: {', '.join(FIELDS + LIST_FIELDS)}"
             )
-        return cls(**{f: str(config.get(f, "") or "").strip() for f in FIELDS})
+        raw = config.get("tags") or ()
+        if isinstance(raw, str):
+            raw = [part.strip() for part in raw.split(",")]
+        return cls(
+            **{f: str(config.get(f, "") or "").strip() for f in FIELDS},
+            tags=tuple(str(t).strip() for t in raw if str(t).strip()),
+        )
 
 
 # -- remembering it between runs ----------------------------------------------

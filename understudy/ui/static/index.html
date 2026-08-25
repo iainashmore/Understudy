@@ -102,6 +102,21 @@
   .notice { border-left:3px solid var(--warn); padding:8px 12px;
             background:rgba(224,169,79,.08); border-radius:0 4px 4px 0; }
   button.toggle { opacity:.55; }
+  /* One control rather than five boxes. A tag is a word; a tag with a known
+     prefix in front of it fills a field the comparison can label a column
+     with, which is the only reason the fields still exist. */
+  .chips { display:flex; flex-wrap:wrap; align-items:center; gap:5px; flex:1;
+           min-height:31px; padding:3px 6px; border:1px solid var(--line);
+           border-radius:4px; background:#1a1e23; }
+  .chips .chip { display:inline-flex; align-items:center; gap:5px; padding:1px 4px 1px 9px;
+                 border:1px solid var(--line); border-radius:11px; font-size:12px;
+                 background:var(--panel); }
+  .chips .chip.free { border-style:dashed; }
+  .chips .chip button { border:none; background:none; color:var(--dim); padding:0 3px;
+                        font-size:13px; line-height:1; cursor:pointer; }
+  .chips .chip button:hover { color:var(--bad); background:none; }
+  .chips input { flex:1; min-width:170px; border:none; background:none; padding:2px; }
+  .chips input:focus { outline:none; }
   .segmented { display:inline-flex; border:1px solid var(--line); border-radius:5px;
                overflow:hidden; }
   .segmented button { border:none; border-radius:0; background:#1a1e23;
@@ -182,28 +197,26 @@
           <label>Backend</label>
           <select id="backend"><option value="web">web</option>
             <option value="native">native</option></select>
-          <label>Repeats</label>
-          <input id="repeats" type="number" value="1" min="1" style="width:64px">
-          <label>Only</label>
-          <input id="only" placeholder="baseline,terse" style="width:170px">
-          <label>Agent</label>
-          <select id="agent"><option value="off">off</option>
+          <label title="Which of this flow's prompts to replay">Replay</label>
+          <select id="only" title="Which of this flow's prompts to replay">
+            <option value="">every prompt</option>
+          </select>
+          <label title="Whether a model may resolve a control the deterministic strategies could not find">Agent</label>
+          <select id="agent" title="off: deterministic only. fallback: ask a model only when everything else fails. only: let a model resolve everything.">
+            <option value="off">off</option>
             <option value="fallback">fallback</option><option value="only">only</option></select>
-          <label><input id="headed" type="checkbox"> headed</label>
-          <label><input id="captureSteps" type="checkbox"> shot every step</label>
-          <label><input id="record" type="checkbox"> record video</label>
+          <label id="headedLabel" title="Show the browser while it replays, instead of running it invisibly. Web flows only — a native application is always on screen."><input id="headed" type="checkbox"> show the browser</label>
+          <label title="Capture a screenshot after every step, not only where the flow asks for one"><input id="captureSteps" type="checkbox"> screenshots</label>
+          <label title="Record the replay to video"><input id="record" type="checkbox"> record video</label>
         </div>
         <div class="row">
           <label style="width:74px" title="Recorded against every reply, so two runs can be compared later">Under test</label>
-          <input id="subjApp" placeholder="application, e.g. CATIA V5" style="width:190px">
-          <input id="subjAppVersion" placeholder="version, e.g. R32 SP4" style="width:150px">
-          <input id="subjModel" placeholder="assistant, e.g. LEO" style="width:150px">
-          <input id="subjModelVersion" placeholder="its version" style="width:130px">
-          <input id="subjRelease" placeholder="build" style="width:100px">
+          <div id="subjectTags" class="chips">
+            <input id="tagInput" list="known-tags" autocomplete="off"
+                   placeholder="R2026x, FD03, app:CATIA V5 …">
+          </div>
         </div>
-        <p class="muted" style="margin:0 0 8px">Remembered per flow — type a
-          service pack once and later runs carry it. It is what the columns are
-          labelled with when you compare two runs.</p>
+        <datalist id="known-tags"></datalist>
         <div id="validation"></div>
         <div id="log"></div>
       </section>
@@ -449,7 +462,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { flow: null, flows: [], suites: [], runId: null, results: [],
                 transcript: null, transcriptHtml: null, outDir: null,
-                runFilter: "" };
+                runFilter: "", subject: { fields: {}, tags: [] } };
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.onclick = () => {
@@ -674,6 +687,7 @@ async function openFlow(path) {
   $("currentDesc").textContent = flow.description || "";
   markActive();
   loadSubject(path);
+  fillPromptPicker(flow);
   showTab("flow");
 }
 
@@ -786,6 +800,28 @@ $("validate").onclick = async () => {
   showTab("run");
 };
 
+function fillPromptPicker(flow) {
+  // Named, not typed. "baseline,terse" asked somebody to remember ids from a
+  // file they may not have written.
+  const ids = (flow && flow.prompt_ids) || [];
+  $("only").innerHTML = '<option value="">every prompt</option>'
+    + ids.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`)
+         .join("");
+}
+
+function backendChanged() {
+  // A native application is on screen by definition. Leaving a checkbox that
+  // does nothing is how somebody concludes the tool ignored them.
+  const native = $("backend").value === "native";
+  $("headed").disabled = native;
+  $("headedLabel").classList.toggle("muted", native);
+  $("headedLabel").title = native
+    ? "A native application is always on screen — nothing to show or hide."
+    : "Show the browser while it replays, instead of running it invisibly.";
+}
+$("backend").addEventListener("change", backendChanged);
+backendChanged();
+
 function logLine(text, cls) {
   const line = document.createElement("div");
   if (cls) line.className = cls;
@@ -803,8 +839,7 @@ $("run").onclick = async () => {
   try {
     const started = await post("/api/run", {
       flow: state.flow, backend: $("backend").value,
-      repeats: Number($("repeats").value) || 1,
-      only: $("only").value.split(",").map((s) => s.trim()).filter(Boolean),
+      only: $("only").value ? [$("only").value] : [],
       agent: $("agent").value, headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
       record: $("record").checked,
@@ -948,7 +983,6 @@ function download(path) {
 
 let knownRuns = [];
 
-// SUBJECT_FIELDS is declared with the rest of the subject handling below.
 async function loadKnownSubjects() {
   // Typing "R2026x FD03" again to re-run last month's build is the retyping
   // that produces "FD3" on the fortieth run, and a tag with a typo in it is a
@@ -959,20 +993,20 @@ async function loadKnownSubjects() {
   } catch (error) {
     return;
   }
-  for (const [field, inputId] of Object.entries(SUBJECT_FIELDS)) {
-    const input = $(inputId);
-    if (!input) continue;
-    const listId = `known-${field}`;
-    let list = document.getElementById(listId);
-    if (!list) {
-      list = document.createElement("datalist");
-      list.id = listId;
-      document.body.appendChild(list);
-      input.setAttribute("list", listId);
+  const seen = [];
+  for (const [field, list] of Object.entries(values)) {
+    for (const value of list || []) {
+      // Suggested bare, because that is how it is usually typed. The prefixed
+      // form is offered too, for the day two fields hold the same word.
+      if (!seen.includes(value)) seen.push(value);
+      const prefix = PREFIX_OF[field];
+      if (prefix && !seen.includes(`${prefix}:${value}`)) {
+        seen.push(`${prefix}:${value}`);
+      }
     }
-    list.innerHTML = (values[field] || [])
-      .map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
   }
+  $("known-tags").innerHTML = seen
+    .map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
 }
 
 async function loadRuns() {
@@ -1028,28 +1062,110 @@ $("cmpGo").onclick = async () => {
 
 /* ---------- what was under test ---------- */
 
-const SUBJECT_FIELDS = {
-  app: "subjApp", app_version: "subjAppVersion", model: "subjModel",
-  model_version: "subjModelVersion", release: "subjRelease",
+// A tag is a word. A tag with one of these in front of it fills a field, and
+// the only reason the fields exist is that a comparison labels its columns
+// with them -- "CATIA V5 R2026x · LEO FD03" over a column of answers.
+const TAG_PREFIXES = {
+  app: "app", application: "app",
+  version: "app_version", "app-version": "app_version",
+  model: "model", assistant: "model",
+  "model-version": "model_version", "assistant-version": "model_version",
+  build: "release", release: "release",
+  note: "notes", notes: "notes",
+};
+const PREFIX_OF = {
+  app: "app", app_version: "version", model: "model",
+  model_version: "model-version", release: "build", notes: "note",
+};
+const FIELD_LABELS = {
+  app: "Application", app_version: "Application version",
+  model: "Assistant or model", model_version: "Assistant version",
+  release: "Release or build", notes: "Notes",
 };
 
 function readSubject() {
   const subject = {};
-  for (const [field, id] of Object.entries(SUBJECT_FIELDS)) {
-    const value = $(id).value.trim();
+  for (const [field, value] of Object.entries(state.subject.fields || {})) {
     if (value) subject[field] = value;
   }
+  if ((state.subject.tags || []).length) subject.tags = state.subject.tags;
   return subject;
 }
 
+function addTag(text) {
+  const raw = (text || "").trim().replace(/,+$/, "");
+  if (!raw) return;
+  const [head, ...rest] = raw.split(":");
+  const field = TAG_PREFIXES[head.trim().toLowerCase()];
+  if (field && rest.length && rest.join(":").trim()) {
+    state.subject.fields[field] = rest.join(":").trim();
+  } else if (!state.subject.tags.includes(raw)) {
+    state.subject.tags.push(raw);
+  }
+  renderSubject();
+}
+
+function removeTag(kind, key) {
+  if (kind === "field") delete state.subject.fields[key];
+  else state.subject.tags = state.subject.tags.filter((t) => t !== key);
+  renderSubject();
+}
+
+function renderSubject() {
+  const box = $("subjectTags");
+  const input = $("tagInput");
+  [...box.querySelectorAll(".chip")].forEach((chip) => chip.remove());
+
+  const chips = [];
+  for (const field of Object.keys(FIELD_LABELS)) {
+    const value = (state.subject.fields || {})[field];
+    if (value) chips.push(["field", field, value, FIELD_LABELS[field]]);
+  }
+  for (const tag of state.subject.tags || []) chips.push(["tag", tag, tag, "tag"]);
+
+  for (const [kind, key, value, title] of chips) {
+    const chip = document.createElement("span");
+    chip.className = "chip" + (kind === "tag" ? " free" : "");
+    chip.title = title;
+    chip.innerHTML = `<span>${escapeHtml(value)}</span><button type="button"
+      aria-label="remove">×</button>`;
+    chip.querySelector("button").onclick = () => removeTag(kind, key);
+    box.insertBefore(chip, input);
+  }
+}
+
+$("tagInput").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === ",") {
+    event.preventDefault();
+    addTag(event.target.value);
+    event.target.value = "";
+  } else if (event.key === "Backspace" && !event.target.value) {
+    // The last thing typed is the thing most likely being corrected.
+    const tags = state.subject.tags || [];
+    const fields = Object.keys(state.subject.fields || {});
+    if (tags.length) removeTag("tag", tags[tags.length - 1]);
+    else if (fields.length) removeTag("field", fields[fields.length - 1]);
+  }
+});
+// Losing focus commits it too: a run started with a half-typed build in the
+// box and nothing recorded is a run that has to be done again.
+$("tagInput").addEventListener("blur", (event) => {
+  addTag(event.target.value);
+  event.target.value = "";
+});
+
 async function loadSubject(flowPath) {
   if (!flowPath) return;
+  state.subject = { fields: {}, tags: [] };
   try {
     const known = await post("/api/subject", { flow: flowPath });
-    for (const [field, id] of Object.entries(SUBJECT_FIELDS)) {
-      $(id).value = (known.subject || {})[field] || "";
+    const subject = known.subject || {};
+    for (const field of Object.keys(FIELD_LABELS)) {
+      if (subject[field]) state.subject.fields[field] = subject[field];
     }
-  } catch (error) { /* the fields are just empty, which is fine */ }
+    state.subject.tags = [...(subject.tags || [])];
+  } catch (error) { /* an empty box is a fine starting point */ }
+  renderSubject();
 }
 
 /* ---------- repository ---------- */

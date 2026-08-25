@@ -105,7 +105,7 @@ def _tags_markdown(subject) -> str:
     """The application and its version, the assistant and its version, each
     on its own -- because "R2026x FD03" is the thing a reader is looking for
     and a sentence buries it."""
-    return " ".join(f"`{value}`" for _, value in subject.tags())
+    return " ".join(f"`{value}`" for value in subject.chips())
 
 
 def _image(run_dir: Path, relative: str, width: int, embed: bool,

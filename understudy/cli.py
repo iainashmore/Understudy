@@ -455,7 +455,9 @@ def main(argv: list[str] | None = None) -> int:
         child.add_argument("--backend", default="web", choices=["web", "native"])
         child.set_defaults(handler=handler)
         if name == "run":
-            child.add_argument("--only", default=None, help="comma-separated prompt ids")
+            child.add_argument(
+                "--only", default=None, metavar="IDS",
+                help="run only these prompts, comma separated (default: all)")
             child.add_argument("--repeat", type=int, default=1)
             child.add_argument("--out", default=None)
             child.add_argument("--runs-root", default="runs")

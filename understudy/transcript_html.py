@@ -84,6 +84,7 @@ body.only-turns li.entry:not([data-turn]) { display:none; }
 body.only-turns li.entry figure,
 body.only-turns li.entry .entry-meta,
 body.only-turns details { display:none; }
+.tagchip.free { border-style:dashed; }
 .tagchip { display:inline-block; margin-left:6px; padding:1px 8px; font-size:12px;
            border:1px solid var(--line); border-radius:10px; color:var(--fg);
            background:var(--panel); }
@@ -206,7 +207,9 @@ def _subject_tags(subject) -> str:
         return ""
     chips = "".join(f'<span class="tagchip" title="{_e(LABELS[field])}">'
                     f"{_e(value)}</span>"
-                    for field, value in subject.tags())
+                    for field, value in subject.labels())
+    chips += "".join(f'<span class="tagchip free">{_e(tag)}</span>'
+                     for tag in subject.tags)
     return f"<span><b>Under test</b> {chips}</span>"
 
 

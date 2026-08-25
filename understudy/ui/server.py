@@ -157,7 +157,8 @@ class Api:
             entry: dict[str, Any] = {"path": relative, "name": "",
                                      "title": relative,
                                      "description": "", "tags": [],
-                                     "variants": 0, "embedded": False, "error": None}
+                                     "variants": 0, "prompt_ids": [],
+                                     "embedded": False, "error": None}
             try:
                 flow = load_flow(self.workspace.resolve(relative))
                 entry.update(
@@ -166,6 +167,10 @@ class Api:
                     title=flow.title or flow.name, description=flow.description,
                     tags=list(flow.tags), steps=len(flow.steps),
                     variants=len(flow.embedded_prompts),
+                    # So the run form can offer them by name rather than
+                    # asking somebody to type ids from memory.
+                    prompt_ids=[str(entry.get("id", "")) for entry
+                                in flow.embedded_prompts if entry.get("id")],
                     embedded=bool(flow.embedded_prompts),
                 )
             except Exception as exc:
@@ -504,8 +509,8 @@ flows: []
                 entry["subject"] = subject.summary()
                 # Separately as well, so the list can be filtered by a version
                 # rather than by a substring of a sentence.
-                entry["tags"] = [value for _, value in subject.tags()]
-                entry["by_field"] = dict(subject.tags())
+                entry["tags"] = list(subject.chips())
+                entry["by_field"] = dict(subject.labels())
                 entry["total"] = len(results)
                 entry["ok"] = sum(1 for r in results if r.get("status") == "ok")
             entry["label"] = " · ".join(
@@ -570,7 +575,25 @@ flows: []
         # The same order the run itself uses, so the form shows what would
         # actually be recorded rather than something close to it.
         subject = resolve_subject(flow.name, flow.subject, Subject())
+        if not subject.recorded:
+            # Nothing remembered on this machine. The runs on disk are the
+            # better record anyway: a workspace cloned from the repository
+            # arrives full of runs and an empty local store, and the last
+            # thing this flow was run against is sitting right there.
+            subject = self._subject_of_last_run(flow.name)
         return {"subject": subject.as_dict(), "summary": subject.summary()}
+
+    def _subject_of_last_run(self, flow_name: str) -> Subject:
+        for directory in sorted(self.workspace.runs_root.glob("*"), reverse=True):
+            if not directory.is_dir():
+                continue
+            try:
+                results = load_results(directory)
+            except Exception:
+                continue
+            if results and results[0].get("flow") == flow_name:
+                return Subject.from_config(results[0].get("subject") or {})
+        return Subject()
 
     # -- repository -----------------------------------------------------------
 
