@@ -30,7 +30,6 @@
   #newRecord { display:inline-flex; align-items:center; gap:6px; }
   .rec-dot { width:9px; height:9px; border-radius:50%; background:var(--bad);
              box-shadow:0 0 0 2px rgba(224,92,92,.25); flex:none; }
-  nav button[data-tab="record"] { display:inline-flex; align-items:center; gap:6px; }
   button.link:hover { color:var(--text); background:#333c47; }
 
   #body { display:grid; grid-template-columns:290px 1fr; min-height:0; }
@@ -66,20 +65,7 @@
   .tree-group > .head .actions { display:none; gap:2px; margin-left:auto; }
   .desc { color:var(--dim); font-size:11px; padding:0 6px 4px 20px; }
 
-  main { overflow:auto; min-height:0; display:grid; grid-template-rows:auto 1fr; }
-  nav { display:flex; gap:2px; padding:0 14px; background:var(--panel);
-        border-bottom:1px solid var(--line); }
-  nav button { border:none; border-radius:0; background:transparent; color:var(--dim);
-               padding:8px 14px; border-bottom:2px solid transparent; }
-  nav button.active { color:var(--text); border-bottom-color:var(--accent); }
-  nav button:disabled { opacity:.35; cursor:default; }
-  nav button:disabled:hover { background:transparent; }
-  /* What the group of tabs to the right of it is about. */
-  .scope { align-self:center; padding:0 8px 0 2px; font-size:10.5px;
-           text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
-           max-width:190px; overflow:hidden; text-overflow:ellipsis;
-           white-space:nowrap; }
-  .scope-rule { width:1px; margin:8px 8px; background:var(--line); }
+  main { overflow:auto; min-height:0; }
   .pane { padding:14px; overflow:auto; }
   section { display:none; } section.active { display:block; }
   textarea { width:100%; height:calc(100vh - 250px); min-height:280px;
@@ -138,6 +124,14 @@
   .badge { display:inline-block; min-width:8px; padding:0 5px; border-radius:8px;
            font-size:11px; color:var(--dim); }
   .badge.on { background:var(--accent); color:#0d1319; font-weight:700; }
+  #settings { font-size:15px; line-height:1; padding:5px 9px; }
+  #settingsMenu { position:absolute; right:14px; top:44px; z-index:10;
+                  background:var(--panel); border:1px solid var(--line);
+                  border-radius:6px; padding:4px; display:flex;
+                  flex-direction:column; min-width:150px; }
+  #settingsMenu button { border:none; background:none; text-align:left;
+                         padding:6px 10px; border-radius:4px; }
+  #settingsMenu button:hover { background:#333c47; }
   button.toggle.on { opacity:1; border-color:var(--accent); color:var(--text); }
   #cmpStatus { padding:4px 0 2px; }
   #cmpStatus a { color:var(--accent); margin-left:4px; }
@@ -160,6 +154,12 @@
   <span class="grow"></span>
   <button id="validate">Validate</button>
   <button id="run" class="primary">Replay</button>
+  <button id="settings" title="Repository and credentials">⚙<span id="repoBadge"
+    class="badge"></span></button>
+  <div id="settingsMenu" hidden>
+    <button data-view="repo">Repository</button>
+    <button data-view="credentials">Credentials</button>
+  </div>
 </header>
 
 <div id="body">
@@ -174,42 +174,11 @@
   </aside>
 
   <main>
-    <nav>
-      <!-- Three scopes, in the order you work in: the flow you are editing,
-           the run it produced, and the things that belong to no flow at all.
-           A tab whose subject is not selected is disabled rather than hidden,
-           so the shape of the tool does not change under the reader. -->
-      <span class="scope" id="scopeFlow">flow</span>
-      <button data-tab="flow" data-scope="flow" class="active">Flow</button>
-      <button data-tab="run" data-scope="flow">Run</button>
-      <button data-tab="record" data-scope="flow"><span class="rec-dot"></span>Record</button>
-      <span class="scope-rule"></span>
-      <span class="scope" id="scopeRun">run</span>
-      <button data-tab="transcript" data-scope="run">Transcript</button>
-      <button data-tab="output" data-scope="run">Output</button>
-      <button data-tab="compare" data-scope="runs">Compare</button>
-      <span class="scope-rule"></span>
-      <button data-tab="repo" data-scope="global">Repository <span id="repoBadge" class="badge"></span></button>
-      <button data-tab="credentials" data-scope="global">Credentials</button>
-    </nav>
     <div class="pane">
+      <!-- No tabs. What is on the right is whatever is selected on the left:
+           a flow, one of its runs, or two of them. Settings are behind the
+           gear because they are configuration, not content. -->
       <section id="tab-flow" class="active">
-        <div class="row">
-          <strong id="flowPath" class="muted">no flow open</strong>
-          <span class="grow"></span>
-          <button data-save="flow">Save</button>
-          <button data-saveas="flow">Save as…</button>
-          <button id="duplicate">Duplicate…</button>
-          <button id="deleteFlow">Delete…</button>
-        </div>
-        <textarea id="flowText" spellcheck="false"></textarea>
-        <p class="muted">One file is one test: the steps, the targets and the
-          <code>prompts:</code> block all live here. Any key besides
-          <code>id</code> on a prompt is a variable the steps can use as
-          <code>{{name}}</code>.</p>
-      </section>
-
-      <section id="tab-run">
         <div class="row">
           <label id="drivesLabel" title="What this flow drives. The flow file says which; this is only a choice when it describes both.">Drives</label>
           <select id="backend" title="What this flow drives">
@@ -230,10 +199,18 @@
         </div>
         <datalist id="known-tags"></datalist>
         <div id="validation"></div>
+        <div class="row">
+          <strong id="flowPath" class="muted">no flow open</strong>
+          <span class="grow"></span>
+          <button data-save="flow">Save</button>
+          <button data-saveas="flow">Save as…</button>
+          <button id="duplicate">Duplicate…</button>
+          <button id="recordSteps"><span class="rec-dot"></span>Record steps</button>
+          <button id="deleteFlow">Delete…</button>
+        </div>
+        <textarea id="flowText" spellcheck="false"></textarea>
         <div id="log"></div>
       </section>
-
-      <section id="tab-output"><p class="muted">Nothing run yet.</p></section>
 
       <section id="tab-transcript">
         <div class="row">
@@ -276,6 +253,7 @@
       </section>
 
       <section id="tab-record">
+        <div class="row"><button class="link back">‹ back</button></div>
         <div class="notice">
           <strong>Recording is not wired up yet.</strong>
           <p>For a web target, or an embedded web view with a debugging port,
@@ -292,6 +270,7 @@
       </section>
 
       <section id="tab-repo">
+        <div class="row"><button class="link back">‹ back</button></div>
         <div class="card">
           <div class="row">
             <label style="width:78px">Workspace</label>
@@ -394,6 +373,7 @@
       </section>
 
       <section id="tab-credentials">
+        <div class="row"><button class="link back">‹ back</button></div>
         <div class="card" style="max-width:720px">
           <h3>Claude API access</h3>
           <p class="muted">Needed only for the agent fallback and for step
@@ -477,47 +457,42 @@ const state = { flow: null, flows: [], suites: [], runId: null, results: [],
                 runFilter: "", run: null,
                 subject: { fields: {}, tags: [] } };
 
-document.querySelectorAll("nav button").forEach((button) => {
-  button.onclick = () => {
-    if (button.disabled) return;
-    document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll("section").forEach((s) => s.classList.remove("active"));
-    button.classList.add("active");
-    $("tab-" + button.dataset.tab).classList.add("active");
-  };
+$("settings").onclick = () => {
+  $("settingsMenu").hidden = !$("settingsMenu").hidden;
+};
+document.querySelectorAll("#settingsMenu button").forEach((button) => {
+  button.onclick = () => showTab(button.dataset.view);
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#settings") && !event.target.closest("#settingsMenu")) {
+    $("settingsMenu").hidden = true;
+  }
 });
 
-function refreshScopes() {
-  // A tab is about a flow, about one of its runs, or about neither. Enabling
-  // them from what is selected is the difference between a tool with three
-  // clear scopes and one with eight tabs of which some quietly do nothing.
-  const enabled = {
-    flow: Boolean(state.flow),
-    run: Boolean(state.run),
-    runs: knownRuns.length > 1,
-    global: true,
-  };
-  document.querySelectorAll("nav button").forEach((button) => {
-    const allowed = enabled[button.dataset.scope];
-    button.disabled = !allowed;
-    button.title = allowed ? "" : {
-      flow: "Open a flow first.",
-      run: "Choose a run under a flow first.",
-      runs: "Two runs are needed to compare.",
-    }[button.dataset.scope] || "";
-    // Never leave the reader looking at a pane about something they have
-    // since deselected.
-    if (!allowed && button.classList.contains("active")) showTab("flow");
-  });
-  $("scopeRun").textContent = state.run ? runLabel(state.run) : "run";
-  $("scopeFlow").textContent = state.flow
-    ? (currentFlow().title || "flow").slice(0, 26) : "flow";
+function showHeading() {
+  // The header says what the pane is about, because nothing else does now.
+  const flow = state.flow ? currentFlow() : null;
+  $("current").textContent = flow ? (flow.title || state.flow) : "no flow open";
+  $("current").classList.toggle("muted", !flow);
+  $("currentDesc").textContent = state.run
+    ? runLabel(state.run) + " · " + (state.run.name || "")
+    : (flow ? flow.description || "" : "");
+  // Replaying is a thing you do to a flow, not to a run you are reading.
+  $("run").hidden = !state.flow;
+  $("validate").hidden = !state.flow;
 }
 
 function runLabel(run) {
   return run.short || run.subject || run.name || "run";
 }
-const showTab = (name) => document.querySelector(`nav button[data-tab="${name}"]`).click();
+// The right-hand pane is whatever is selected on the left. There is no tab to
+// press: pressing one was always a second way of saying what the selection
+// already said, and the two could disagree.
+function showTab(name) {
+  document.querySelectorAll("section").forEach((s) =>
+    s.classList.toggle("active", s.id === "tab-" + name));
+  $("settingsMenu").hidden = true;
+}
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -694,6 +669,7 @@ function refreshCompareBar() {
 async function compareTicked() {
   const [before, after] = ticked().map((box) => box.dataset.dir);
   if (!before || !after) return;
+  await loadRuns().catch(() => {});
   showTab("compare");
   $("cmpLeft").value = before;
   $("cmpRight").value = after;
@@ -704,7 +680,7 @@ async function openRun(run) {
   state.run = run;
   document.querySelectorAll(".run-list .run").forEach((r) =>
     r.classList.toggle("active", r.dataset.dir === run.dir));
-  refreshScopes();
+  showHeading();
   showTab("transcript");
   await loadTranscript(run.dir + "/transcript.md");
 }
@@ -732,13 +708,10 @@ async function openFlow(path) {
   $("flowPath").textContent = path;
   $("flowPath").classList.remove("muted");
   const flow = currentFlow();
-  $("current").textContent = flow.title || path;
-  $("current").classList.remove("muted");
-  $("currentDesc").textContent = flow.description || "";
   // A different flow, so the run that was open is not this flow's run.
   state.run = null;
   markActive();
-  refreshScopes();
+  showHeading();
   loadSubject(path);
   showWhatItDrives(flow);
   showTab("flow");
@@ -778,6 +751,11 @@ async function createFlow(thenRecord) {
 
 $("newFlow").onclick = () => createFlow(false);
 $("newRecord").onclick = () => createFlow(true);
+$("recordSteps").onclick = () => state.flow && showTab("record");
+document.querySelectorAll("button.back").forEach((button) => {
+  // Every view but the main one needs a way out, since no tab bar offers one.
+  button.onclick = () => showTab(state.run ? "transcript" : "flow");
+});
 
 $("newCollection").onclick = async () => {
   const name = prompt("Name for the collection", "New collection");
@@ -931,7 +909,6 @@ function listen(runId) {
       state.results.push(r);
       logLine(`  ${r.prompt_id}: ${r.status} (${r.duration_ms} ms, ` +
               `${(r.response || "").length} chars)`, r.status === "ok" ? "ok" : "bad");
-      renderOutput();
     }
     if (event.type === "finished") {
       logLine(`done: ${event.ok}/${event.total} ok`,
@@ -943,34 +920,6 @@ function listen(runId) {
     if (event.type === "end") { events.close(); $("run").disabled = false; }
   };
   events.onerror = () => { events.close(); $("run").disabled = false; };
-}
-
-function renderOutput() {
-  const target = $("tab-output");
-  target.innerHTML = "";
-  state.results.forEach((r) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    const cls = r.status === "ok" ? "ok" : (r.status === "timeout" ? "warn" : "bad");
-    const shots = (r.screenshots || []).map((s) =>
-      `<figure><img src="/files/${encodeURI((state.outDir || "runs") + "/" + s)}" loading="lazy">
-       <figcaption>${escapeHtml(s.split("/").pop())}</figcaption></figure>`).join("");
-    const steps = (r.step_statuses || []).map((s) =>
-      `<tr><td>${s.phase === "reset" ? "reset " : ""}${s.index}</td><td>${s.action}</td>
-       <td>${s.target || ""}</td><td class="${s.status === "ok" ? "ok" : "bad"}">${s.status}</td>
-       <td>${s.duration_ms}</td><td>${(s.resolution || {}).via || ""}</td>
-       <td>${escapeHtml(s.error || "")}</td></tr>`).join("");
-    card.innerHTML = `
-      <h3>${escapeHtml(r.prompt_id)} <span class="pill ${cls}">${r.status}</span>
-        <span class="muted">${r.duration_ms} ms</span></h3>
-      <strong>Prompt</strong><pre>${escapeHtml(r.variables.prompt || "")}</pre>
-      <strong>Response</strong><pre>${escapeHtml(r.response || "(no text captured)")}</pre>
-      <div class="shots">${shots}</div>
-      <details><summary class="muted">Step detail</summary>
-        <table><tr><th>#</th><th>action</th><th>target</th><th>status</th>
-        <th>ms</th><th>via</th><th>note</th></tr>${steps}</table></details>`;
-    target.appendChild(card);
-  });
 }
 
 function runDirOf(path) {
@@ -1612,8 +1561,7 @@ loadRuns()
   .catch(() => {})
   .then(loadTree)
   .then(() => {
-    refreshScopes();
-    if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
+      if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
   })
   .catch((error) => logLine("could not list flows: " + error.message, "bad"));
 loadCredentials().catch(() => {});
@@ -1623,6 +1571,4 @@ loadRepo().catch(() => {});
 // somebody usually is -- an editor saving a flow, a run finishing, a git pull
 // in another window. Cheap enough to just re-read.
 setInterval(() => { if ($("tab-repo").classList.contains("active")) loadRepo(); }, 5000);
-document.querySelector('nav button[data-tab="compare"]').addEventListener(
-  "click", () => loadRuns());
 </script>

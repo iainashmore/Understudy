@@ -91,10 +91,10 @@ def page(served, browser):
 
 @pytest.fixture
 def run_tab(page):
-    """The Run tab, open. The tag box is in it, and a hidden input cannot be
-    typed into."""
-    page.click('nav button[data-tab="run"]')
-    page.wait_for_timeout(200)
+    """A flow open, which is where the replay controls live now. There is no
+    Run tab: the pane is whatever is selected on the left."""
+    page.locator(".tree-item").first.click()
+    page.wait_for_timeout(300)
     return page
 
 
@@ -133,9 +133,6 @@ def test_the_form_says_what_the_flow_drives_rather_than_asking(run_tab):
     answer, and the wrong one fails at the first step with "flow has no
     target_app.web section"."""
     page = run_tab
-    page.locator(".tree-item").first.click()
-    page.wait_for_timeout(300)
-    page.click('nav button[data-tab="run"]')
     assert page.locator("#backend").is_hidden(), "a choice with one option"
     assert "web page" in page.locator("#drivesLabel").inner_text()
 
@@ -149,46 +146,56 @@ def test_the_tag_box_offers_what_has_been_used_before(page):
     assert "model-version:FD03" in values, "the prefixed form is offered too"
 
 
-class TestTheThreeScopes:
-    """A tab is about the flow, about one of its runs, or about neither.
-    Eight tabs of which some quietly do nothing is not the same tool."""
+class TestSelectionDrivesThePane:
+    """No tabs. Pressing one was always a second way of saying what the
+    selection already said, and the two could disagree."""
 
-    def test_run_tabs_are_off_until_a_run_is_chosen(self, page):
+    def test_a_flow_shows_the_flow(self, page):
         page.locator(".tree-item").first.click()
         page.wait_for_timeout(300)
+        assert page.locator("section#tab-flow").is_visible()
+        assert page.locator("section#tab-transcript").is_hidden()
 
-        assert page.locator('nav button[data-tab="flow"]').is_enabled()
-        assert page.locator('nav button[data-tab="transcript"]').is_disabled()
-        assert "Choose a run" in (
-            page.locator('nav button[data-tab="transcript"]').get_attribute("title"))
-
-    def test_choosing_a_run_turns_them_on_and_names_it(self, page):
+    def test_a_run_shows_its_transcript(self, page):
         page.locator(".tree-item").first.click()
         page.wait_for_timeout(300)
         page.locator(".run-list:not([hidden]) .run").first.click()
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(600)
 
-        assert page.locator('nav button[data-tab="transcript"]').is_enabled()
-        assert "FD03" in page.locator("#scopeRun").inner_text()
+        assert page.locator("section#tab-transcript").is_visible()
+        assert page.locator("section#tab-flow").is_hidden()
+        # And the header says which run, since nothing else does now.
+        assert "FD03" in page.locator("#currentDesc").inner_text()
 
-    def test_opening_another_flow_lets_go_of_its_run(self, page):
+    def test_going_back_to_the_flow_lets_go_of_the_run(self, page):
         """Leaving a reader looking at a transcript belonging to a flow they
-        have navigated away from is worse than an empty pane."""
+        have navigated away from is worse than showing them the flow."""
         page.locator(".tree-item").first.click()
         page.wait_for_timeout(300)
         page.locator(".run-list:not([hidden]) .run").first.click()
-        page.wait_for_timeout(500)
-        assert page.locator('nav button[data-tab="transcript"]').is_enabled()
+        page.wait_for_timeout(600)
+        assert page.locator("section#tab-transcript").is_visible()
 
         page.locator(".tree-item").first.click()
         page.wait_for_timeout(400)
-        assert page.locator('nav button[data-tab="transcript"]').is_disabled()
-        assert page.locator('section#tab-flow').is_visible(), \
-            "and it does not leave the run's pane on screen"
+        assert page.locator("section#tab-flow").is_visible()
 
-    def test_the_global_tabs_never_need_anything_selected(self, page):
-        for tab in ("repo", "credentials"):
-            assert page.locator(f'nav button[data-tab="{tab}"]').is_enabled()
+    def test_settings_are_behind_the_gear(self, page):
+        """Repository and credentials are configuration, not content, and they
+        were sitting in the bar next to the transcript."""
+        assert page.locator("#settingsMenu").is_hidden()
+        page.click("#settings")
+        page.click('#settingsMenu button[data-view="repo"]')
+        page.wait_for_timeout(200)
+
+        assert page.locator("section#tab-repo").is_visible()
+        page.locator("section#tab-repo button.back").click()
+        assert page.locator("section#tab-flow").is_visible(), "and a way out"
+
+    def test_replaying_is_offered_for_a_flow_and_not_for_a_run(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        assert page.locator("#run").is_visible()
 
 
 class TestTheTagBox:
