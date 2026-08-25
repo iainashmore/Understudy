@@ -215,7 +215,7 @@ class TestFindingThingsByLookingAtThem:
         # Crop a patch out of the window and ask the matcher to find it again.
         # If the capture path and the matcher disagree about anything -- colour
         # order, scaling, the alpha channel -- this is where it shows.
-        patch = crop(window, x=8, y=8, width=90, height=24)
+        patch = crop(window, {"x": 8, "y": 8, "width": 90, "height": 24})
         found = locate_all(window, patch, threshold=0.95)
 
         assert found, "a patch cut from the window could not be found in it"
@@ -231,7 +231,7 @@ class TestFindingThingsByLookingAtThem:
 
         window = load_rgb(driver.screenshot())
         anchor = tmp_path / "anchor.png"
-        anchor.write_bytes(to_png_bytes(crop(window, x=10, y=10, width=80, height=22)))
+        anchor.write_bytes(to_png_bytes(crop(window, {"x": 10, "y": 10, "width": 80, "height": 22})))
 
         by_picture = Target(name="by_picture", strategies={"native": (
             Strategy(backend="native",

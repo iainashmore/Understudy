@@ -91,19 +91,30 @@ jobs:
         if: always()
         shell: bash
         run: |
+          # Diagnostic only. If an earlier step died the directory may not be
+          # there at all, and this step complaining about that on top of the
+          # real failure just buries it.
           for run in runs/notepad runs/notepad-blind; do
             echo "===== $run"
-            find "$run" -type f | sort
-            echo "-----"
-            cat "$run/transcript.md" || true
+            if [ -d "$run" ]; then
+              find "$run" -type f | sort
+              echo "-----"
+              [ -f "$run/transcript.md" ] && cat "$run/transcript.md"
+            else
+              echo "(not produced)"
+            fi
           done
+          exit 0
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: notepad-run-${{ github.run_number }}
           path: runs
-          if-no-files-found: error
+          # Warn, not error: when the run failed before producing anything the
+          # failure is already reported above, and a second red X for the
+          # missing artifact points at the wrong step.
+          if-no-files-found: warn
 
       - name: Everything else, on Windows
         # The rest of the suite has only ever run on Linux. Windows path
