@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 from jsonschema import Draft202012Validator
+from understudy.subject import Subject
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "flow.schema.json"
 
@@ -128,6 +129,7 @@ class Flow:
     title: str = ""
     description: str = ""
     tags: tuple[str, ...] = ()
+    subject: Subject = field(default_factory=Subject)
     #: Prompt variants written into the flow itself. The original spec kept
     #: prompts in their own file, for the good reason that they change far more
     #: often than the steps do -- so both work, and an external file wins.
@@ -317,6 +319,7 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
         title=str(data.get("title", "") or data["name"]),
         description=str(data.get("description", "")),
         tags=tuple(data.get("tags") or ()),
+        subject=Subject.from_config(data.get("subject")),
         embedded_prompts=tuple(data.get("prompts") or ()),
         targets=targets,
         steps=_steps(data["steps"], "steps"),

@@ -32,6 +32,7 @@ from understudy.transcript import (
     numbered_steps,
     screenshot_captions,
     step_key,
+    subject_of,
     summarise,
     timeline,
     unclaimed_screenshots,
@@ -403,6 +404,8 @@ def render_html(
         f"{summary.failed} failed, {summary.timed_out} timed out</span>"
         + (f"<span><b>Started</b> {_e(results[0].get('timestamp', '?'))}</span>"
            if results else "")
+        + (f"<span><b>Under test</b> {_e(subject_of(results).summary())}</span>"
+           if subject_of(results).recorded else "")
         + "</p>",
         f'<p class="meta screen-only">{links}</p>' if links else "",
         _summary_table(results),

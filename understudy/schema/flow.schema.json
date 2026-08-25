@@ -357,6 +357,36 @@
     "title": {
       "description": "Human-readable title. `name` is the identifier used in paths and results; this is what a person reads.",
       "type": "string"
+    },
+    "subject": {
+      "description": "What is under test: which application, which assistant, which version. A reply is only comparable against another reply if you know what produced each one. The flow declares what it is meant to run against; a run records what it actually ran against, and the run wins.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "type": "string",
+          "description": "e.g. CATIA V5"
+        },
+        "app_version": {
+          "type": "string",
+          "description": "e.g. R32 SP4"
+        },
+        "model": {
+          "type": "string",
+          "description": "the assistant, e.g. LEO"
+        },
+        "model_version": {
+          "type": "string",
+          "description": "e.g. 2026x FD01"
+        },
+        "release": {
+          "type": "string",
+          "description": "release or build number"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
     }
   },
   "$defs": {

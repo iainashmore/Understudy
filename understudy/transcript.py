@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from understudy.narrate import load_narration, steps_of
+from understudy.subject import LABELS as SUBJECT_LABELS, Subject
 
 #: Screenshots are full application windows; at full width a transcript is
 #: unreadable. HTML img tags because markdown has no width syntax.
@@ -35,6 +36,12 @@ class RunSummary:
     passed: int
     failed: int
     timed_out: int
+
+
+def subject_of(results: list[dict[str, Any]]) -> Subject:
+    """What was under test, from the first result. Every variant in a run saw
+    the same installation, so the first one speaks for all of them."""
+    return Subject.from_config((results[0].get("subject") if results else None) or {})
 
 
 def load_results(run_dir: Path | str) -> list[dict[str, Any]]:
@@ -423,6 +430,17 @@ def render_markdown(
     ]
     if results:
         out.append(f"- **Started** {results[0].get('timestamp', '?')}")
+    subject = subject_of(results)
+    if subject.recorded:
+        # What produced these answers. Without it the transcript records a
+        # reply but not which release said it, and comparing two of them
+        # later means nothing.
+        out.append("- **Under test** " + subject.summary())
+        for field, label in SUBJECT_LABELS.items():
+            value = getattr(subject, field)
+            if value and field not in ("app", "app_version", "model",
+                                       "model_version", "release"):
+                out.append(f"- **{label}** {value}")
     for name in ("flow.yaml", "prompts.yaml", "prompts.csv", "results.jsonl", "results.csv"):
         if (run_dir / name).exists():
             out.append(f"- [`{name}`]({name})")

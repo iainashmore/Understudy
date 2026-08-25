@@ -103,6 +103,12 @@
            font-size:11px; color:var(--dim); }
   .badge.on { background:var(--accent); color:#0d1319; font-weight:700; }
   button.toggle.on { opacity:1; border-color:var(--accent); color:var(--text); }
+  #cmpStatus { padding:4px 0 2px; }
+  #cmpStatus a { color:var(--accent); margin-left:4px; }
+  #cmpStatus .pill { margin-right:6px; }
+  #cmpFrame { width:100%; height:calc(100vh - 250px); min-height:380px;
+              border:1px solid var(--line); border-radius:6px;
+              background:var(--bg); }
   #transcriptFrame { width:100%; height:calc(100vh - 190px); min-height:420px;
                      border:1px solid var(--line); border-radius:6px;
                      background:var(--bg); }
@@ -137,6 +143,7 @@
       <button data-tab="run">Run</button>
       <button data-tab="output">Output</button>
       <button data-tab="transcript">Transcript</button>
+      <button data-tab="compare">Compare</button>
       <button data-tab="record"><span class="rec-dot"></span>Record</button>
       <button data-tab="repo">Repository <span id="repoBadge" class="badge"></span></button>
       <button data-tab="credentials">Credentials</button>
@@ -174,6 +181,17 @@
           <label><input id="captureSteps" type="checkbox"> shot every step</label>
           <label><input id="record" type="checkbox"> record video</label>
         </div>
+        <div class="row">
+          <label style="width:74px" title="Recorded against every reply, so two runs can be compared later">Under test</label>
+          <input id="subjApp" placeholder="application, e.g. CATIA V5" style="width:190px">
+          <input id="subjAppVersion" placeholder="version, e.g. R32 SP4" style="width:150px">
+          <input id="subjModel" placeholder="assistant, e.g. LEO" style="width:150px">
+          <input id="subjModelVersion" placeholder="its version" style="width:130px">
+          <input id="subjRelease" placeholder="build" style="width:100px">
+        </div>
+        <p class="muted" style="margin:0 0 8px">Remembered per flow — type a
+          service pack once and later runs carry it. It is what the columns are
+          labelled with when you compare two runs.</p>
         <div id="validation"></div>
         <div id="log"></div>
       </section>
@@ -195,6 +213,29 @@
         <div id="transcriptStatus" class="muted"></div>
         <iframe id="transcriptFrame" title="transcript"></iframe>
         <pre id="transcriptText" class="muted" hidden>Run a flow to produce a transcript.</pre>
+      </section>
+
+      <section id="tab-compare">
+        <div class="row">
+          <label style="width:52px">Before</label>
+          <select id="cmpLeft" class="grow"></select>
+        </div>
+        <div class="row">
+          <label style="width:52px">After</label>
+          <select id="cmpRight" class="grow"></select>
+          <button id="cmpGo" class="primary">Compare</button>
+        </div>
+        <div id="cmpStatus" class="muted"></div>
+        <div class="row" id="cmpExports" hidden>
+          <span class="grow"></span>
+          <label>Export</label>
+          <a id="cmpMd" download><button>.md</button></a>
+          <a id="cmpHtml" download><button>.html</button></a>
+        </div>
+        <iframe id="cmpFrame" title="comparison" hidden></iframe>
+        <p id="cmpEmpty" class="muted">Pick two runs of the same flow. The
+          columns are labelled with what each was run against, so the answer is
+          "R32 said this, R33 says that" rather than two timestamps.</p>
       </section>
 
       <section id="tab-record">
@@ -524,6 +565,7 @@ async function openFlow(path) {
   $("current").classList.remove("muted");
   $("currentDesc").textContent = flow.description || "";
   markActive();
+  loadSubject(path);
   showTab("flow");
 }
 
@@ -658,6 +700,7 @@ $("run").onclick = async () => {
       agent: $("agent").value, headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
       record: $("record").checked,
+      subject: readSubject(),
     });
     state.runId = started.run_id;
     logLine(`run ${started.run_id} -> ${started.out_dir}`);
@@ -688,6 +731,7 @@ function listen(runId) {
       logLine(`done: ${event.ok}/${event.total} ok`,
               event.ok === event.total ? "ok" : "warn");
       loadTranscript(event.transcript, event.transcript_html);
+      loadRuns();
     }
     if (event.type === "failed") logLine("failed: " + event.error, "bad");
     if (event.type === "end") { events.close(); $("run").disabled = false; }
@@ -790,6 +834,86 @@ function download(path) {
   link.href = "/files/" + encodeURI(path);
   link.download = path.split("/").pop();
   link.click();
+}
+
+/* ---------- comparing runs ---------- */
+
+let knownRuns = [];
+
+async function loadRuns() {
+  try {
+    knownRuns = (await api("/api/runs")).runs || [];
+  } catch (error) {
+    knownRuns = [];
+  }
+  const options = knownRuns
+    .map((r) => `<option value="${escapeHtml(r.dir)}">${escapeHtml(r.label)}</option>`)
+    .join("");
+  const left = $("cmpLeft"), right = $("cmpRight");
+  const keep = [left.value, right.value];
+  left.innerHTML = options;
+  right.innerHTML = options;
+  if (keep[0]) left.value = keep[0];
+  if (keep[1]) right.value = keep[1];
+  // Newest is what you just ran, so it belongs on the right; the one before
+  // it is what you are comparing against.
+  if (!keep[1] && knownRuns[0]) right.value = knownRuns[0].dir;
+  if (!keep[0] && knownRuns[1]) left.value = knownRuns[1].dir;
+}
+
+$("cmpGo").onclick = async () => {
+  const before = $("cmpLeft").value, after = $("cmpRight").value;
+  if (!before || !after) {
+    return repoMessage($("cmpStatus"), "pick two runs", "bad");
+  }
+  if (before === after) {
+    return repoMessage($("cmpStatus"), "those are the same run", "bad");
+  }
+  repoMessage($("cmpStatus"), "comparing…");
+  const done = await post("/api/compare", { run_dirs: [before, after] });
+  if (done.error) return repoMessage($("cmpStatus"), done.error, "bad");
+
+  const counts = done.counts || {};
+  const moved = (counts.changed || 0) + (counts.failed || 0) + (counts.missing || 0);
+  $("cmpStatus").innerHTML =
+    `<span class="pill ${moved ? "bad" : "ok"}">${escapeHtml(done.headline)}</span>` +
+    (done.mixed_flows
+      ? ` <span class="bad">these runs are of different flows</span>` : "") +
+    " " + (done.columns || []).map((c) =>
+      `<a href="/files/${encodeURI(c.transcript)}?theme=dark" target="_blank"
+          rel="noopener">${escapeHtml(c.heading)} transcript</a>`).join(" · ");
+  $("cmpMd").href = "/files/" + encodeURI(done.markdown);
+  $("cmpHtml").href = "/files/" + encodeURI(done.html);
+  $("cmpExports").hidden = false;
+  $("cmpEmpty").hidden = true;
+  $("cmpFrame").hidden = false;
+  $("cmpFrame").src = "/files/" + encodeURI(done.html) + "?theme=dark&t=" + Date.now();
+};
+
+/* ---------- what was under test ---------- */
+
+const SUBJECT_FIELDS = {
+  app: "subjApp", app_version: "subjAppVersion", model: "subjModel",
+  model_version: "subjModelVersion", release: "subjRelease",
+};
+
+function readSubject() {
+  const subject = {};
+  for (const [field, id] of Object.entries(SUBJECT_FIELDS)) {
+    const value = $(id).value.trim();
+    if (value) subject[field] = value;
+  }
+  return subject;
+}
+
+async function loadSubject(flowPath) {
+  if (!flowPath) return;
+  try {
+    const known = await post("/api/subject", { flow: flowPath });
+    for (const [field, id] of Object.entries(SUBJECT_FIELDS)) {
+      $(id).value = (known.subject || {})[field] || "";
+    }
+  } catch (error) { /* the fields are just empty, which is fine */ }
 }
 
 /* ---------- repository ---------- */
@@ -1171,9 +1295,12 @@ loadTree().then(() => {
 }).catch((error) => logLine("could not list flows: " + error.message, "bad"));
 loadCredentials().catch(() => {});
 showSourceKind("local");     // a plain folder is the default and needs nothing
+loadRuns().catch(() => {});
 loadRepo().catch(() => {});
 // The panel is only right while nobody else is touching the checkout, and
 // somebody usually is -- an editor saving a flow, a run finishing, a git pull
 // in another window. Cheap enough to just re-read.
 setInterval(() => { if ($("tab-repo").classList.contains("active")) loadRepo(); }, 5000);
+document.querySelector('nav button[data-tab="compare"]').addEventListener(
+  "click", () => loadRuns());
 </script>

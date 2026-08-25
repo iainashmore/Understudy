@@ -26,6 +26,7 @@ from understudy.drivers.base import Driver, DriverError, Resolution, TargetNotFo
 from understudy.flow import Flow, Step, render_step
 from understudy.ocr import read_text
 from understudy.prompts import PromptSet, PromptVariant
+from understudy.subject import Subject
 from understudy.waiting import (
     StableOutcome,
     pixels_equivalent,
@@ -83,6 +84,11 @@ class VariantResult:
     #: you, and gone the moment a result is read anywhere else -- a commit
     #: subject, a suite index, a spreadsheet of last month's regressions.
     flow: str = ""
+    #: What produced this reply -- application, assistant, versions. Without
+    #: it a transcript records an answer from LEO but not *which* LEO, and six
+    #: months later the difference could be the model, a service pack, or
+    #: neither.
+    subject: dict[str, str] = field(default_factory=dict)
     repeat_index: int = 0
     recording: str | None = None
     recording_error: str | None = None
@@ -151,6 +157,7 @@ class VariantResult:
             "learned_anchors": self.learned_anchors,
             "backend": self.backend,
             "flow": self.flow,
+            "subject": self.subject,
             "timestamp": self.timestamp,
             "error": self.error,
         }
@@ -176,6 +183,7 @@ class Runner:
         reset_level: int = 1,
         capture_steps: bool = False,
         record: bool = False,
+        subject: "Subject | None" = None,
     ) -> None:
         self.flow = flow
         self.driver = driver
@@ -187,6 +195,9 @@ class Runner:
         self.capture_steps = capture_steps
         #: Video per variant, when the driver can manage it. A backend that
         #: cannot is a note in the results, never a failed run.
+        # The flow says what it was written against; the run says what was
+        # actually in front of it, and the run wins.
+        self.subject = flow.subject.merged_with(subject or Subject())
         self.record = record
         self.results_path = self.out_dir / "results.jsonl"
 
@@ -237,6 +248,7 @@ class Runner:
             duration_ms=0,
             backend=self.driver.backend,
             flow=self.flow.name,
+            subject=self.subject.as_dict(),
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         counter = {"n": 0}

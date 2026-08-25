@@ -518,6 +518,75 @@ target_app:
     url: "../fixtures/cad_app/index.html?viewport=spin"
 ```
 
+## What was under test
+
+The tool answers *did the behaviour change?*, and an answer is only comparable
+against another answer if you know what produced each one. A transcript that
+records a reply from LEO but not **which** LEO is evidence of nothing: six
+months later the model has been swapped twice and the CAD package has had three
+service packs, and the difference could be any of them.
+
+So a run records it, in two places. The flow declares what it is *meant* to run
+against, because that belongs with the flow and rarely changes:
+
+```yaml
+subject:
+  app: CATIA V5
+  model: LEO
+```
+
+and the run records what it *actually* ran against, because that changes every
+time somebody installs a patch:
+
+```bash
+understudy run leo.yaml --app-version "R33 SP1" --model-version "2027x FD02"
+```
+
+The run wins where it says anything. **It is remembered between runs**, per
+flow, so a service pack is typed once and every later run of that flow carries
+it — having to edit a YAML file to record a patch level is how the field ends
+up stale and lying, which is worse than empty.
+
+## Comparing releases
+
+The payoff, and the reason for all of the above:
+
+```bash
+understudy compare runs/r32 runs/r33 --out comparisons/r32-vs-r33
+```
+
+One row per prompt, one column per run, and the columns are labelled with what
+was under test rather than with a timestamp — `CATIA V5 R33 · LEO 2027x` is what
+a reader needs; `2026-09-01T14-22` is not.
+
+```
+  runs/r32                   CATIA V5 R32 SP4 · LEO 2026x FD01
+  runs/r33                   CATIA V5 R33 · LEO 2027x FD02
+
+2 same, 1 changed
+
+! baseline               changed
+      CATIA V5 R32 SP4 · LEO 2026x FD01  Echo: Summarise this in one paragraph.
+      CATIA V5 R33 · LEO 2027x FD02      Echo: I can summarise that for you …
+```
+
+**What counts as changed is deliberately quiet.** Whitespace, reflowed lines, a
+trailing full stop and letter case are not behaviour changes, and a comparison
+that cries wolf over them gets ignored — which makes it worse than no
+comparison at all. A reply that is close but not identical is marked `~`
+(reworded) rather than `!` (moved). Changed rows sort to the top, because
+burying the two that moved among ninety that did not is the other way a
+comparison stops being read.
+
+`--changed-only` prints just those rows and exits non-zero when there are any,
+which is what you want from a scheduled job.
+
+In the app it is the **Compare** tab: pick a *before* and an *after* from two
+lists — labelled by what each was run against, not by timestamp — and press
+Compare. The result renders in place, links to each run's full transcript, and
+exports as markdown or a standalone page. It is written into `comparisons/` in
+the workspace, so it can be committed next to the runs it is about.
+
 ## The transcript
 
 `transcript.md` and `transcript.html`, written into the run folder beside the

@@ -349,3 +349,76 @@ class TestHttp:
         with pytest.raises(urllib.error.HTTPError) as caught:
             self.get(server + "/api/nope")
         assert caught.value.code == 404
+
+
+class TestComparingFromTheApp:
+    """Pick two runs, press Compare. The columns are labelled with what each
+    run was under test against, which is the whole reason for recording it."""
+
+    def make_run(self, api, name, subject, response):
+        import json
+
+        run = api.workspace.runs_root / name
+        run.mkdir(parents=True, exist_ok=True)
+        (run / "results.jsonl").write_text(json.dumps({
+            "prompt_id": "baseline", "repeat_index": 0, "prompt": "hello",
+            "variables": {}, "response": response, "reads": {}, "read_images": {},
+            "status": "ok", "duration_ms": 10, "screenshots": [],
+            "step_statuses": [], "backend": "web", "flow": "demo",
+            "subject": subject, "timestamp": "2026-09-01T10:00:00Z",
+        }) + "\n")
+        return f"runs/{name}"
+
+    def test_runs_are_listed_by_what_they_were_run_against(self, api):
+        self.make_run(api, "r32", {"app": "CATIA V5", "app_version": "R32"}, "x")
+        runs = api.describe_runs()["runs"]
+        assert runs[0]["subject"] == "CATIA V5 R32"
+        assert "CATIA V5 R32" in runs[0]["label"]
+
+    def test_a_run_with_no_subject_still_lists(self, api):
+        self.make_run(api, "plain", {}, "x")
+        assert api.describe_runs()["runs"][0]["name"] == "plain"
+
+    def test_comparing_two_runs_writes_both_forms(self, api):
+        left = self.make_run(api, "r32", {"app_version": "R32"}, "the pad is 40mm")
+        right = self.make_run(api, "r33", {"app_version": "R33"}, "the pad is 55mm")
+        done = api.compare([left, right])
+
+        assert done["headline"] == "1 changed"
+        assert done["markdown"].endswith(".md") and done["html"].endswith(".html")
+        assert (api.workspace.root / done["html"]).exists()
+
+    def test_the_columns_carry_a_link_to_each_transcript(self, api):
+        left = self.make_run(api, "r32", {"app_version": "R32"}, "x")
+        right = self.make_run(api, "r33", {"app_version": "R33"}, "x")
+        done = api.compare([left, right])
+        assert done["columns"][0]["transcript"] == "runs/r32/transcript.html"
+
+    def test_comparing_one_run_is_a_message_not_a_crash(self, api):
+        only = self.make_run(api, "r32", {}, "x")
+        assert "at least two" in api.compare([only])["error"]
+
+    def test_a_run_outside_the_workspace_is_refused(self, api):
+        from understudy.ui.server import WorkspaceError
+
+        left = self.make_run(api, "r32", {}, "x")
+        with pytest.raises(WorkspaceError):
+            api.compare([left, "../../etc"])
+
+
+class TestWhatWasUnderTest:
+    def test_the_form_is_pre_filled_from_the_last_run_of_that_flow(self, api, tmp_path,
+                                                                   monkeypatch):
+        from understudy import subject as subject_module
+
+        store = tmp_path / "subjects.json"
+        monkeypatch.setattr(subject_module, "DEFAULT_STORE", store)
+        subject_module.remember(
+            "ui-test-flow",
+            subject_module.Subject(app="CATIA V5", app_version="R32 SP4"), store)
+
+        known = api.remembered_subject("flow.yaml")
+        assert known["subject"]["app_version"] == "R32 SP4"
+
+    def test_an_unknown_flow_gives_empty_fields_rather_than_an_error(self, api):
+        assert api.remembered_subject("nope.yaml") == {"subject": {}}

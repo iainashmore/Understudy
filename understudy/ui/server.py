@@ -30,8 +30,11 @@ from understudy.flow import FlowError, load_flow
 from understudy.prompts import PromptsError, prompts_for
 from understudy.suite import SuiteError, is_suite_file, load_suite
 from understudy.pdf import write_pdf
-from understudy.transcript import write_transcript
+from understudy.transcript import load_results, write_transcript
 from understudy.transcript_html import write_html
+from understudy.compare import compare as compare_runs
+from understudy.compare_report import write_comparison
+from understudy.subject import Subject, load_remembered, remember
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import Git, GitError
 from understudy.vcs.remote import parse_remote
@@ -402,9 +405,17 @@ flows: []
             )
             driver.start(flow.app_config(backend))
 
+            # What was under test: whatever the form said, falling back to
+            # what this flow was last run against, so it is typed once.
+            given = Subject.from_config(request.get("subject") or {})
+            subject = load_remembered(flow.name).merged_with(given)
+            if given.recorded:
+                remember(flow.name, flow.subject.merged_with(subject))
+
             runner = Runner(flow, driver, job.out_dir,
                             capture_steps=bool(request.get("capture_steps")),
-                            record=bool(request.get("record")))
+                            record=bool(request.get("record")),
+                            subject=subject)
             runner.prepare(prompts)
             results = []
             for variant in prompts:
@@ -462,6 +473,69 @@ flows: []
 
     def test_credentials(self) -> dict[str, Any]:
         return credentials.check()
+
+    # -- runs and comparison --------------------------------------------------
+
+    def describe_runs(self) -> dict[str, Any]:
+        """Every run, labelled by what was under test rather than by a
+        timestamp -- which is what somebody picking two to compare needs."""
+        runs = []
+        for directory in sorted(self.workspace.runs_root.glob("*"), reverse=True):
+            if not directory.is_dir():
+                continue
+            entry: dict[str, Any] = {
+                "dir": self.workspace.relative(directory),
+                "name": directory.name,
+                "flow": "", "subject": "", "when": "", "ok": 0, "total": 0,
+            }
+            try:
+                results = load_results(directory)
+            except Exception:
+                results = []
+            if results:
+                entry["flow"] = results[0].get("flow", "")
+                entry["when"] = results[0].get("timestamp", "")
+                entry["subject"] = Subject.from_config(
+                    results[0].get("subject") or {}).summary()
+                entry["total"] = len(results)
+                entry["ok"] = sum(1 for r in results if r.get("status") == "ok")
+            entry["label"] = " · ".join(
+                p for p in (entry["subject"] or entry["flow"], entry["name"]) if p)
+            runs.append(entry)
+        return {"runs": runs}
+
+    def compare(self, run_dirs: list[str]) -> dict[str, Any]:
+        """Line up two or more runs. Written into the workspace so the result
+        can be committed alongside the runs it is about."""
+        resolved = [self.workspace.resolve(d) for d in run_dirs]
+        try:
+            comparison = compare_runs(resolved)
+        except (ValueError, FileNotFoundError) as exc:
+            return {"error": str(exc)}
+
+        stem = "-vs-".join(Path(d).name for d in run_dirs)[:120]
+        paths = write_comparison(comparison, self.workspace.root / "comparisons" / stem)
+        return {
+            "markdown": self.workspace.relative(paths[0]),
+            "html": self.workspace.relative(paths[1]),
+            "headline": comparison.headline(),
+            "counts": comparison.counts(),
+            "mixed_flows": comparison.mixed_flows,
+            "columns": [
+                {"label": c.label, "heading": c.heading,
+                 "transcript": f"{self.workspace.relative(Path(c.run_dir))}/transcript.html"}
+                for c in comparison.columns
+            ],
+        }
+
+    def remembered_subject(self, flow_path: str) -> dict[str, Any]:
+        """Pre-fill the run form with what this flow was last run against."""
+        try:
+            flow = load_flow(self.workspace.resolve(flow_path))
+        except Exception:
+            return {"subject": {}}
+        subject = flow.subject.merged_with(load_remembered(flow.name))
+        return {"subject": subject.as_dict(), "summary": subject.summary()}
 
     # -- repository -----------------------------------------------------------
 
@@ -663,6 +737,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.list_files())
             elif route == "/api/credentials":
                 self._json(self.api.read_credentials())
+            elif route == "/api/runs":
+                self._json(self.api.describe_runs())
             elif route == "/api/repo":
                 self._json(self.api.repo_state())
             elif route == "/api/workspace":
@@ -723,6 +799,10 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/repo/suggest-message":
                 self._json({"message": self.api.repository.suggest_message(
                     body.get("paths") or [])})
+            elif route == "/api/compare":
+                self._json(self.api.compare(body["run_dirs"]))
+            elif route == "/api/subject":
+                self._json(self.api.remembered_subject(body["flow"]))
             elif route == "/api/repo/commit":
                 self._json(self.api.repo_commit(
                     body.get("paths") or [], body.get("message", "")))

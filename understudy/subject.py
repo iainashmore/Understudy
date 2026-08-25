@@ -1,0 +1,134 @@
+"""What was under test: which application, which assistant, which version.
+
+The tool exists to answer "did the behaviour change?", and an answer is only
+comparable against another answer if you know what produced each one. A
+transcript that records a reply from LEO but not *which* LEO is evidence of
+nothing: six months later the model has been swapped twice and the CAD package
+has had three service packs, and the difference you are looking at could be any
+of them.
+
+Two places, deliberately.
+
+The flow declares what it is *meant* to run against, because that belongs with
+the flow and rarely changes. A run records what it *actually* ran against,
+because that changes every time somebody installs a patch -- and having to edit
+a YAML file to record a service pack is how the field ends up stale and
+lying, which is worse than empty.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Any
+
+#: Free-form on purpose. "R32 SP4", "2026x FD01", "internal build 4821" -- the
+#: version strings this has to hold are whatever the vendor prints in the
+#: about box, and no scheme survives contact with all of them.
+FIELDS = ("app", "app_version", "model", "model_version", "release", "notes")
+
+LABELS = {
+    "app": "Application",
+    "app_version": "Application version",
+    "model": "Assistant or model",
+    "model_version": "Assistant version",
+    "release": "Release or build",
+    "notes": "Notes",
+}
+
+
+@dataclass(frozen=True)
+class Subject:
+    app: str = ""
+    app_version: str = ""
+    model: str = ""
+    model_version: str = ""
+    release: str = ""
+    notes: str = ""
+
+    @property
+    def recorded(self) -> bool:
+        return any(getattr(self, field) for field in FIELDS)
+
+    def as_dict(self) -> dict[str, str]:
+        return {f: getattr(self, f) for f in FIELDS if getattr(self, f)}
+
+    def summary(self) -> str:
+        """One line, for a table cell or a commit subject."""
+        left = " ".join(p for p in (self.app, self.app_version) if p)
+        right = " ".join(p for p in (self.model, self.model_version) if p)
+        parts = [p for p in (left, right) if p]
+        if self.release:
+            parts.append(f"({self.release})")
+        return " · ".join(parts)
+
+    def merged_with(self, other: "Subject") -> "Subject":
+        """`other` wins where it says anything.
+
+        A run's own details override the flow's declaration, because the flow
+        says what it was written against and the run says what was actually in
+        front of it.
+        """
+        return replace(self, **{
+            field: getattr(other, field)
+            for field in FIELDS if getattr(other, field)
+        })
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any] | None) -> "Subject":
+        config = config or {}
+        unknown = sorted(set(config) - set(FIELDS))
+        if unknown:
+            raise ValueError(
+                f"unknown subject field(s): {', '.join(unknown)}. "
+                f"Expected any of: {', '.join(FIELDS)}"
+            )
+        return cls(**{f: str(config.get(f, "") or "").strip() for f in FIELDS})
+
+
+# -- remembering it between runs ----------------------------------------------
+#
+# You do not retype the service pack every morning. The last thing recorded for
+# a flow is offered again next time, because the common case is running the
+# same flow against the same installation repeatedly, and the interesting case
+# -- a new release -- is the one where somebody will notice and change it.
+
+import json
+from pathlib import Path
+
+DEFAULT_STORE = Path.home() / ".understudy" / "subjects.json"
+
+
+def load_remembered(flow_name: str, path: Path | str | None = None) -> Subject:
+    """What was recorded last time this flow ran. Empty if never."""
+    path = Path(path) if path else DEFAULT_STORE
+    if not path.exists():
+        return Subject()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return Subject()
+    entry = (data.get("flows") or {}).get(flow_name) or data.get("last") or {}
+    try:
+        return Subject.from_config(entry)
+    except ValueError:
+        # A field this version does not know about: take what fits rather than
+        # refusing to pre-fill anything.
+        return Subject(**{f: str(entry.get(f, "") or "") for f in FIELDS})
+
+
+def remember(flow_name: str, subject: Subject,
+             path: Path | str | None = None) -> None:
+    if not subject.recorded:
+        return
+    path = Path(path) if path else DEFAULT_STORE
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    flows = data.get("flows") or {}
+    flows[flow_name] = subject.as_dict()
+    payload = {"flows": flows, "last": subject.as_dict()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

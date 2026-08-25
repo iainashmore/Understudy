@@ -19,6 +19,7 @@ from understudy.authoring import AuthoringError, duplicate_file
 from understudy.narrate import ClaudeNarrator, narrate_run
 from understudy.prompts import PromptsError, prompts_for
 from understudy.pdf import write_pdf
+from understudy.subject import Subject, load_remembered, remember
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import GitError
 from understudy.transcript import write_transcript, write_suite_index
@@ -112,7 +113,8 @@ def command_suite(args) -> int:
             repeat=1, out=str(out_dir / entry.slug), runs_root=args.runs_root,
             headed=args.headed, csv=True, reset_level=1, strict=False,
             agent="off", learned_dir=None, no_transcript=False, embed_transcript=False,
-            pdf=False,
+            pdf=False, app="", app_version="", model_under_test="",
+            model_version="", release="",
             narrate=False, capture_steps=False, record=False,
         )
         print(f"\n--- {entry.name}")
@@ -172,6 +174,36 @@ def _write_transcripts(run_dir, embed: bool, pdf: bool) -> int:
         return 1
     print(f"transcript -> {outcome.path}")
     return 0
+
+
+def command_compare(args) -> int:
+    from understudy.compare import compare as compare_runs
+    from understudy.compare_report import write_comparison
+
+    comparison = compare_runs(args.run_dirs)
+    if comparison.mixed_flows:
+        print(f"warning: these runs are of different flows "
+              f"({', '.join(comparison.flows)})", file=sys.stderr)
+
+    for column in comparison.columns:
+        print(f"  {column.label:<26} {column.heading}")
+    print(f"\n{comparison.headline()}\n")
+
+    rows = comparison.changed if args.changed_only else comparison.rows
+    for row in rows:
+        mark = {"same": "  ", "reworded": "~ ", "changed": "! ",
+                "missing": "? ", "failed": "x "}[row.verdict]
+        print(f"{mark}{row.prompt_id:<22} {row.verdict}")
+        if row.verdict in ("changed", "missing"):
+            for column, response in zip(comparison.columns, row.responses):
+                text = "(no run)" if response is None else response.strip()
+                print(f"      {column.heading[:34]:<34} {text[:70]}")
+
+    if args.out:
+        paths = write_comparison(comparison, args.out)
+        for path in paths:
+            print(f"\ncomparison -> {path}")
+    return 1 if (comparison.changed and args.changed_only) else 0
 
 
 def command_repo(args) -> int:
@@ -250,6 +282,22 @@ def command_transcript(args) -> int:
     return _write_transcripts(args.run_dir, args.embed_transcript, args.pdf)
 
 
+def _subject_for(args, flow) -> Subject:
+    """What was under test, from the flags, what was recorded last time, and
+    the flow -- in that order of authority."""
+    given = Subject.from_config({
+        "app": args.app, "app_version": args.app_version,
+        "model": args.model_under_test, "model_version": args.model_version,
+        "release": args.release,
+    })
+    # Not retyped every morning: the last thing recorded for this flow stands
+    # in until somebody says otherwise.
+    subject = load_remembered(flow.name).merged_with(given)
+    if given.recorded:
+        remember(flow.name, flow.subject.merged_with(subject))
+    return subject
+
+
 def command_run(args) -> int:
     flow, prompts = _load(args.flow, args.backend)
     only = args.only.split(",") if args.only else None
@@ -277,7 +325,9 @@ def command_run(args) -> int:
     try:
         runner = Runner(flow, driver, out_dir, reset_level=args.reset_level,
                         capture_steps=args.narrate or args.capture_steps,
-                        record=args.record)
+                        record=args.record, subject=_subject_for(args, flow))
+        if runner.subject.recorded:
+            print(f"under test: {runner.subject.summary()}")
         results = []
         runner.prepare(prompts)
         for variant in prompts:
@@ -338,6 +388,15 @@ def main(argv: list[str] | None = None) -> int:
     transcript.add_argument("--pdf", action="store_true",
                             help="also print the transcript to PDF")
     transcript.set_defaults(handler=command_transcript)
+
+    compare = sub.add_parser(
+        "compare", help="line up the same prompts across two or more runs")
+    compare.add_argument("run_dirs", nargs="+")
+    compare.add_argument("--out", default="",
+                         help="write the comparison here (markdown and html)")
+    compare.add_argument("--changed-only", action="store_true",
+                         help="only the prompts whose answer moved")
+    compare.set_defaults(handler=command_compare)
 
     repo = sub.add_parser("repo", help="what the workspace checkout looks like")
     repo.add_argument("--workspace", default=".")
@@ -420,6 +479,19 @@ def main(argv: list[str] | None = None) -> int:
                                help="screenshot after every step, without narrating")
             child.add_argument("--no-transcript", action="store_true",
                                help="skip the markdown transcript")
+            # What was under test. Remembered between runs, so a service pack
+            # is typed once and every later run of that flow carries it.
+            child.add_argument("--app", default="",
+                               help="the application under test, e.g. 'CATIA V5'")
+            child.add_argument("--app-version", default="",
+                               help="its version, e.g. 'R32 SP4'")
+            child.add_argument("--model-under-test", "--assistant", default="",
+                               dest="model_under_test",
+                               help="the assistant being exercised, e.g. 'LEO'")
+            child.add_argument("--model-version", default="",
+                               help="the assistant's version, e.g. '2026x FD01'")
+            child.add_argument("--release", default="",
+                               help="release or build number")
             child.add_argument("--pdf", action="store_true",
                                help="also print the transcript to PDF")
             child.add_argument("--embed-transcript", action="store_true",
