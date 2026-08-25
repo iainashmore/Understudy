@@ -117,6 +117,43 @@ def walk(wrapper, ancestors: tuple[str, ...] = (), depth: int = 0,
     return found
 
 
+def matching_titles(pattern: str | None) -> list[str]:
+    """Every top-level window the pattern matches, or [] if we cannot look."""
+    if not pattern:
+        return []
+    try:
+        from pywinauto import Desktop
+
+        return [
+            window.window_text()
+            for window in Desktop(backend="uia").windows(
+                title_re=_glob_to_regex(pattern), top_level_only=True
+            )
+        ]
+    except Exception:
+        return []
+
+
+def attach_failure(pattern: str | None, executable: str | None,
+                   exc: Exception, titles: list[str]) -> str:
+    """Why the attach failed, in terms the person who wrote the flow can act on.
+
+    Two windows matching one pattern is not an edge case on a CAD workstation:
+    CATIA V5 and 3DX side by side, two documents open, a splash screen that has
+    not gone away. pywinauto reports it as "There are 2 elements that match the
+    criteria {'title_re': ...}", which says nothing about which two.
+    """
+    if len(titles) > 1:
+        listed = "\n".join(f"  - {title!r}" for title in titles)
+        return (
+            f"{pattern!r} matches {len(titles)} windows, so there is no way to "
+            f"tell which one the flow means:\n{listed}\n"
+            f"Tighten target_app.native.window_title_pattern until it matches "
+            f"one of them, or close the others."
+        )
+    return f"could not attach to {pattern or executable!r}: {exc}"
+
+
 class NativeDriver:
     """UIAutomation, with the visual and agent rungs from the web driver."""
 
@@ -174,10 +211,17 @@ class NativeDriver:
             self.window = desktop.window(title_re=_glob_to_regex(pattern or "*"))
             self.window.wait("exists ready", timeout=60)
         except Exception as exc:
-            raise DriverError(f"could not attach to {pattern or executable!r}: {exc}") from None
+            raise DriverError(
+                attach_failure(pattern, executable, exc, matching_titles(pattern))
+            ) from None
 
         self.refresh()
         self.baseline = self.geometry
+        # After refresh(), because the recorder frames itself on the monitor
+        # the window turned out to be on. Never reached until now: the whole
+        # native recording path was dead code, and a run asked to record said
+        # nothing at all about producing no video.
+        self._prepare_recorder(app_config)
         self.park_pointer()
         expected = app_config.get("monitor")
         if expected and self.geometry and self.geometry.monitor != expected:

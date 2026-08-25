@@ -13,7 +13,8 @@ import pytest
 
 from understudy.drivers import build
 from understudy.drivers.base import Driver, DriverError
-from understudy.drivers.native import NativeDriver, _Point, walk
+from understudy.drivers.native import (NativeDriver, _Point, attach_failure,
+                                        walk)
 from understudy.vision import Match
 
 
@@ -131,6 +132,26 @@ class TestAnchorPoints:
         point = _Point(NativeDriver(), Match(0, 0, 10, 10, 0.99))
         with pytest.raises(DriverError, match="no text to read"):
             point.get_value()
+
+
+class TestWhenTheWindowIsAmbiguous:
+    """Two windows matching one pattern is not an edge case on a CAD
+    workstation: CATIA V5 and 3DX side by side, two documents open, a splash
+    screen that has not gone away yet."""
+
+    def test_it_names_the_windows_it_could_not_choose_between(self):
+        message = attach_failure(
+            "*Notepad*", None, RuntimeError("There are 2 elements"),
+            ["Untitled - Notepad", "anchors.txt - Notepad"],
+        )
+        assert "Untitled - Notepad" in message
+        assert "anchors.txt - Notepad" in message
+        assert "window_title_pattern" in message, "says nothing about the fix"
+
+    def test_one_window_that_simply_would_not_attach_reads_normally(self):
+        message = attach_failure("*CATIA*", None, RuntimeError("timed out"), [])
+        assert "could not attach to '*CATIA*'" in message
+        assert "timed out" in message
 
 
 class TestUnavailablePaths:

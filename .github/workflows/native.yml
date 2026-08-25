@@ -91,6 +91,34 @@ jobs:
           python -m understudy.cli run examples/notepad.yaml \
             --backend native --out runs/notepad --record --pdf
 
+      - name: Close the Notepad the last flow launched
+        shell: bash
+        run: |
+          # `launch: true` starts one and deliberately does not close it --
+          # nothing should close a CAD application it did not own. Two windows
+          # matching one pattern is then ambiguous, which is the next step's
+          # problem, so the job tidies up after itself.
+          taskkill //im notepad.exe //f || true
+
+      - name: Install Tesseract, so the blind read has an engine
+        shell: bash
+        run: |
+          # The blind flow reads its reply off the pixels. Without an engine
+          # that step is an error, not a blank -- which is the right
+          # behaviour, and means the job needs a real one.
+          choco install tesseract -y --no-progress
+          echo "C:/Program Files/Tesseract-OCR" >> "$GITHUB_PATH"
+
+      - name: Check the OCR engine can actually be reached
+        shell: bash
+        run: |
+          python -c "
+          import sys
+          from understudy.ocr import available
+          print('ocr available:', available())
+          sys.exit(0 if available() else 1)
+          "
+
       - name: Cut anchors out of a live Notepad
         run: python tools/make_notepad_anchors.py
 
@@ -115,8 +143,15 @@ jobs:
             echo "===== $run"
             if [ -d "$run" ]; then
               find "$run" -type f | sort
-              echo "-----"
-              [ -f "$run/transcript.md" ] && cat "$run/transcript.md"
+              # The transcript itself is in the artifact. Printing all of it
+              # here buries whatever actually failed a few hundred lines up.
+              [ -f "$run/results.jsonl" ] && python -c "
+          import json, sys
+          for line in open(sys.argv[1]):
+              row = json.loads(line)
+              print(' ', row['prompt_id'], row['status'],
+                    'video:', row.get('recording') or row.get('recording_error'))
+          " "$run/results.jsonl"
             else
               echo "(not produced)"
             fi

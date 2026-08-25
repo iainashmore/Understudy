@@ -257,6 +257,32 @@ class TestFindingThingsByLookingAtThem:
         assert "READBACK" in outcome.text.upper().replace(" ", "")
 
 
+class TestTheRecorder:
+    """start() has to build one. It did not, for as long as the native backend
+    has existed: _prepare_recorder was written, tested by eye, and never
+    called, so every native run asked to record silently produced no video."""
+
+    def test_starting_prepares_a_real_recorder(self, driver):
+        from understudy.recording import FfmpegRecorder
+
+        assert isinstance(driver.recorder, FfmpegRecorder), \
+            f"still the placeholder: {driver.recorder!r}"
+
+    def test_it_frames_the_monitor_the_window_is_on(self, driver):
+        """Not the window rectangle: menus, tooltips and modal dialogs fall
+        outside it, and a recording that clips those off is a recording of the
+        wrong thing."""
+        region = driver.recorder.region
+        assert region and region["width"] > 0 and region["height"] > 0
+
+    def test_an_unavailable_recorder_says_why(self, driver):
+        """Whether ffmpeg is here or not, the answer has to be a sentence or
+        None -- never a silent False, which is what produced a run with no
+        video and no explanation anywhere in it."""
+        why = driver.recording_unavailable()
+        assert why is None or "ffmpeg" in why
+
+
 class TestSeeing:
     def test_it_screenshots_the_window(self, driver):
         from harness.image import load_rgb
