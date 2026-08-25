@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from understudy.transcript_html import render_html
+from understudy.transcript_html import render_full_html
 
 #: Roomy enough for a 460px screenshot at full width without shrinking it.
 PAGE_FORMAT = "A4"
@@ -36,7 +36,9 @@ def write_pdf(run_dir: Path | str, filename: str = "transcript.pdf") -> PdfResul
     run_dir = Path(run_dir)
     target = run_dir / filename
     try:
-        html = render_html(run_dir, embed=True)
+        # Every prompt run, not the index: a filed copy that says "see
+        # the other eleven files" is not a record of anything.
+        html = render_full_html(run_dir, embed=True)
     except Exception as exc:
         return PdfResult(None, f"could not build the transcript: {exc}")
 

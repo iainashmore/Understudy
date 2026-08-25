@@ -26,6 +26,15 @@ description: A flow used by the tests
 """
 
 
+def one(run, index: int = 0, **kwargs) -> str:
+    """One prompt run's own page -- where the steps, the prompts, the replies
+    and the screenshots live. render_html is an index of them."""
+    from understudy.transcript import load_results
+    from understudy.transcript_html import render_one_html
+
+    return render_one_html(run, load_results(run)[index], **kwargs)
+
+
 def result(**overrides):
     base = {
         "prompt_id": "baseline",
@@ -94,7 +103,7 @@ def test_the_page_stands_up_on_its_own(run_dir):
 
 
 def test_it_carries_the_prompt_and_the_response(run_dir):
-    page = render_html(run_dir([result()]))
+    page = one(run_dir([result()]))
     assert "Summarise this." in page
     assert "A summary." in page
 
@@ -103,7 +112,7 @@ def test_the_steps_are_numbered(run_dir):
     """There is one list of steps now, and it is the one with the screenshots
     and the replies attached -- not a bare list above it saying the same thing
     without any of them."""
-    page = render_html(run_dir([result()]))
+    page = one(run_dir([result()]))
     assert '<ol class="steps">' not in page
     assert '<span class="step-no">1</span>' in page
     assert "Click pad_node" in page and "Type into prompt_box" in page
@@ -112,7 +121,7 @@ def test_the_steps_are_numbered(run_dir):
 def test_screenshots_sit_under_the_step_that_produced_them(run_dir):
     """The whole shape of the transcript: read it step by step, and each step
     carries the picture of what it did."""
-    page = render_html(run_dir([result()]))
+    page = one(run_dir([result()]))
     body = page.split('<ol class="timeline">')[1]
     opening, first, second = body.split("<li")[1:4]
 
@@ -124,25 +133,25 @@ def test_screenshots_sit_under_the_step_that_produced_them(run_dir):
 
 
 def test_a_recording_becomes_a_playable_element(run_dir):
-    page = render_html(run_dir([result(recording="baseline/recording.mp4")]))
-    assert '<video controls preload="metadata" src="baseline/recording.mp4">' in page
+    page = one(run_dir([result(recording="baseline/recording.mp4")]))
+    assert '<video controls preload="metadata" src="recording.mp4">' in page
 
 
 def test_a_missing_recording_says_why(run_dir):
-    page = render_html(run_dir([result(recording_error="ffmpeg not found")]))
+    page = one(run_dir([result(recording_error="ffmpeg not found")]))
     assert "ffmpeg not found" in page
     assert "<video" not in page
 
 
 def test_synthetic_clicks_are_called_out(run_dir):
     """Otherwise a recording with a motionless cursor is a mystery."""
-    page = render_html(run_dir([result(pointer_note="browser is headless")]))
+    page = one(run_dir([result(pointer_note="browser is headless")]))
     assert "browser is headless" in page
     assert "would have seen the cursor move" in page
 
 
 def test_a_failure_is_shown_not_buried(run_dir):
-    page = render_html(run_dir([result(status="error", error="target not found")]))
+    page = one(run_dir([result(status="error", error="target not found")]))
     assert "target not found" in page
     assert "FAIL" in page
 
@@ -152,13 +161,13 @@ def test_a_failure_is_shown_not_buried(run_dir):
 
 def test_a_response_containing_markup_cannot_break_out_of_the_page(run_dir):
     hostile = "<script>alert('x')</script> & <b>bold</b>"
-    page = render_html(run_dir([result(response=hostile)]))
+    page = one(run_dir([result(response=hostile)]))
     assert "<script>alert" not in page
     assert "&lt;script&gt;" in page
 
 
 def test_a_prompt_with_quotes_survives(run_dir):
-    page = render_html(run_dir([result(prompt='say "hello" & go',
+    page = one(run_dir([result(prompt='say "hello" & go',
                                        variables={"prompt": 'say "hello" & go'})]))
     assert "&quot;hello&quot;" in page or "&#x27;" in page or "hello" in page
     assert "&amp; go" in page
@@ -168,17 +177,70 @@ def test_a_prompt_with_quotes_survives(run_dir):
 
 
 def test_both_forms_carry_the_same_responses(run_dir):
+    from understudy.transcript import render_one
+
+    from understudy.transcript import load_results
+
     directory = run_dir([result(), result(prompt_id="terse", response="Short.")])
-    markdown = render_markdown(directory)
-    page = render_html(directory)
-    for text in ("A summary.", "Short.", "baseline", "terse"):
-        assert text in markdown and text in page
+    results = load_results(directory)
+    for index, response in enumerate(("A summary.", "Short.")):
+        assert response in render_one(directory, results[index])
+        assert response in one(directory, index)
+    # And the index names both, whichever form you open.
+    for name in ("baseline", "terse"):
+        assert name in render_markdown(directory) and name in render_html(directory)
+
+
+def test_what_was_under_test_reads_as_separate_tags(run_dir):
+    """Comparing FD03 against FD04 starts with finding the two runs, and
+    "CATIA V5 R2026x · LEO FD03" as one sentence buries the part that
+    distinguishes them."""
+    page = one(run_dir([result(subject={
+        "app": "CATIA V5", "app_version": "R2026x",
+        "model": "LEO", "model_version": "FD03",
+    })]))
+
+    assert page.count('class="tagchip"') == 4
+    assert ">FD03</span>" in page
+    assert 'title="Assistant version"' in page
+
+
+class TestTheRawFiles:
+    """What went in and what came out, linked from the transcript. It is what
+    somebody checks when they doubt what they are reading."""
+
+    def test_they_are_linked(self, run_dir):
+        page = render_html(run_dir([result()]))
+        assert '<a href="flow.yaml">flow.yaml</a>' in page
+        assert '<a href="results.jsonl">results.jsonl</a>' in page
+
+    def test_a_standalone_copy_carries_them(self, run_dir):
+        """The exported transcript is one file, sent to somebody who has no
+        run directory. A relative link to flow.yaml is dead the moment it
+        leaves -- which is exactly when a reader wants to see what was run."""
+        page = render_html(run_dir([result()]), embed=True)
+
+        assert 'download="flow.yaml"' in page
+        assert 'download="results.jsonl"' in page
+        assert '<a href="flow.yaml">' not in page, "still a dead relative link"
+
+    def test_a_file_too_large_to_inline_stays_a_link(self, run_dir):
+        from understudy.transcript_html import MAX_INLINE_FILE_BYTES
+
+        directory = run_dir([result()])
+        # A long sweep's CSV is not nothing, and a transcript nobody can open
+        # is worse than a link.
+        (directory / "results.csv").write_bytes(b"x" * (MAX_INLINE_FILE_BYTES + 1))
+
+        page = render_html(directory, embed=True)
+        assert '<a href="results.csv">' in page
+        assert 'download="flow.yaml"' in page, "the small ones still travel"
 
 
 def test_embedding_inlines_the_images(run_dir):
     directory = run_dir([result()])
-    assert "data:image/png;base64," not in render_html(directory)
-    assert "data:image/png;base64," in render_html(directory, embed=True)
+    assert "data:image/png;base64," not in one(directory)
+    assert "data:image/png;base64," in one(directory, embed=True)
 
 
 def a_video(directory, size):
@@ -194,7 +256,7 @@ def test_embedding_inlines_a_video_small_enough_to_email(run_dir):
     directory = run_dir([result(recording="baseline/recording.mp4")])
     a_video(directory, 60_000)
 
-    page = render_html(directory, embed=True)
+    page = one(directory, embed=True)
     assert "data:video/mp4;base64," in page
 
 
@@ -206,9 +268,9 @@ def test_a_large_video_stays_a_link_and_says_so(run_dir):
     directory = run_dir([result(recording="baseline/recording.mp4")])
     a_video(directory, MAX_INLINE_VIDEO_BYTES + 1)
 
-    page = render_html(directory, embed=True)
+    page = one(directory, embed=True)
     assert "data:video/mp4" not in page
-    assert 'src="baseline/recording.mp4"' in page
+    assert 'src="recording.mp4"' in page
     assert "not inside this file" in page, \
         "the reader is left to work out why the player is empty"
 
@@ -219,8 +281,8 @@ def test_the_viewer_in_the_app_still_points_at_the_file(run_dir):
     directory = run_dir([result(recording="baseline/recording.mp4")])
     a_video(directory, 60_000)
 
-    page = render_html(directory)
-    assert 'src="baseline/recording.mp4"' in page
+    page = one(directory)
+    assert 'src="recording.mp4"' in page
     assert "data:video/mp4" not in page
 
 
@@ -248,10 +310,11 @@ def a_conversation():
 
 def test_a_conversation_renders_as_one_block_per_turn(run_dir):
     """Not one prompt and whichever read happened to be stored as `response`."""
-    page = render_html(run_dir([a_conversation()]))
+    page = one(run_dir([a_conversation()]))
 
-    assert "2 exchanges" in page
-    assert page.count('class="exchange"') == 2
+    # At the steps that said them, not gathered into a block of their own.
+    assert page.count('class="tag">prompt') == 2
+    assert page.count('class="tag">reply') == 2
     assert "Now fillet it." in page and "Fillet added." in page
 
 
@@ -280,6 +343,6 @@ def test_an_empty_run_still_renders(run_dir):
 def test_a_browser_without_h264_is_told_why_the_video_is_dead(run_dir):
     """Some Chromium builds ship without proprietary codecs. A player that
     silently does nothing reads as a broken recording."""
-    page = render_html(run_dir([result(recording="baseline/recording.mp4")]))
+    page = one(run_dir([result(recording="baseline/recording.mp4")]))
     assert "cannot decode H.264" in page
     assert "canPlayType" in page

@@ -32,6 +32,14 @@ def make_run(tmp_path: Path, results: list[dict]) -> Path:
     return run
 
 
+def one(run: Path, index: int = 0, **kwargs) -> str:
+    """One prompt run's own transcript -- where the steps, the prompts, the
+    replies and the screenshots live. The run-level file is an index."""
+    from understudy.transcript import load_results, render_one
+
+    return render_one(run, load_results(run)[index], **kwargs)
+
+
 def result(**overrides) -> dict:
     base = {
         "prompt_id": "baseline", "repeat_index": 0, "prompt": "Summarise this.",
@@ -57,6 +65,11 @@ def result(**overrides) -> dict:
     # sets one and not the other is describing a run that cannot happen.
     if "response" in overrides and "reads" not in overrides:
         base["reads"] = {"response": overrides["response"]}
+    # Nor can two prompt runs write into the same folder: the runner gives
+    # each its own, and the transcript of each lives in it.
+    if "prompt_id" in overrides and "screenshots" not in overrides:
+        base["screenshots"] = [s.replace("baseline/", overrides["prompt_id"] + "/")
+                               for s in base["screenshots"]]
     return base
 
 
@@ -189,7 +202,7 @@ class TestAConversationRatherThanOneQuestion:
             variables={"opening": "Add a 10mm hole.", "followup": "Now fillet it.",
                        "style": "terse"},
         )])
-        text = render_markdown(run)
+        text = one(run)
 
         assert "`style` = terse" in text
         assert "`opening`" not in text, "said once, listed twice"
@@ -207,7 +220,7 @@ class TestAConversationRatherThanOneQuestion:
 
     def test_the_transcript_shows_both_turns(self, tmp_path):
         run = make_run(tmp_path, [a_conversation()])
-        text = render_markdown(run)
+        text = one(run)
 
         assert "Prompt 1:" in text and "Prompt 2:" in text
         assert "Add a 10mm hole." in text and "Now fillet it." in text
@@ -216,7 +229,7 @@ class TestAConversationRatherThanOneQuestion:
     def test_each_turn_sits_at_the_step_that_said_it(self, tmp_path):
         """Not gathered into a conversation block of their own. The step-by-step
         is the transcript; a prompt is something a step did."""
-        text = render_markdown(make_run(tmp_path, [a_conversation()]))
+        text = one(make_run(tmp_path, [a_conversation()]))
 
         first = text.index("Add a 10mm hole.")
         second = text.index("Now fillet it.")
@@ -226,7 +239,7 @@ class TestAConversationRatherThanOneQuestion:
 
     def test_one_prompt_still_reads_as_one_prompt(self, tmp_path):
         """The common case: no turn numbers, just what was typed and read."""
-        text = render_markdown(make_run(tmp_path, [result()]))
+        text = one(make_run(tmp_path, [result()]))
 
         assert "Prompt 2:" not in text
         assert "A summary." in text
@@ -251,18 +264,30 @@ class TestStructure:
             recording="baseline/recording.mp4",
             subject={"app": "CATIA V5", "app_version": "R33", "model": "LEO"},
         )])
+        # The index: what was under test, the raw material, then the list.
         text = render_markdown(run)
-
         order = [text.index(mark) for mark in
-                 ("**Under test**", "**Input**", "## Recording", "### Step by step")]
+                 ("**Under test**", "**Input**", "## Prompt runs")]
         assert order == sorted(order), text[:600]
+        assert "## Recording" not in text, \
+            "a video belongs to a prompt run, and its own transcript shows it"
 
-    def test_there_is_a_section_per_prompt_run_with_its_outcome(self, tmp_path):
+        # A prompt run: the same, then the video, then the steps. The video is
+        # the fastest way to know whether the replay did what it was meant to.
+        page = one(run)
+        inner = [page.index(mark) for mark in
+                 ("**Under test**", "**Input**", "## Recording", "### Step by step")]
+        assert inner == sorted(inner), page[:600]
+
+    def test_the_run_file_indexes_the_prompt_runs_rather_than_containing_them(self, tmp_path):
+        """Twelve prompts is twelve files, not one page a reader scrolls
+        through hunting for the third."""
         run = make_run(tmp_path, [result(), result(prompt_id="terse", duration_ms=900)])
         text = render_markdown(run)
-        assert "## baseline" in text and "## terse" in text
-        assert "**Status** pass · 1200 ms" in text
-        assert "**Status** pass · 900 ms" in text
+
+        assert "[baseline](baseline/transcript.md) — pass · 1200 ms" in text
+        assert "[terse](terse/transcript.md) — pass · 900 ms" in text
+        assert "### Step by step" not in text
 
     def test_there_is_one_view_of_the_run_not_four(self, tmp_path):
         """A summary table, a list of the steps, a table of prompts against
@@ -279,41 +304,42 @@ class TestStructure:
             result(prompt="one", response="first"),
             result(prompt_id="b", prompt="two", response="second"),
         ])
-        text = render_markdown(run)
-        assert "first" in text and "second" in text
+        assert "first" in one(run, 0)
+        assert "second" in one(run, 1)
 
     def test_screenshots_are_linked_relatively_and_exist(self, tmp_path):
         run = make_run(tmp_path, [result()])
-        text = render_markdown(run)
+        text = one(run)
 
-        assert '<img src="baseline/01-before.png"' in text
+        # Beside the file, not under it: this transcript lives in baseline/.
+        assert '<img src="01-before.png"' in text
         assert (run / "baseline/01-before.png").exists()
         assert "before" in text and "after" in text, "captions come from the filenames"
 
     def test_reset_steps_are_distinguishable_from_flow_steps(self, tmp_path):
         """A reset click and the first real step are both user actions, so both
         get a number; the transcript has to say which is which."""
-        text = render_markdown(make_run(tmp_path, [result()]))
+        text = one(make_run(tmp_path, [result()]))
         assert "| 1 (reset) | click |" in text
         assert "| 2 | type |" in text
         assert "_(reset)_" in text
 
     def test_how_each_target_was_resolved_is_reported(self, tmp_path):
-        text = render_markdown(make_run(tmp_path, [result()]))
+        text = one(make_run(tmp_path, [result()]))
         assert "| selector |" in text and "| anchor |" in text
 
 
 class TestAwkwardContent:
     def test_a_response_containing_a_code_fence_cannot_escape_its_block(self, tmp_path):
         run = make_run(tmp_path, [result(response="here is code:\n```py\nx=1\n```\ndone")])
-        text = render_markdown(run)
+        text = one(run)
         assert "````text" in text, "the fence must be longer than the content's"
 
     def test_pipes_in_a_step_do_not_break_the_step_table(self, tmp_path):
         """The collapsed table of every step is still a table, and a response
         or a target containing a pipe still has to stay inside its cell."""
         run = make_run(tmp_path, [result(response="a | b | c")])
-        rows = [l for l in render_markdown(run).splitlines()
+        rows = [l for l in one(run).splitlines()
                 if l.startswith("| 1 ") or l.startswith("| 2 ")]
         assert rows, "no step rows at all"
         for row in rows:
@@ -322,31 +348,30 @@ class TestAwkwardContent:
     def test_a_missing_screenshot_is_noted_rather_than_a_broken_link(self, tmp_path):
         run = make_run(tmp_path, [result()])
         (run / "baseline/01-before.png").unlink()
-        assert "(missing: baseline/01-before.png)" in render_markdown(run)
+        assert "(missing: baseline/01-before.png)" in one(run)
 
     def test_a_failure_is_surfaced_at_the_top_and_in_the_section(self, tmp_path):
         run = make_run(tmp_path, [result(status="error", error="could not resolve 'send'")])
-        text = render_markdown(run)
-        assert "FAIL" in text
-        assert "0 ok, 1 failed" in text
-        assert "**Error** could not resolve 'send'" in text
+        assert "0 ok, 1 failed" in render_markdown(run)
+        assert "FAIL" in render_markdown(run), "the index says which one failed"
+        assert "**Error** could not resolve 'send'" in one(run)
 
     def test_a_pixels_only_response_shows_the_image_instead(self, tmp_path):
         run = make_run(tmp_path, [result(
             response="", reads={}, screenshots=["baseline/01-before.png", "baseline/04-src.png"],
             read_images={"response": "baseline/04-src.png"},
         )])
-        text = render_markdown(run)
+        text = one(run)
 
         assert "The pixels `response` was read from:" in text
-        assert '<img src="baseline/04-src.png"' in text
-        assert text.count('src="baseline/04-src.png"') == 1, "not also as a screenshot"
+        assert '<img src="04-src.png"' in text
+        assert text.count('src="04-src.png"') == 1, "not also as a screenshot"
         assert "(nothing captured)" in text, "and it says the text was empty"
 
-    def test_repeats_get_distinct_sections(self, tmp_path):
+    def test_repeats_are_listed_separately(self, tmp_path):
         run = make_run(tmp_path, [result(), result(repeat_index=1)])
         text = render_markdown(run)
-        assert "## baseline" in text and "## baseline (repeat 2)" in text
+        assert "[baseline](" in text and "[baseline (repeat 2)](" in text
 
 
 class TestFilesAndModes:
@@ -356,11 +381,11 @@ class TestFilesAndModes:
         assert path == run / "transcript.md"
         assert path.read_text(encoding="utf-8").startswith("# demo-flow")
 
-    def test_embedding_makes_the_report_a_single_file(self, tmp_path):
+    def test_embedding_makes_a_prompt_run_a_single_file(self, tmp_path):
         run = make_run(tmp_path, [result()])
-        text = render_markdown(run, embed=True)
+        text = one(run, embed=True)
         assert "data:image/png;base64," in text
-        assert 'src="baseline/' not in text, "nothing left pointing outside the file"
+        assert 'src="01-' not in text, "nothing left pointing outside the file"
 
     def test_a_run_without_results_is_a_clear_error(self, tmp_path):
         (tmp_path / "empty").mkdir()
@@ -428,7 +453,7 @@ class TestTheTimeline:
 
     def test_the_markdown_reads_as_a_sequence(self, tmp_path):
         run = make_run(tmp_path, [result(step_statuses=self.steps())])
-        text = render_markdown(run)
+        text = one(run)
         section = text.split("### Step by step")[1]
 
         assert "**Before the first step**" in section
@@ -443,7 +468,7 @@ class TestTheTimeline:
         """A run from an older version, or an image written outside a capture
         step, must not vanish."""
         run = make_run(tmp_path, [result()])       # no capture steps at all
-        text = render_markdown(run)
+        text = one(run)
         assert "#### Other screenshots" in text
         assert "01-before.png" in text and "02-after.png" in text
 
@@ -451,6 +476,6 @@ class TestTheTimeline:
         steps = self.steps()
         steps[1] = dict(steps[1], status="error", error="target not found")
         run = make_run(tmp_path, [result(step_statuses=steps, status="error")])
-        section = render_markdown(run).split("### Step by step")[1]
+        section = one(run).split("### Step by step")[1]
         assert "**FAIL**" in section
         assert "target not found" in section

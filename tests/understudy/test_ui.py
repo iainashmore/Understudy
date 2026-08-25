@@ -259,8 +259,15 @@ class TestRunning:
         self.drain(job)
 
         assert job.transcript_html and job.transcript_html.endswith("transcript.html")
-        page = (api.workspace.root / job.transcript_html).read_text()
-        assert "<!doctype html>" in page
+        index = (api.workspace.root / job.transcript_html).read_text()
+        assert "<!doctype html>" in index
+        # The run's page is an index of its prompt runs; each has its own.
+        assert "/transcript.html" in index
+
+        run_dir = (api.workspace.root / job.transcript_html).parent
+        pages = sorted(run_dir.glob("*/transcript.html"))
+        assert pages, "no prompt run pages were written"
+        page = pages[0].read_text()
         assert "first prompt" in page
         assert "Echo: first prompt" in page
         # Numbered so a step can be quoted. This run has no recording, so the

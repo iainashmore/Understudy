@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from understudy.narrate import load_narration
+from understudy.subject import LABELS
 from understudy.transcript import (
     STATUS_MARK,
     _flow_heading,
@@ -32,6 +33,7 @@ from understudy.transcript import (
     action_numbers,
     describe_step,
     exchanges,
+    folder_of,
     intent_descriptions,
     load_results,
     numbered_steps,
@@ -71,6 +73,13 @@ h3 { font-size:14px; margin:20px 0 8px; text-transform:uppercase;
 .meta { display:flex; flex-wrap:wrap; gap:6px 18px; color:var(--dim);
         font-size:13px; margin-bottom:18px; }
 .meta b { color:var(--fg); font-weight:600; }
+.tagchip { display:inline-block; margin-left:6px; padding:1px 8px; font-size:12px;
+           border:1px solid var(--line); border-radius:10px; color:var(--fg);
+           background:var(--panel); }
+/* The raw material either side of the run. Worth finding: it is what somebody
+   checks when they doubt the transcript. */
+.meta.files { margin-top:2px; }
+.meta.files a { border-bottom:1px solid var(--line); }
 table { border-collapse:collapse; width:100%; font-size:13px; margin:8px 0; }
 th,td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line);
         vertical-align:top; }
@@ -160,7 +169,28 @@ def _e(text: Any) -> str:
     return html.escape(str(text if text is not None else ""), quote=True)
 
 
-def _img(run_dir: Path, relative: str, embed: bool) -> str:
+def _subject_tags(subject) -> str:
+    """What was under test, as separate chips rather than one sentence.
+
+    "R2026x FD03" is the thing a reader looks for, and comparing FD03 against
+    FD04 starts with finding them.
+    """
+    if not subject.recorded:
+        return ""
+    chips = "".join(f'<span class="tagchip" title="{_e(LABELS[field])}">'
+                    f"{_e(value)}</span>"
+                    for field, value in subject.tags())
+    return f"<span><b>Under test</b> {chips}</span>"
+
+
+def _beside(relative: str, base: str) -> str:
+    """A run-relative path, rewritten for a page that lives inside `base`."""
+    if base and relative.startswith(base + "/"):
+        return relative[len(base) + 1:]
+    return relative
+
+
+def _img(run_dir: Path, relative: str, embed: bool, base: str = "") -> str:
     path = run_dir / relative
     if not path.exists():
         return f'<p class="note">missing: {_e(relative)}</p>'
@@ -168,7 +198,7 @@ def _img(run_dir: Path, relative: str, embed: bool) -> str:
         data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
         source = f"data:image/png;base64,{data}"
     else:
-        source = relative
+        source = _beside(relative, base)
     return f'<img src="{source}" alt="{_e(relative)}" loading="lazy">'
 
 
@@ -178,13 +208,14 @@ def _img(run_dir: Path, relative: str, embed: bool) -> str:
 MAX_INLINE_VIDEO_BYTES = 12 * 1024 * 1024
 
 
-def _video_source(run_dir: Path, relative: str, embed: bool) -> tuple[str, bool]:
+def _video_source(run_dir: Path, relative: str, embed: bool,
+                  base: str = "") -> tuple[str, bool]:
     """Where the player should point, and whether the file is inside this one."""
     path = run_dir / relative
     if not embed or not path.exists():
-        return _e(relative), False
+        return _e(_beside(relative, base)), False
     if path.stat().st_size > MAX_INLINE_VIDEO_BYTES:
-        return _e(relative), False
+        return _e(_beside(relative, base)), False
     data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
     return f"data:video/mp4;base64,{data}", True
 
@@ -277,7 +308,7 @@ def _steps_table(result: dict[str, Any], narration: dict[str, str]) -> str:
 
 
 def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
-              narration: dict[str, str]) -> str:
+              narration: dict[str, str], base: str = "") -> str:
     """The run read step by step: what was done, then what it looked like.
 
     A gallery of screenshots at the bottom and a table of steps below that
@@ -331,12 +362,12 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
             body.append(f'<div class="typed"><span class="tag">{_e(tag)}</span>'
                         f"<pre>{_e(text) or '<em>nothing captured</em>'}</pre></div>")
         for name, relative in entry.read_images:
-            body.append(f"<figure class=\"region\">{_img(run_dir, relative, embed)}"
+            body.append(f"<figure class=\"region\">{_img(run_dir, relative, embed, base)}"
                         f"<figcaption>the pixels <code>{_e(name)}</code> was read "
                         f"from</figcaption></figure>")
 
         for relative in entry.screenshots:
-            body.append(f"<figure>{_img(run_dir, relative, embed)}"
+            body.append(f"<figure>{_img(run_dir, relative, embed, base)}"
                         f"<figcaption>{_e(_label_of(relative))}</figcaption></figure>")
 
         body.append("</li>")
@@ -347,12 +378,34 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
     if orphans:
         out.append("<h3>Other screenshots</h3>")
         for relative in orphans:
-            out.append(f"<figure>{_img(run_dir, relative, embed)}<figcaption>"
+            out.append(f"<figure>{_img(run_dir, relative, embed, base)}<figcaption>"
                        f"{_e(_label_of(relative))}</figcaption></figure>")
     return "".join(out)
 
 
-def _recordings(run_dir: Path, results: list[dict[str, Any]], embed: bool) -> str:
+#: Raw files are small next to a video, but a results file from a long sweep
+#: is not nothing, and a transcript nobody can open is worse than a link.
+MAX_INLINE_FILE_BYTES = 4 * 1024 * 1024
+
+
+def _file_link(run_dir: Path, name: str, embed: bool, prefix: str = "") -> str:
+    """A link to a raw file that still works from a copy of this page alone.
+
+    The exported transcript is one file, sent to somebody who does not have the
+    run directory. A relative link to flow.yaml is dead the moment it leaves,
+    which is exactly when a reader most wants to see what was actually run --
+    so when the page is standalone, the file travels inside it.
+    """
+    path = run_dir / name
+    if not embed or not path.exists() or path.stat().st_size > MAX_INLINE_FILE_BYTES:
+        return f'<a href="{_e(prefix + name)}">{_e(name)}</a>'
+    data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    return (f'<a href="data:text/plain;base64,{data}" download="{_e(name)}">'
+            f"{_e(name)}</a>")
+
+
+def _recordings(run_dir: Path, results: list[dict[str, Any]], embed: bool,
+                base: str = "") -> str:
     """Every prompt run's video, together and early.
 
     Watching it is the fastest way to know whether the replay did what it was
@@ -369,7 +422,7 @@ def _recordings(run_dir: Path, results: list[dict[str, Any]], embed: bool) -> st
     named = len(results) > 1
     out = ["<h2>Recording</h2>"]
     for result in videos:
-        source, inlined = _video_source(run_dir, result["recording"], embed)
+        source, inlined = _video_source(run_dir, result["recording"], embed, base)
         beside = ("" if inlined or not embed else
                   '<p class="note">The video is not inside this file: it is too '
                   'large to inline. Keep it beside the transcript.</p>')
@@ -408,14 +461,16 @@ def _exchange_rows(result: dict[str, Any]) -> str:
 
 
 def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
-             narration: dict[str, str]) -> str:
-    title = result["prompt_id"]
-    if result.get("repeat_index"):
-        title += f" (repeat {result['repeat_index'] + 1})"
-
-    out = [f'<h2 class="variant" id="{_e(_slug(result))}">{_e(title)}</h2>',
-           f'<p class="meta">{_status_pill(result.get("status"))}'
-           f'<span>{_e(result.get("duration_ms", 0))} ms</span></p>']
+             narration: dict[str, str], heading: bool = True,
+             base: str = "") -> str:
+    out = []
+    if heading:
+        title = result["prompt_id"]
+        if result.get("repeat_index"):
+            title += f" (repeat {result['repeat_index'] + 1})"
+        out += [f'<h2 class="variant" id="{_e(_slug(result))}">{_e(title)}</h2>',
+                f'<p class="meta">{_status_pill(result.get("status"))}'
+                f'<span>{_e(result.get("duration_ms", 0))} ms</span></p>']
     if result.get("error"):
         out.append(f'<p class="note error">{_e(result["error"])}</p>')
     if result.get("pointer_note"):
@@ -423,51 +478,26 @@ def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
                    f'{_e(result["pointer_note"])}. Nothing filming the screen '
                    f'would have seen the cursor move.</p>')
 
-    turns = exchanges(result)
-    variables = dict(result.get("variables") or {})
-    prompt = (variables.pop("prompt", "") or "").strip()
-    if prompt:
-        out.append(f"<h3>Prompt</h3><pre>{_e(prompt)}</pre>")
-
-    # Not the ones that were said: those are the conversation below, and
-    # listing them twice makes the reader check whether they differ.
-    said = {turn.prompt.strip() for turn in turns}
-    other = {k: v for k, v in variables.items() if str(v).strip() not in said}
+    # Everything this prompt run said and heard is in the steps, at the step
+    # it happened. Variables the steps did not say -- a style, a document name
+    # -- are the only thing left worth stating up front.
+    said = {turn.prompt.strip() for turn in exchanges(result)}
+    other = {k: v for k, v in (result.get("variables") or {}).items()
+             if str(v).strip() and str(v).strip() not in said}
     if other:
-        items = "".join(f"<li><code>{_e(k)}</code> = {_e(v)}</li>"
-                        for k, v in sorted(other.items()))
-        out.append(f"<h3>Other variables</h3><ul>{items}</ul>")
-    if len(turns) > 1:
-        # A session, not a single question. The prompt above is the variable
-        # that was substituted in; these are the things actually said.
-        out.append(f"<h3>The conversation — {len(turns)} exchanges</h3>")
-        for turn in turns:
-            reply = turn.response.strip()
-            out.append(
-                f'<div class="exchange"><p class="lede">{turn.number}. '
-                f'said <span class="step-ref">step {turn.step}</span></p>'
-                f"<pre>{_e(turn.prompt.strip())}</pre>"
-                f'<p class="lede">{turn.number}. replied</p>'
-                + (f"<pre>{_e(reply)}</pre>" if reply else
-                   '<p class="note">No text captured.</p>')
-                + "</div>"
-            )
-    else:
-        response = (result.get("response") or "").strip()
-        out.append("<h3>Response</h3>")
-        out.append(f"<pre>{_e(response)}</pre>" if response else
-                   '<p class="note">No text captured. The response was recorded '
-                   'as pixels; the region image is below.</p>')
+        items = " · ".join(f"<code>{_e(k)}</code> = {_e(v)}"
+                           for k, v in sorted(other.items()))
+        out.append(f'<p class="meta"><span>{items}</span></p>')
 
     entries = timeline(result, narration)
     shown = {name for entry in entries for name, _ in entry.read_images}
     for name, relative in (result.get("read_images") or {}).items():
         if name not in shown:
-            out.append(f'<figure class="region">{_img(run_dir, relative, embed)}'
+            out.append(f'<figure class="region">{_img(run_dir, relative, embed, base)}'
                        f"<figcaption>recorded <code>{_e(name)}</code> region"
                        f"</figcaption></figure>")
 
-    out.append(_timeline(run_dir, result, embed, narration))
+    out.append(_timeline(run_dir, result, embed, narration, base))
     out.append(
         "<details><summary>Every step, including the tool's own</summary>"
         f"{_steps_table(result, narration)}</details>"
@@ -487,45 +517,117 @@ def render_html(
                  **load_narration(run_dir)}
     title, description = _flow_heading(run_dir)
 
-    def group(label: str, names: tuple[str, ...]) -> str:
-        found = [n for n in names if (run_dir / n).exists()]
-        if not found:
-            return ""
-        return (f"<span><b>{label}</b> "
-                + " ".join(f'<a href="{_e(n)}">{_e(n)}</a>' for n in found)
-                + "</span>")
-
     body = [
         f"<h1>{_e(title)}</h1>",
         f'<p class="lede">{_e(description)}</p>' if description else "",
         '<p class="meta">'
         # What was under test first: a transcript records a reply, and without
         # the release that said it, comparing two of them means nothing.
-        + (f"<span><b>Under test</b> {_e(subject_of(results).summary())}</span>"
-           if subject_of(results).recorded else "")
+        + _subject_tags(subject_of(results))
         + f"<span><b>Run</b> {_e(run_dir.name)} · {_e(summary.backend)}</span>"
         f"<span><b>Prompt runs</b> {summary.variants} — {summary.passed} ok, "
         f"{summary.failed} failed, {summary.timed_out} timed out</span>"
         + (f"<span><b>Started</b> {_e(results[0].get('timestamp', '?'))}</span>"
            if results else "")
         + "</p>",
-        '<p class="meta screen-only">'
-        + group("Input", ("flow.yaml", "prompts.yaml", "prompts.csv"))
-        + group("Output", ("results.jsonl", "results.csv", "transcript.md"))
+        # Not in the PDF: a printed page cannot follow a link, and in a
+        # standalone copy they are data: URIs that print as nothing useful.
+        # They matter on screen and in a published repository, where the files
+        # sit next to the transcript and the relative links resolve.
+        '<p class="meta files screen-only">'
+        + _group_links(run_dir, "Input",
+                       ("flow.yaml", "prompts.yaml", "prompts.csv"), embed)
+        + _group_links(run_dir, "Output",
+                       ("results.jsonl", "results.csv"), embed)
         + "</p>",
-        _recordings(run_dir, results, embed),
     ]
-    # And then the run, step by step. There was a summary table, a list of the
-    # steps, a table of prompts against responses, and then the steps again
-    # with everything attached -- four views of one run, and a reader
-    # assembling them.
-    body += [_variant(run_dir, result, embed, narration) for result in results]
-    body.append(
+    # A front door, not a compendium: each prompt run has its own page in its
+    # own folder. Twelve prompts is twelve files, not one page a reader
+    # scrolls through hunting for the third.
+    body.append("<h2>Prompt runs</h2><ol class=\"steps\">")
+    for result in results:
+        label = _e(result["prompt_id"])
+        if result.get("repeat_index"):
+            label += f" (repeat {result['repeat_index'] + 1})"
+        body.append(
+            f'<li><a href="{_e(folder_of(result))}/transcript.html">{label}</a> '
+            f'{_status_pill(result.get("status"))}'
+            f'<span class="lede">{_e(result.get("duration_ms", 0))} ms</span></li>'
+        )
+    body.append("</ol>")
+    return _page(title, body)
+
+
+def render_full_html(run_dir: Path | str, embed: bool = False) -> str:
+    """Every prompt run on one page, for printing.
+
+    On screen the split is the point: twelve prompt runs are twelve pages, and
+    a reader opens the one they want. A PDF is the opposite -- it is the copy
+    that gets filed and mailed, and one that says "see the other eleven files"
+    is not a record of anything.
+    """
+    run_dir = Path(run_dir)
+    results = load_results(run_dir)
+    narration = {**intent_descriptions(run_dir, results),
+                 **load_narration(run_dir)}
+    title, _ = _flow_heading(run_dir)
+
+    body = [render_html(run_dir, results, embed=embed)
+            .split("<main>", 1)[1].split("</main>", 1)[0]]
+    for result in results:
+        body.append(_recordings(run_dir, [result], embed))
+        body.append(_variant(run_dir, result, embed, narration))
+    return _page(title, body)
+
+
+def render_one_html(run_dir: Path | str, result: dict[str, Any],
+                    embed: bool = False) -> str:
+    """One prompt run's page, written to stand on its own inside its folder."""
+    run_dir = Path(run_dir)
+    folder = folder_of(result)
+    narration = {**intent_descriptions(run_dir, [result]),
+                 **load_narration(run_dir)}
+    title, description = _flow_heading(run_dir)
+    subject = subject_of([result])
+
+    body = [
+        f'<h1>{_e(title)} — {_e(result["prompt_id"])}</h1>',
+        f'<p class="lede">{_e(description)}</p>' if description else "",
+        '<p class="meta">'
+        + _subject_tags(subject)
+        + f"<span><b>Run</b> {_e(run_dir.name)} · "
+        f'{_e(result.get("backend", ""))}</span>'
+        f"<span>{_status_pill(result.get('status'))}"
+        f'{_e(result.get("duration_ms", 0))} ms</span>'
+        f'<span><b>Started</b> {_e(result.get("timestamp", "?"))}</span></p>',
+        '<p class="meta files screen-only">'
+        + _group_links(run_dir, "Input",
+                       ("flow.yaml", "prompts.yaml", "prompts.csv"), embed, "../")
+        + _group_links(run_dir, "Output",
+                       ("results.jsonl", "results.csv"), embed, "../")
+        + "</p>",
+        _recordings(run_dir, [result], embed, folder),
+        _variant(run_dir, result, embed, narration, heading=False, base=folder),
+    ]
+    return _page(f"{title} — {result['prompt_id']}", body)
+
+
+def _group_links(run_dir: Path, label: str, names: tuple[str, ...],
+                 embed: bool, prefix: str = "") -> str:
+    found = [n for n in names if (run_dir / n).exists()]
+    if not found:
+        return ""
+    return (f"<span><b>{label}</b> "
+            + " ".join(_file_link(run_dir, n, embed, prefix) for n in found)
+            + "</span>")
+
+
+def _page(title: str, body: list[str]) -> str:
+    body = list(body) + [
         "<footer>Generated by understudy. Screenshots are the run's own "
         "captures; response text is whatever the flow's <code>read</code> step "
         "extracted.</footer>"
-    )
-
+    ]
     return (
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -539,7 +641,15 @@ def render_html(
 def write_html(
     run_dir: Path | str, embed: bool = False, filename: str = "transcript.html"
 ) -> Path:
+    """The run's index page, and one page per prompt run beside it."""
     run_dir = Path(run_dir)
+    results = load_results(run_dir)
+    for result in results:
+        folder = run_dir / folder_of(result)
+        if not folder.is_dir():
+            continue
+        (folder / filename).write_text(
+            render_one_html(run_dir, result, embed=embed), encoding="utf-8")
     path = run_dir / filename
-    path.write_text(render_html(run_dir, embed=embed), encoding="utf-8")
+    path.write_text(render_html(run_dir, results, embed=embed), encoding="utf-8")
     return path

@@ -61,6 +61,22 @@ class Subject:
             parts.append(f"({self.release})")
         return " · ".join(parts)
 
+    def tags(self) -> tuple[tuple[str, str], ...]:
+        """(field, value) for everything recorded, in reading order.
+
+        The same facts as `summary()`, kept apart instead of joined into a
+        sentence, so a reader can pick "FD03" out of a header at a glance and
+        a list of runs can be filtered by it. Comparing FD03 against FD04 is
+        the job; finding the two runs should not be the hard part.
+
+        Notes are left out: they are prose, and prose is not a tag.
+        """
+        return tuple(
+            (field, getattr(self, field))
+            for field in FIELDS
+            if field != "notes" and getattr(self, field)
+        )
+
     def merged_with(self, other: "Subject") -> "Subject":
         """`other` wins where it says anything.
 

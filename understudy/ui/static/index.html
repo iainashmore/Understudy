@@ -56,6 +56,8 @@
   .run .pick { cursor:pointer; margin:0; }
   .run .count.bad { color:#e05c5c; }
   .compare-bar { padding:2px 6px 6px 34px; }
+  .run-filter { width:calc(100% - 40px); margin:2px 6px 4px 34px; font-size:12px;
+                padding:2px 6px; }
   .tree-item .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tree-item .count { color:var(--dim); font-size:11px; }
   .tree-item .actions { display:none; gap:2px; }
@@ -446,7 +448,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { flow: null, flows: [], suites: [], runId: null, results: [],
-                transcript: null, transcriptHtml: null, outDir: null };
+                transcript: null, transcriptHtml: null, outDir: null,
+                runFilter: "" };
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.onclick = () => {
@@ -561,9 +564,29 @@ function runList(flow) {
   list.dataset.for = flow.path;
   list.hidden = state.flow !== flow.path;
 
-  const runs = knownRuns.filter((r) => r.flow && r.flow === flow.name);
-  if (!runs.length) {
+  const all = knownRuns.filter((r) => r.flow && r.flow === flow.name);
+  if (!all.length) {
     list.innerHTML = `<div class="run muted">no runs yet</div>`;
+    return list;
+  }
+  // Filtering by what was under test, because after a month of runs the
+  // question is "FD03 against FD04", not "the ninth one against the fourth".
+  const needle = (state.runFilter || "").toLowerCase();
+  const runs = !needle ? all : all.filter((r) =>
+    (r.tags || []).concat(r.name).join(" ").toLowerCase().includes(needle));
+  if (all.length > 3) {
+    const box = document.createElement("input");
+    box.className = "run-filter";
+    box.placeholder = "filter by version…";
+    box.value = state.runFilter || "";
+    box.oninput = () => { state.runFilter = box.value; loadTree(); };
+    list.appendChild(box);
+  }
+  if (!runs.length) {
+    const none = document.createElement("div");
+    none.className = "run muted";
+    none.textContent = `no run matches "${state.runFilter}"`;
+    list.appendChild(none);
     return list;
   }
   runs.forEach((run) => {

@@ -489,7 +489,8 @@ flows: []
             entry: dict[str, Any] = {
                 "dir": self.workspace.relative(directory),
                 "name": directory.name,
-                "flow": "", "subject": "", "when": "", "ok": 0, "total": 0,
+                "flow": "", "subject": "", "tags": [], "when": "",
+                "ok": 0, "total": 0,
             }
             try:
                 results = load_results(directory)
@@ -498,8 +499,11 @@ flows: []
             if results:
                 entry["flow"] = results[0].get("flow", "")
                 entry["when"] = results[0].get("timestamp", "")
-                entry["subject"] = Subject.from_config(
-                    results[0].get("subject") or {}).summary()
+                subject = Subject.from_config(results[0].get("subject") or {})
+                entry["subject"] = subject.summary()
+                # Separately as well, so the list can be filtered by a version
+                # rather than by a substring of a sentence.
+                entry["tags"] = [value for _, value in subject.tags()]
                 entry["total"] = len(results)
                 entry["ok"] = sum(1 for r in results if r.get("status") == "ok")
             entry["label"] = " · ".join(
@@ -698,10 +702,18 @@ flows: []
         return {"pdf": self.workspace.relative(outcome.path)}
 
     def export_standalone(self, run_dir: str) -> dict[str, Any]:
-        """One HTML file with the screenshots inlined, for sending to someone
-        who does not have the run folder."""
+        """One HTML file with everything inlined, for sending to someone who
+        does not have the run folder.
+
+        Every prompt run, not the index: the point of the export is that it
+        arrives complete, and an index linking eleven files that did not travel
+        with it is the opposite.
+        """
+        from understudy.transcript_html import render_full_html
+
         resolved = self.workspace.resolve(run_dir)
-        path = write_html(resolved, embed=True, filename="transcript-standalone.html")
+        path = resolved / "transcript-standalone.html"
+        path.write_text(render_full_html(resolved, embed=True), encoding="utf-8")
         return {"html": self.workspace.relative(path)}
 
 

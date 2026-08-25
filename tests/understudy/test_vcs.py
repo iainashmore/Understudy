@@ -280,6 +280,7 @@ class TestPublishSelection:
         (run / "transcript.html").write_text("<p>x</p>")
         (run / "transcript.pdf").write_bytes(b"%PDF-1.4\n")
         (run / "results.jsonl").write_text("{}\n")
+        (run / "flow.yaml").write_text("version: 1\nname: f\n")
         (run / "baseline" / "01-start.png").write_bytes(b"\x89PNG\r\n")
         (run / "baseline" / "recording.mp4").write_bytes(b"\x00" * 2048)
         return run, tmp_path
@@ -291,6 +292,17 @@ class TestPublishSelection:
         assert "runs/2026-09-01/transcript.pdf" in chosen.include
         assert "runs/2026-09-01/results.jsonl" in chosen.include
         assert "runs/2026-09-01/baseline/01-start.png" in chosen.include
+
+    def test_the_files_the_transcript_links_are_published_with_it(self, run):
+        """The transcript links what went in and what came out. Published
+        without them the links are dead in the repository, which is the one
+        place a reviewer is most likely to follow them -- and the transcript
+        cannot carry them inline there, because the copy that gets committed
+        is the one with relative links, not the standalone export.
+        """
+        chosen = select(*run)
+        for linked in ("flow.yaml", "results.jsonl", "transcript.md"):
+            assert f"runs/2026-09-01/{linked}" in chosen.include, linked
 
     def test_video_is_left_out_by_default(self, run):
         """A year of daily runs would put gigabytes of mp4 into a history that
