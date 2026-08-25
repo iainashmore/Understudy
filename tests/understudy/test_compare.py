@@ -356,3 +356,85 @@ class TestWhenTheQuestionItselfChanged:
             ],
         }
         assert asked_in(result) == "first turn"
+
+
+def make_conversation(tmp_path, name, subject, turns, prompt_id="session"):
+    """A run of one prompt run that is a conversation: ask, read, ask, read."""
+    run = tmp_path / name
+    run.mkdir(parents=True)
+    (run / "flow.yaml").write_text("version: 1\nname: leo-regression\n")
+    steps, reads, index = [], {}, 1
+    for number, (asked, replied) in enumerate(turns, start=1):
+        steps.append({"index": index, "phase": "steps", "action": "type",
+                      "target": "leo_box", "status": "ok", "duration_ms": 10,
+                      "detail": {"text": asked}})
+        steps.append({"index": index + 1, "phase": "steps", "action": "read",
+                      "target": "leo_reply", "status": "ok", "duration_ms": 5,
+                      "detail": {"store_as": f"reply_{number}"}})
+        steps.append({"index": index + 2, "phase": "steps", "action": "click",
+                      "target": "tree", "status": "ok", "duration_ms": 5})
+        reads[f"reply_{number}"] = replied
+        index += 3
+    (run / "results.jsonl").write_text(json.dumps({
+        "prompt_id": prompt_id, "repeat_index": 0, "prompt": "", "variables": {},
+        "response": turns[-1][1], "reads": reads, "read_images": {},
+        "status": "ok", "duration_ms": 100, "screenshots": [],
+        "step_statuses": steps, "backend": "web", "flow": "leo-regression",
+        "subject": subject, "timestamp": "2026-09-01T10:00:00Z",
+    }) + "\n")
+    return run
+
+
+class TestAConversationIsComparedTurnByTurn:
+    """Comparing a three-turn session on its last reply is comparing almost
+    nothing: the fillet that stopped working after the hole is turn two, and
+    turn three still says the same thing."""
+
+    def test_a_changed_middle_reply_is_found(self, tmp_path):
+        comparison = compare([
+            make_conversation(tmp_path, "before", R32, [
+                ("Add a hole.", "Hole added."),
+                ("Now fillet it.", "Fillet added."),
+                ("Anything else?", "No."),
+            ]),
+            make_conversation(tmp_path, "after", R33, [
+                ("Add a hole.", "Hole added."),
+                ("Now fillet it.", "I cannot fillet that edge."),
+                ("Anything else?", "No."),
+            ]),
+        ])
+
+        verdicts = {row.prompt_id: row.verdict for row in comparison.rows}
+        assert verdicts["session · turn 2"] == "changed"
+        assert verdicts["session · turn 1"] == "same"
+        assert verdicts["session · turn 3"] == "same"
+
+    def test_it_says_which_turn_rather_than_which_prompt_run(self, tmp_path):
+        comparison = compare([
+            make_conversation(tmp_path, "before", R32,
+                              [("a", "one"), ("b", "two")]),
+            make_conversation(tmp_path, "after", R33,
+                              [("a", "one"), ("b", "TWO DIFFERENT")]),
+        ])
+        assert [row.prompt_id for row in comparison.rows] == [
+            "session · turn 1", "session · turn 2"]
+
+    def test_a_run_with_fewer_turns_shows_the_missing_one(self, tmp_path):
+        """A session that stopped early is not a session that answered the
+        same way."""
+        comparison = compare([
+            make_conversation(tmp_path, "before", R32,
+                              [("a", "one"), ("b", "two")]),
+            make_conversation(tmp_path, "after", R33, [("a", "one")]),
+        ])
+        verdicts = {row.prompt_id: row.verdict for row in comparison.rows}
+        assert verdicts["session · turn 2"] == "missing"
+
+    def test_a_single_question_is_still_one_row(self, tmp_path):
+        """The common case is unchanged: no turn numbers where there is one
+        turn."""
+        comparison = compare([
+            make_run(tmp_path, "before", R32, {"a": "X"}),
+            make_run(tmp_path, "after", R33, {"a": "X"}),
+        ])
+        assert [row.prompt_id for row in comparison.rows] == ["a"]

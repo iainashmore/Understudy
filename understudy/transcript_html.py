@@ -73,6 +73,17 @@ h3 { font-size:14px; margin:20px 0 8px; text-transform:uppercase;
 .meta { display:flex; flex-wrap:wrap; gap:6px 18px; color:var(--dim);
         font-size:13px; margin-bottom:18px; }
 .meta b { color:var(--fg); font-weight:600; }
+.viewbar { display:flex; gap:6px; margin:0 0 10px; }
+.viewbar button { font:inherit; font-size:12px; padding:3px 10px; cursor:pointer;
+                  color:var(--dim); background:var(--panel);
+                  border:1px solid var(--line); border-radius:12px; }
+.viewbar button.on { color:var(--fg); border-color:var(--accent); }
+/* Only the turns. The steps between them, and the pictures of them, are what
+   a reader is asking to have taken away. */
+body.only-turns li.entry:not([data-turn]) { display:none; }
+body.only-turns li.entry figure,
+body.only-turns li.entry .entry-meta,
+body.only-turns details { display:none; }
 .tagchip { display:inline-block; margin-left:6px; padding:1px 8px; font-size:12px;
            border:1px solid var(--line); border-radius:10px; color:var(--fg);
            background:var(--panel); }
@@ -141,10 +152,26 @@ a { color:var(--accent); }
   figure, tr, pre { break-inside:avoid; }
   figure img { max-height:150mm; width:auto; }
   video { display:none; }
-  .screen-only { display:none; }
+  .screen-only, .viewbar { display:none; }
 }
 """
 
+
+#: The conversation-only view. Stored per reader, because somebody who wants
+#: to read replies wants to read them in the next transcript too; wrapped
+#: because a browser with site data switched off throws on the attempt rather
+#: than returning nothing.
+VIEW_SCRIPT = (
+    "(()=>{const KEY='understudy-view';"
+    "const set=(v)=>{document.body.classList.toggle('only-turns',v==='turns');"
+    "for(const b of document.querySelectorAll('.viewbar button'))"
+    "b.classList.toggle('on',b.dataset.view===v);"
+    "try{localStorage.setItem(KEY,v)}catch(e){}};"
+    "for(const b of document.querySelectorAll('.viewbar button'))"
+    "b.addEventListener('click',()=>set(b.dataset.view));"
+    "let saved=null;try{saved=localStorage.getItem(KEY)}catch(e){}"
+    "if(saved==='turns')set('turns');})();"
+)
 
 #: Some Chromium builds ship without proprietary codecs, so an mp4 recording
 #: shows as a dead player with no explanation. Say so rather than leaving the
@@ -324,7 +351,17 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
     # filename are both "type", and only one of them has a reply.
     turns = {turn.step: turn.number for turn in exchanges(result)}
 
-    out = ["<h3>Step by step</h3>", '<ol class="timeline">']
+    # A view of the same steps with everything but the conversation taken
+    # away. Reading what LEO said across forty prompts should not mean
+    # scrolling past forty screenshots of a spec tree to do it -- and the
+    # steps are still the transcript, so this hides them rather than
+    # producing a second document that could disagree with the first.
+    bar = ('<div class="viewbar">'
+           '<button type="button" class="on" data-view="all">Everything</button>'
+           '<button type="button" data-view="turns">Prompts and responses</button>'
+           "</div>") if turns else ""
+
+    out = ["<h3>Step by step</h3>", bar, '<ol class="timeline">']
     for entry in entries:
         classes = "entry" + (" failed" if entry.failed else "")
         if entry.number == 0:
@@ -344,7 +381,11 @@ def _timeline(run_dir: Path, result: dict[str, Any], embed: bool,
         if entry.note:
             meta.append(_e(entry.note))
 
-        body = [f'<li class="{classes}"><div class="head">{head}</div>',
+        # Marked, so the conversation-only view knows what to keep. A step
+        # that said something or heard something back is a turn; a click on a
+        # tree node is not.
+        turn_mark = f' data-turn="{turns[entry.number]}"' if entry.number in turns else ""
+        body = [f'<li class="{classes}"{turn_mark}><div class="head">{head}</div>',
                 f'<div class="entry-meta">{" · ".join(meta)}</div>' if meta else ""]
 
         turn = turns.get(entry.number)
@@ -634,7 +675,8 @@ def _page(title: str, body: list[str]) -> str:
         f"<title>{_e(title)} — transcript</title><style>{STYLE}</style>"
         f"<script>{THEME_SCRIPT}</script></head>"
         f"<body><main>{''.join(body)}</main>"
-        f"<script>{CODEC_SCRIPT}</script></body></html>\n"
+        f"<script>{CODEC_SCRIPT}</script>"
+        f"<script>{VIEW_SCRIPT}</script></body></html>\n"
     )
 
 

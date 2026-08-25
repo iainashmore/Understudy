@@ -205,6 +205,40 @@ def test_what_was_under_test_reads_as_separate_tags(run_dir):
     assert 'title="Assistant version"' in page
 
 
+class TestReadingOnlyTheConversation:
+    """Reading what the assistant said across forty prompts should not mean
+    scrolling past forty screenshots of a spec tree to do it."""
+
+    def test_the_turns_are_marked_and_the_other_steps_are_not(self, run_dir):
+        page = one(run_dir([a_conversation()]))
+
+        assert page.count('data-turn="1"') == 1
+        assert page.count('data-turn="2"') == 1
+        # The click between the two turns is a step, and is not marked.
+        assert '<li class="entry"><div class="head">' in page
+
+    def test_there_is_a_control_to_switch_between_them(self, run_dir):
+        page = one(run_dir([a_conversation()]))
+        assert 'data-view="turns"' in page and 'data-view="all"' in page
+
+    def test_a_prompt_run_with_no_conversation_offers_no_such_view(self, run_dir):
+        """A flow that only clicks has nothing to filter down to, and a button
+        that empties the page is worse than no button."""
+        page = one(run_dir([result(reads={}, response="", step_statuses=[
+            {"index": 1, "phase": "steps", "action": "click", "target": "pad",
+             "status": "ok", "duration_ms": 10},
+        ])]))
+        assert '<div class="viewbar">' not in page
+
+    def test_it_hides_the_steps_rather_than_writing_a_second_document(self, run_dir):
+        """The steps are the transcript. A separate conversation-only render
+        is a second document that can disagree with the first."""
+        page = one(run_dir([a_conversation()]))
+
+        assert "only-turns li.entry:not([data-turn])" in page
+        assert "Now fillet it." in page, "still in the page, just hidden"
+
+
 class TestTheRawFiles:
     """What went in and what came out, linked from the transcript. It is what
     somebody checks when they doubt what they are reading."""

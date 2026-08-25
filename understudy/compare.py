@@ -168,6 +168,53 @@ class Comparison:
         return f"no change across {len(self.rows)} prompt(s)"
 
 
+def _rows_for(key: str, per_run: list[dict[str, dict[str, Any]]]) -> list[Row]:
+    """One row per turn, and one row for a prompt run that is a single question.
+
+    A conversation compared on its last reply is compared on almost nothing.
+    Three turns and only the third looked at means a changed second answer --
+    the fillet that stopped working after the hole -- reads as "same". A turn
+    is the unit somebody reasons about, so a turn is a row.
+    """
+    from understudy.transcript import exchanges
+
+    present = [run[key] for run in per_run if key in run]
+    most = max((len(exchanges(result)) for result in present), default=0)
+
+    if most < 2:
+        row = Row(prompt_id=key, prompt=asked_in(present[0] if present else {}))
+        for run in per_run:
+            result = run.get(key)
+            row.responses.append(None if result is None else (result.get("response") or ""))
+            row.statuses.append("" if result is None else result.get("status", ""))
+            row.prompts.append(None if result is None else asked_in(result))
+        return [row]
+
+    rows = []
+    for index in range(most):
+        turn_of = {}
+        for position, run in enumerate(per_run):
+            result = run.get(key)
+            if result is None:
+                continue
+            turns = exchanges(result)
+            if index < len(turns):
+                turn_of[position] = turns[index]
+        first = next(iter(turn_of.values()), None)
+        row = Row(prompt_id=f"{key} · turn {index + 1}",
+                  prompt=first.prompt if first else "")
+        for position, run in enumerate(per_run):
+            turn = turn_of.get(position)
+            result = run.get(key)
+            row.responses.append(None if turn is None else turn.response)
+            row.prompts.append(None if turn is None else turn.prompt)
+            # The run's status, not the turn's: a prompt run that failed
+            # halfway failed, and every turn of it is suspect.
+            row.statuses.append("" if result is None else result.get("status", ""))
+        rows.append(row)
+    return rows
+
+
 def asked_in(result: dict[str, Any]) -> str:
     """What this prompt run actually said to the assistant.
 
@@ -222,14 +269,7 @@ def compare(run_dirs: list[Path | str]) -> Comparison:
 
     rows = []
     for key in order:
-        first = next((run[key] for run in per_run if key in run), {})
-        row = Row(prompt_id=key, prompt=asked_in(first))
-        for run in per_run:
-            result = run.get(key)
-            row.responses.append(None if result is None else (result.get("response") or ""))
-            row.statuses.append("" if result is None else result.get("status", ""))
-            row.prompts.append(None if result is None else asked_in(result))
-        rows.append(row)
+        rows.extend(_rows_for(key, per_run))
 
     steps = {}
     for key in order:
