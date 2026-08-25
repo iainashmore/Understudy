@@ -596,9 +596,12 @@ function runList(flow) {
     // The tick is how two runs get chosen for a comparison; the rest of the
     // row opens one. The same list, both jobs, no second place to look.
     line.innerHTML = `<input type="checkbox" class="pick" title="compare">
-      <span class="label">${escapeHtml(run.subject || run.name)}</span>
+      <span class="label">${escapeHtml(run.short || run.subject || run.name)}</span>
       <span class="count ${failed ? "bad" : ""}">${run.ok}/${run.total}</span>`;
-    line.title = `${run.name}${run.when ? " · " + run.when : ""}`;
+    // The whole subject on hover: the row shows only what distinguishes this
+    // run from the others, because the list is narrow and the shared half is
+    // the half that gets truncated over the top of the useful one.
+    line.title = [run.subject, run.name, run.when].filter(Boolean).join(" · ");
     const tick = line.querySelector(".pick");
     tick.dataset.dir = run.dir;
     tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
@@ -945,12 +948,40 @@ function download(path) {
 
 let knownRuns = [];
 
+// SUBJECT_FIELDS is declared with the rest of the subject handling below.
+async function loadKnownSubjects() {
+  // Typing "R2026x FD03" again to re-run last month's build is the retyping
+  // that produces "FD3" on the fortieth run, and a tag with a typo in it is a
+  // tag that does not group.
+  let values = {};
+  try {
+    values = (await api("/api/subjects")).values || {};
+  } catch (error) {
+    return;
+  }
+  for (const [field, inputId] of Object.entries(SUBJECT_FIELDS)) {
+    const input = $(inputId);
+    if (!input) continue;
+    const listId = `known-${field}`;
+    let list = document.getElementById(listId);
+    if (!list) {
+      list = document.createElement("datalist");
+      list.id = listId;
+      document.body.appendChild(list);
+      input.setAttribute("list", listId);
+    }
+    list.innerHTML = (values[field] || [])
+      .map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
+  }
+}
+
 async function loadRuns() {
   try {
     knownRuns = (await api("/api/runs")).runs || [];
   } catch (error) {
     knownRuns = [];
   }
+  loadKnownSubjects();
   const options = knownRuns
     .map((r) => `<option value="${escapeHtml(r.dir)}">${escapeHtml(r.label)}</option>`)
     .join("");

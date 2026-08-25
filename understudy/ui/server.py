@@ -34,6 +34,7 @@ from understudy.transcript import load_results, write_transcript
 from understudy.transcript_html import write_html
 from understudy.compare import compare as compare_runs
 from understudy.compare_report import write_comparison
+from understudy.subject import FIELDS as SUBJECT_FIELDS
 from understudy.subject import Subject, remember, resolve_subject
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import Git, GitError
@@ -504,12 +505,37 @@ flows: []
                 # Separately as well, so the list can be filtered by a version
                 # rather than by a substring of a sentence.
                 entry["tags"] = [value for _, value in subject.tags()]
+                entry["by_field"] = dict(subject.tags())
                 entry["total"] = len(results)
                 entry["ok"] = sum(1 for r in results if r.get("status") == "ok")
             entry["label"] = " · ".join(
                 p for p in (entry["subject"] or entry["flow"], entry["name"]) if p)
             runs.append(entry)
+        _label_by_difference(runs)
         return {"runs": runs}
+
+    def known_subject_values(self) -> dict[str, Any]:
+        """Every value ever recorded for each field, so they can be reused.
+
+        Typing "R2026x FD03" again to re-run last month's build is the kind of
+        retyping that produces "FD3" on the fortieth run -- and a tag with a
+        typo in it is a tag that does not group.
+        """
+        seen: dict[str, list[str]] = {field: [] for field in SUBJECT_FIELDS}
+        for directory in sorted(self.workspace.runs_root.glob("*"), reverse=True):
+            if not directory.is_dir():
+                continue
+            try:
+                results = load_results(directory)
+            except Exception:
+                continue
+            if not results:
+                continue
+            subject = Subject.from_config(results[0].get("subject") or {})
+            for field, value in subject.as_dict().items():
+                if field in seen and value not in seen[field]:
+                    seen[field].append(value)
+        return {"values": seen}
 
     def compare(self, run_dirs: list[str]) -> dict[str, Any]:
         """Line up two or more runs. Written into the workspace so the result
@@ -717,6 +743,40 @@ flows: []
         return {"html": self.workspace.relative(path)}
 
 
+#: Most specific first. A list of runs is read left to right and truncated on
+#: the right, so the build has to be the part that survives: "FD04 R2026x…"
+#: identifies a run and "3DEXPERIENCE R2026x · LE…" does not.
+SPECIFIC_FIRST = ("model_version", "app_version", "release", "model", "app")
+
+
+def _label_by_difference(runs: list[dict[str, Any]]) -> None:
+    """Give each run a short label: what its siblings do not have.
+
+    Runs of one flow differ in one tag or two -- the same application, the same
+    assistant, a different build -- and the whole subject in a narrow column
+    truncates at every character except the one saying which run this is.
+    """
+    by_flow: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        by_flow.setdefault(run.get("flow", ""), []).append(run)
+
+    for siblings in by_flow.values():
+        fields = [run.get("by_field") or {} for run in siblings]
+        shared = {
+            field for field in SPECIFIC_FIRST
+            if len({f.get(field, "") for f in fields}) == 1
+        } if len(siblings) > 1 else set()
+        for run in siblings:
+            by_field = run.get("by_field") or {}
+            ordered = [by_field[field] for field in SPECIFIC_FIRST
+                       if by_field.get(field) and field not in shared]
+            if not ordered:
+                # Every tag identical: the timestamp is all that is left, and
+                # two runs of one build against one release do differ by when.
+                ordered = [run.get("when", "")[:16] or run["name"]]
+            run["short"] = " ".join(ordered)
+
+
 class Handler(BaseHTTPRequestHandler):
     api: Api = None  # set by serve()
     server_version = "understudy"
@@ -756,6 +816,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.read_credentials())
             elif route == "/api/runs":
                 self._json(self.api.describe_runs())
+            elif route == "/api/subjects":
+                self._json(self.api.known_subject_values())
             elif route == "/api/repo":
                 self._json(self.api.repo_state())
             elif route == "/api/workspace":
