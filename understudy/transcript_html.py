@@ -9,9 +9,12 @@ Written from the results rather than by converting the markdown -- a markdown
 renderer is a dependency and a parser is a source of bugs, and neither buys
 anything when the data is right there.
 
-`embed=True` inlines the images so the file stands alone. Video is never
-inlined: a base64 mp4 doubles a file that is already the largest thing in the
-run, and the point of the standalone copy is to be emailable.
+`embed=True` inlines the images so the file stands alone, and the video too
+when it is small enough to stay emailable. Base64 costs a third on top of a
+file that is already the largest thing in the run, so past a cap the link
+stays a link -- and says the file sits beside the transcript, rather than
+showing a player that cannot play because the reader moved one file and not
+the other.
 """
 
 from __future__ import annotations
@@ -159,6 +162,23 @@ def _img(run_dir: Path, relative: str, embed: bool) -> str:
     else:
         source = relative
     return f'<img src="{source}" alt="{_e(relative)}" loading="lazy">'
+
+
+#: Past this a video stays a link. A transcript people email should not need
+#: a broadband connection to open, and a sweep of forty variants would carry
+#: forty of these.
+MAX_INLINE_VIDEO_BYTES = 12 * 1024 * 1024
+
+
+def _video_source(run_dir: Path, relative: str, embed: bool) -> tuple[str, bool]:
+    """Where the player should point, and whether the file is inside this one."""
+    path = run_dir / relative
+    if not embed or not path.exists():
+        return _e(relative), False
+    if path.stat().st_size > MAX_INLINE_VIDEO_BYTES:
+        return _e(relative), False
+    data = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    return f"data:video/mp4;base64,{data}", True
 
 
 def _status_pill(status: str) -> str:
@@ -349,14 +369,20 @@ def _variant(run_dir: Path, result: dict[str, Any], embed: bool,
                'pixels; the region image is below.</p>')
 
     if result.get("recording"):
-        source = _e(result["recording"])
+        relative = result["recording"]
+        source, inlined = _video_source(run_dir, relative, embed)
+        beside = ("" if inlined or not embed else
+                  '<p class="note">The video is not inside this file: it is '
+                  'too large to inline. Keep it beside the transcript, at the '
+                  'path below.</p>')
         out.append(
             f'<h3>Recording</h3><video controls preload="metadata" src="{source}">'
             f"</video>"
             f'<p class="no-codec note" hidden>This browser cannot decode H.264. '
             f"Chrome, Edge and any desktop player can; some Chromium builds ship "
             f"without it. The link below opens the file.</p>"
-            f'<p class="lede"><a href="{source}">{source}</a></p>'
+            f'{beside}'
+            f'<p class="lede"><a href="{source}">{_e(relative)}</a></p>'
         )
     elif result.get("recording_error"):
         out.append(f'<p class="note">No recording: '

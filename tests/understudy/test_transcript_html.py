@@ -170,12 +170,47 @@ def test_embedding_inlines_the_images(run_dir):
     assert "data:image/png;base64," in render_html(directory, embed=True)
 
 
-def test_embedding_never_inlines_the_video(run_dir):
-    """A base64 mp4 doubles the largest file in the run, and the standalone
-    copy exists to be emailable."""
+def a_video(directory, size):
+    path = directory / "baseline" / "recording.mp4"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00" * size)
+    return path
+
+
+def test_embedding_inlines_a_video_small_enough_to_email(run_dir):
+    """An exported transcript that leaves its video behind shows a player that
+    cannot play, which reads as a broken recording rather than a moved file."""
     directory = run_dir([result(recording="baseline/recording.mp4")])
+    a_video(directory, 60_000)
+
     page = render_html(directory, embed=True)
+    assert "data:video/mp4;base64," in page
+
+
+def test_a_large_video_stays_a_link_and_says_so(run_dir):
+    """Base64 costs a third on top of the largest file in the run, and a sweep
+    of forty variants carries forty of them."""
+    from understudy.transcript_html import MAX_INLINE_VIDEO_BYTES
+
+    directory = run_dir([result(recording="baseline/recording.mp4")])
+    a_video(directory, MAX_INLINE_VIDEO_BYTES + 1)
+
+    page = render_html(directory, embed=True)
+    assert "data:video/mp4" not in page
     assert 'src="baseline/recording.mp4"' in page
+    assert "not inside this file" in page, \
+        "the reader is left to work out why the player is empty"
+
+
+def test_the_viewer_in_the_app_still_points_at_the_file(run_dir):
+    """Inlining is for the exported copy. The viewer serves the run directory,
+    so there is nothing to inline and megabytes of base64 to avoid."""
+    directory = run_dir([result(recording="baseline/recording.mp4")])
+    a_video(directory, 60_000)
+
+    page = render_html(directory)
+    assert 'src="baseline/recording.mp4"' in page
+    assert "data:video/mp4" not in page
 
 
 def test_write_html_lands_next_to_the_screenshots(run_dir):
