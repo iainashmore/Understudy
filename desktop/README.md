@@ -61,11 +61,11 @@ server, which is the loop worth using while changing `main.js`.
 stand-in waiting outside the spotlight — one figure lit, an identical one
 behind it in the dark.
 
-The pool of light is doing real work. Two figures on their own is the generic
-"contacts" icon every address book uses; the light is what makes these two a
-principal and a stand-in rather than two colleagues. It is a clean circle
-rather than a beam, because a beam is a gradient and a gradient at 16px is a
-grey smear.
+The beam is doing real work. Two figures on their own is the generic
+"contacts" icon every address book uses; the light thrown from off the top-left
+corner is what makes these two a principal and a stand-in rather than two
+colleagues. Barely softened, because a heavily blurred beam turns into a grey
+smear the moment it is scaled down, and a smear reads as a rendering fault.
 
 Drawn in code rather than an editor because the size that decides whether an
 icon works is 16px in a taskbar, and that is faster to iterate on in a script.

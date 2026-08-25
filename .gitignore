@@ -18,8 +18,12 @@ learned/
 narration/
 
 # Packaged builds. The installer is a release asset, not a repository file.
-dist/
-build/
+# Anchored to the repository root: an unanchored `build/` also matches
+# desktop/build/, which holds the icon -- and `git add -A` skips an ignored
+# file without a word, so the first anyone knew was electron-builder failing
+# to find an icon that was sitting right there on disk.
+/dist/
+/build/
 desktop/node_modules/
 desktop/release/
 packaging/payload/
