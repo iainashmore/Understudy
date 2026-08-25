@@ -136,6 +136,20 @@ jobs:
           echo "the packaged server never came up"
           exit 1
 
+      - name: Check the packaged page loads and runs
+        shell: bash
+        run: |
+          # Serving is not the same as working. A script that throws on load
+          # leaves an empty sidebar, an empty flow list, and every API check
+          # above still green -- which happened twice while this was being
+          # written, both times found by a screenshot rather than a test.
+          # Against the packaged build specifically, because "PyInstaller
+          # collected the page" and "the frozen server serves it correctly
+          # from where it landed" are different questions.
+          bundle=$(dirname "$(find dist/server -name understudy-server.exe | head -1)")
+          python packaging/check_packaged_ui.py \
+            ./dist/server/understudy-server.exe "$bundle"
+
       - name: Build the installer
         working-directory: desktop
         run: |
