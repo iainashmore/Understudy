@@ -28,12 +28,12 @@ native = ["pywinauto>=0.6", "pyperclip>=1.8"]
 [tool.setuptools]
 packages = [
     "harness", "harness.agents", "harness.environments",
-    "flowrunner", "flowrunner.drivers", "flowrunner.ui",
+    "understudy", "understudy.drivers", "understudy.ui",
 ]
 
 [tool.setuptools.package-data]
-"flowrunner" = ["schema/*.json"]
-"flowrunner.ui" = ["static/*"]
+"understudy" = ["schema/*.json"]
+"understudy.ui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,7 +5,7 @@
 # flow's own description or tags, or narrow it to a few variants.
 
 version: 1
-name: FlowRunner examples
+name: Understudy examples
 description: Everything in examples/, as one pass
 
 flows:

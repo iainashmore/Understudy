@@ -165,9 +165,9 @@ def probe_display() -> dict[str, Any]:
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        from flowrunner.geometry import enumerate_monitors, make_dpi_aware
+        from understudy.geometry import enumerate_monitors, make_dpi_aware
     except Exception as exc:
-        return {"error": f"could not import flowrunner.geometry: {exc}"}
+        return {"error": f"could not import understudy.geometry: {exc}"}
 
     awareness = make_dpi_aware()
     monitors = [

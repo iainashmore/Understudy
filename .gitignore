@@ -6,10 +6,10 @@ __pycache__/
 traces/
 results/
 
-# Credentials. The real file lives in ~/.flowrunner by default; these patterns
+# Credentials. The real file lives in ~/.understudy by default; these patterns
 # cover the case where someone points the UI at a path inside the repository.
 credentials.json
-.flowrunner/
+.understudy/
 **/credentials.json
 !credentials.example.json
 
