@@ -1,4 +1,4 @@
-"""Markdown report for a run.
+"""Markdown transcript of a run.
 
 results.jsonl is what a machine reads. This is what a person reads: prompts and
 responses side by side, the screenshots that prove the flow did what it was
@@ -7,7 +7,7 @@ meant to, and enough diagnostics to work out why a variant failed.
 Written into the run directory alongside the screenshots it links, with
 relative paths, so the whole folder can be zipped, committed or attached and
 still renders. `embed=True` inlines the images as data URIs instead, for when
-the report has to travel as a single file.
+the transcript has to travel as a single file.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any
 
 from flowrunner.narrate import load_narration, steps_of
 
-#: Screenshots are full application windows; at full width a report is
+#: Screenshots are full application windows; at full width a transcript is
 #: unreadable. HTML img tags because markdown has no width syntax.
 THUMBNAIL_WIDTH = 460
 RESPONSE_IMAGE_WIDTH = 320
@@ -290,8 +290,8 @@ def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
     return out
 
 
-def write_report(
-    run_dir: Path | str, embed: bool = False, filename: str = "report.md"
+def write_transcript(
+    run_dir: Path | str, embed: bool = False, filename: str = "transcript.md"
 ) -> Path:
     run_dir = Path(run_dir)
     path = run_dir / filename
@@ -300,7 +300,7 @@ def write_report(
 
 
 def write_suite_index(out_dir: Path | str, runs: list[dict[str, Any]]) -> Path:
-    """One page linking every flow's report, so a suite run has a front door.
+    """One page linking every flow's transcript, so a suite run has a front door.
 
     `runs` entries: name, description, tags, dir (relative), ok, total, error.
     """
@@ -308,7 +308,7 @@ def write_suite_index(out_dir: Path | str, runs: list[dict[str, Any]]) -> Path:
     lines = [
         f"# Suite run — {out_dir.name}", "",
         f"{len(runs)} flow(s).", "",
-        "| flow | result | description | report |",
+        "| flow | result | description | transcript |",
         "|------|--------|-------------|--------|",
     ]
     for run in runs:
@@ -318,7 +318,7 @@ def write_suite_index(out_dir: Path | str, runs: list[dict[str, Any]]) -> Path:
         else:
             passed, total = run.get("ok", 0), run.get("total", 0)
             result = f"{passed}/{total} ok" if passed == total else f"**{passed}/{total} ok**"
-            link = f"[report]({run['dir']}/report.md)"
+            link = f"[transcript]({run['dir']}/transcript.md)"
         lines.append(
             f"| {run['name']} | {result} | {_escape(run.get('description', ''))} | {link} |"
         )

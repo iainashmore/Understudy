@@ -42,9 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
+from flowrunner.cursor import MouseStyle, move as move_pointer
 from flowrunner.flow import Strategy, Target
 from flowrunner.keyboard import TypingStyle, type_text
 from flowrunner.learned import LearnedAnchors
+from flowrunner import os_pointer
+from flowrunner.os_pointer import click_at, read_origin, set_cursor
 from flowrunner.recording import Recording, transcode_to_mp4
 from flowrunner.resolvers import NullResolver, Resolver
 from flowrunner.vision import crop, locate_all
@@ -83,18 +86,27 @@ class _AnchorTarget:
     looks like an empty response.
     """
 
-    def __init__(self, page, match, offset: dict[str, int] | None = None) -> None:
+    def __init__(self, page, match, offset: dict[str, int] | None = None,
+                 driver=None) -> None:
         self.page = page
         self.match = match
         self.offset = offset or {}
+        self.driver = driver
 
     @property
     def point(self) -> tuple[int, int]:
         x, y = self.match.centre
         return x + int(self.offset.get("dx", 0)), y + int(self.offset.get("dy", 0))
 
+    def _approach(self) -> None:
+        if self.driver is not None:
+            self.driver.move_pointer_to(*self.point)
+
     def click(self, timeout: int | None = None) -> None:
         x, y = self.point
+        self._approach()
+        if self.driver is not None and self.driver._os_click(x, y):
+            return
         self.page.mouse.click(x, y)
 
     def press(self, keys: str, timeout: int | None = None) -> None:
@@ -176,6 +188,11 @@ class WebDriver:
         self._app_config: dict[str, Any] = {}
         self.attached = False
         self.typing_style = TypingStyle()
+        self.mouse_style = MouseStyle()
+        self.pointer_input = "os"
+        self._pointer: tuple[int, int] | None = None
+        self._origin = None
+        self._origin_checked = False
         self._recording_to: Path | None = None
         self._video_dir: Path | None = None
 
@@ -186,6 +203,8 @@ class WebDriver:
 
         self._app_config = dict(app_config)
         self.typing_style = TypingStyle.from_config(app_config.get("typing"))
+        self.mouse_style = MouseStyle.from_config(app_config.get("mouse"))
+        self.pointer_input = str((app_config.get("mouse") or {}).get("input", "os"))
         self._playwright = sync_playwright().start()
 
         if self._app_config.get("cdp_url"):
@@ -397,7 +416,8 @@ class WebDriver:
         )
         if len(matches) != 1:
             return None, f"{len(matches)} visual match(es)"
-        handle = _AnchorTarget(self.page, matches[0], strategy.fields.get("offset"))
+        handle = _AnchorTarget(self.page, matches[0], strategy.fields.get("offset"),
+                               driver=self)
         return handle, f"score {matches[0].score:.3f}"
 
     def _agent_hint(self, target: Target, strategy: Strategy | None) -> str | None:
@@ -415,7 +435,7 @@ class WebDriver:
             matches = locate_all(self.page.screenshot(), learned, threshold=0.93)
             if len(matches) == 1:
                 return (
-                    _AnchorTarget(self.page, matches[0]),
+                    _AnchorTarget(self.page, matches[0], driver=self),
                     "learned-anchor",
                     f"cached, score {matches[0].score:.3f}",
                 )
@@ -446,7 +466,7 @@ class WebDriver:
 
         match = Match(found.x, found.y, found.width, found.height, found.confidence)
         return (
-            _AnchorTarget(self.page, match),
+            _AnchorTarget(self.page, match, driver=self),
             "agent",
             f"confidence {found.confidence:.2f}",
         )
@@ -523,11 +543,157 @@ class WebDriver:
                 raise TargetNotFound(target, self.backend, attempts)
             time.sleep(RESOLVE_POLL_S)
 
+    # -- pointer --------------------------------------------------------------
+
+    @property
+    def uses_os_pointer(self) -> bool:
+        """Whether clicks go through the desktop cursor rather than through CDP.
+
+        The default is yes. A synthetic click is invisible to anything recording
+        the screen from outside -- Camtasia, or a colleague watching -- and for
+        an embedded panel inside a native application that is the only kind of
+        recording there is.
+
+        It degrades rather than failing: headless has no window for a cursor to
+        be over, and a machine with no reachable cursor cannot have one moved.
+        Both fall back to synthetic clicks and say so in `pointer_note`.
+        """
+        return self.pointer_reason()[0]
+
+    def pointer_reason(self) -> tuple[bool, str | None]:
+        """(using the desktop cursor, why not)."""
+        if self.pointer_input == "cdp":
+            return False, "mouse.input is cdp"
+        if self.headless and not self.attached:
+            # Nothing is on screen, so an OS click would land on whatever else
+            # happens to be at those coordinates. That is worse than synthetic.
+            return False, "browser is headless; no window for the cursor to be over"
+        if not os_pointer.available():
+            return False, os_pointer.unavailable_reason()
+        return True, None
+
+    @property
+    def pointer_note(self) -> str | None:
+        """Why the desktop cursor is not being used, when it is not."""
+        using, reason = self.pointer_reason()
+        return None if using else reason
+
+    def viewport_origin(self):
+        """Where the page sits on the desktop. Asked once, then remembered."""
+        if not self._origin_checked:
+            self._origin_checked = True
+            self._origin = read_origin(self.page)
+        return self._origin
+
+    def move_pointer_to(self, x: int, y: int) -> None:
+        """Travel to a page point rather than jumping to it.
+
+        These are CDP input events, not the operating system's cursor: the page
+        sees a real stream of mousemove events and its hover states follow, but
+        the arrow drawn on the desktop does not move. A screen capture of a
+        browser being driven this way shows no cursor at all. That matters for
+        the embedded-panel case, where the host application is being recorded
+        by something outside this tool.
+        """
+        end = (int(x), int(y))
+        if not self.mouse_style.animated:
+            self.page.mouse.move(*end)
+            self._pointer = end
+            return
+
+        start = self._pointer
+        if start is None:
+            # Nothing has moved the pointer yet, so there is no path to draw.
+            # Land on the target rather than flying in from a corner we made up.
+            self.page.mouse.move(*end)
+            self._pointer = end
+            return
+
+        move_pointer(
+            start, end, self.mouse_style,
+            set_position=self._set_pointer,
+            sleep=time.sleep,
+        )
+        self._pointer = end
+
+    def _set_pointer(self, x: float, y: float) -> None:
+        """One step of a move. Both pointers, when the OS one is in play.
+
+        The CDP move still happens so the page's hover states track the travel;
+        the desktop cursor is what a screen recorder sees.
+        """
+        self.page.mouse.move(x, y)
+        if not self.uses_os_pointer:
+            return
+        origin = self.viewport_origin()
+        if origin is not None:
+            set_cursor(*origin.to_screen(x, y))
+
+    def _os_click(self, x: float, y: float) -> bool:
+        """Click the desktop cursor where the page point is. False if it cannot
+        be worked out, so the caller falls back to a synthetic click."""
+        if not self.uses_os_pointer:
+            return False
+        origin = self.viewport_origin()
+        if origin is None:
+            return False
+        try:
+            click_at(*origin.to_screen(x, y))
+        except Exception as exc:
+            raise DriverError(
+                f"could not click the desktop cursor at ({x}, {y}): {exc}. "
+                f"Set mouse: {{input: cdp}} to drive the page synthetically."
+            ) from None
+        return True
+
+    def park_pointer(self) -> None:
+        """Put the pointer somewhere sensible before the first step, so the
+        opening move is a travel rather than a materialisation."""
+        if self._pointer is not None or not self.mouse_style.animated:
+            return
+        size = self.page.viewport_size or {}
+        width, height = int(size.get("width", 0)), int(size.get("height", 0))
+        if width and height:
+            self.move_pointer_to(width // 2, height - 10)
+
+    @staticmethod
+    def _point_of(locator) -> tuple[float, float] | None:
+        """Where a locator is, in page coordinates. None if it will not say."""
+        point = getattr(locator, "point", None)
+        if point is not None:
+            return (float(point[0]), float(point[1]))
+        try:
+            box = locator.bounding_box()
+        except Exception:
+            return None
+        if not box:
+            return None
+        return (box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+    def _approach(self, locator) -> tuple[float, float] | None:
+        """Travel to a locator's centre before acting on it."""
+        point = self._point_of(locator)
+        if point is None:
+            return None
+        if self.mouse_style.animated:
+            self.park_pointer()
+            self.move_pointer_to(*point)
+        elif self.uses_os_pointer:
+            self._pointer = (int(point[0]), int(point[1]))
+        return point
+
+    def _click_locator(self, locator, point, timeout_ms: int) -> None:
+        """Prefer the desktop cursor; fall back to a synthetic click."""
+        if point is not None and self._os_click(*point):
+            return
+        locator.click(timeout=timeout_ms)
+
     # -- actions --------------------------------------------------------------
 
     def click(self, target: Target, timeout_ms: int) -> Resolution:
         locator, resolution = self.resolve(target, timeout_ms)
-        locator.click(timeout=timeout_ms)
+        point = self._approach(locator)
+        self._click_locator(locator, point, timeout_ms)
         return resolution
 
     def type(
@@ -535,6 +701,7 @@ class WebDriver:
         mode: str = "type", clear: bool = True, delay_ms: int = 0,
     ) -> Resolution:
         locator, resolution = self.resolve(target, timeout_ms)
+        point = self._approach(locator)
         if mode == "fill":
             locator.fill(text, timeout=timeout_ms)
             return resolution
@@ -542,7 +709,7 @@ class WebDriver:
         # rich editors) do not react to a value being set.
         if clear:
             locator.fill("", timeout=timeout_ms)
-        locator.click(timeout=timeout_ms)
+        self._click_locator(locator, point, timeout_ms)
         if delay_ms:
             # An explicit per-key delay on the step wins over the app's style.
             locator.press_sequentially(text, delay=delay_ms, timeout=timeout_ms)

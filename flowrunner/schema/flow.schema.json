@@ -114,6 +114,45 @@
                   "minimum": 1
                 }
               }
+            },
+            "mouse": {
+              "description": "How the pointer moves. 'human' travels to the target so a screen recording is followable; 'instant' teleports, which is faster for unattended sweeps. On the web backend these are CDP input events: the page's hover states follow the path, but the desktop cursor does not move.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "human",
+                    "instant"
+                  ]
+                },
+                "speed": {
+                  "type": "number",
+                  "minimum": 1
+                },
+                "arc": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "settle_ms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "step_rate": {
+                  "type": "number",
+                  "minimum": 1
+                },
+                "input": {
+                  "description": "Where clicks come from. 'cdp' dispatches synthetic events into the page: the page reacts, but the desktop cursor does not move, so an external screen recorder sees nothing. 'os' moves and clicks the real Windows cursor at the page's position on screen. 'auto' (the default) means 'os' when attached to another application's browser, which is the embedded-panel case, and 'cdp' otherwise.",
+                  "type": "string",
+                  "enum": [
+                    "auto",
+                    "cdp",
+                    "os"
+                  ]
+                }
+              }
             }
           },
           "anyOf": [
@@ -564,6 +603,10 @@
               "comment": {},
               "until_hidden": {
                 "type": "string"
+              },
+              "require_change": {
+                "description": "Wait for the watched area to change before it can count as settled. On by default: an assistant that thinks before it types leaves its panel unchanged, and 'unchanged' would otherwise be satisfied instantly by an empty answer. Turn off only when waiting for something to stop moving rather than start arriving.",
+                "type": "boolean"
               },
               "stable_for_ms": {
                 "type": "integer",

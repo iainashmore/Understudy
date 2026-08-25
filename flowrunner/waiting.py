@@ -98,14 +98,26 @@ def wait_until_stable(
     timeout_ms: int,
     poll_interval_ms: int = 250,
     done_signal: Callable[[], bool] | None = None,
+    require_change: bool = True,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> StableResult:
-    """Poll until the sample stops changing, or the completion signal fires.
+    """Poll until the response has arrived *and* stopped changing.
+
+    Two conditions, and the first is the one that is easy to forget. An
+    assistant that thinks for eight seconds before printing anything leaves its
+    panel perfectly unchanged during those eight seconds, so "unchanged for a
+    second" is true immediately -- and the run captures an empty answer and
+    calls it a pass. So the sample must first *change* from what it was when the
+    wait began, and only then start settling. `require_change=False` restores
+    the naive behaviour for the rare step that is waiting for something to
+    finish moving rather than for something to arrive.
 
     When a `done_signal` is given it takes precedence, but stability is still
     required afterwards: the text routinely lags the spinner by a frame or two,
-    and stopping the instant the spinner clears truncates the last token.
+    and stopping the instant the spinner clears truncates the last token. The
+    signal firing also counts as the response having started -- a stop button
+    that has appeared and gone is proof enough.
     """
     started = clock()
     deadline = started + timeout_ms / 1000.0
@@ -116,6 +128,7 @@ def wait_until_stable(
     samples = 1
     unchanged_since = clock()
     signalled = done_signal is None
+    changed = not require_change
 
     while True:
         now = clock()
@@ -124,12 +137,16 @@ def wait_until_stable(
                 outcome=StableOutcome.TIMEOUT,
                 waited_ms=int((now - started) * 1000),
                 samples=samples,
-                signal="timeout",
+                # Which timeout this was decides what to go and look at: a
+                # response that never started is a different problem from one
+                # that never stopped.
+                signal="never-started" if not changed else "timeout",
                 last_value=previous if isinstance(previous, str) else "",
             )
 
         if not signalled and done_signal is not None and done_signal():
             signalled = True
+            changed = True
             # Restart the settle window: the signal says generation stopped, the
             # settle window confirms the content has caught up.
             unchanged_since = now
@@ -141,9 +158,10 @@ def wait_until_stable(
 
         if not equivalent(previous, current):
             unchanged_since = now
+            changed = True
         previous = current
 
-        if signalled and (now - unchanged_since) >= settle:
+        if signalled and changed and (now - unchanged_since) >= settle:
             return StableResult(
                 outcome=StableOutcome.STABLE,
                 waited_ms=int((now - started) * 1000),

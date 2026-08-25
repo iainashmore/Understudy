@@ -238,15 +238,15 @@ class TestRunning:
         assert kinds[-1] == "finished"
         assert job.status == "finished"
 
-    def test_the_result_carries_the_response_and_a_report(self, api):
+    def test_the_result_carries_the_response_and_a_transcript(self, api):
         pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
 
         assert job.results[0]["response"] == "Echo: first prompt"
-        assert job.report and job.report.endswith("report.md")
-        assert (api.workspace.root / job.report).exists()
+        assert job.transcript and job.transcript.endswith("transcript.md")
+        assert (api.workspace.root / job.transcript).exists()
 
     def test_a_broken_flow_fails_the_job_without_taking_the_server_down(self, api):
         api.write_file("flow.yaml", "version: 1\nname: x\nsteps: []\n")

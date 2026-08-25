@@ -93,8 +93,13 @@ class TestTheOpaqueViewportProblem:
         assert outcome.outcome is StableOutcome.STABLE
 
     def test_a_static_viewport_is_not_the_interesting_case(self, driver):
-        open_app(driver, "?viewport=static&panel=dom&delay=20")
-        ask(driver, "hello")
+        # A reply long enough to still be streaming when the wait begins. With
+        # a five-character answer it is already finished by the first poll, and
+        # a wait that requires the screen to change first would sit there until
+        # the timeout -- correctly, because from its point of view nothing ever
+        # arrived.
+        open_app(driver, "?viewport=static&panel=dom&delay=60")
+        ask(driver, "one two three four five six seven eight")
         outcome = wait_until_stable(
             sample=lambda: driver.screenshot(),
             equivalent=pixels_equivalent,
@@ -125,16 +130,35 @@ class TestAResponseWithNoText:
         assert outcome.outcome is StableOutcome.STABLE
         assert outcome.samples > 2, "it should have observed the response arriving"
 
-    def test_text_stability_would_have_lied(self, driver):
-        """Text stability on a painted response settles instantly on the empty
-        string -- it would report success having captured nothing. Worth
-        pinning, because it is a silent failure rather than a loud one."""
+    def test_text_stability_on_a_painted_response_fails_loudly(self, driver):
+        """The response is pixels, so there is no text to watch and the DOM
+        answer stays empty forever.
+
+        This used to settle instantly on the empty string and report success
+        having captured nothing -- a silent failure, the worst kind. Requiring
+        the watched thing to change before it can count as settled turns it
+        into a timeout that names itself.
+        """
         open_app(driver, "?panel=canvas&viewport=static&delay=25")
         ask(driver, "one two three four five")
 
         outcome = wait_until_stable(
             sample=lambda: driver.page.locator("#reply").inner_text(),
             equivalent=text_equivalent,
+            stable_for_ms=400, timeout_ms=4000, poll_interval_ms=150,
+        )
+        assert outcome.outcome is StableOutcome.TIMEOUT
+        assert outcome.signal == "never-started"
+        assert outcome.last_value == ""
+
+    def test_the_old_behaviour_is_still_there_when_asked_for(self, driver):
+        """What the silent failure looked like, kept as a warning."""
+        open_app(driver, "?panel=canvas&viewport=static&delay=25")
+        ask(driver, "one two three four five")
+
+        outcome = wait_until_stable(
+            sample=lambda: driver.page.locator("#reply").inner_text(),
+            equivalent=text_equivalent, require_change=False,
             stable_for_ms=400, timeout_ms=4000, poll_interval_ms=150,
         )
         assert outcome.outcome is StableOutcome.STABLE

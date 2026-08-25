@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from flowrunner.report import load_results, render_markdown, summarise, write_report
+from flowrunner.transcript import load_results, render_markdown, summarise, write_transcript
 from harness.image import to_png_bytes
 
 
@@ -140,8 +140,8 @@ class TestAwkwardContent:
 class TestFilesAndModes:
     def test_the_report_is_written_into_the_run_directory(self, tmp_path):
         run = make_run(tmp_path, [result()])
-        path = write_report(run)
-        assert path == run / "report.md"
+        path = write_transcript(run)
+        assert path == run / "transcript.md"
         assert path.read_text(encoding="utf-8").startswith("# demo-flow")
 
     def test_embedding_makes_the_report_a_single_file(self, tmp_path):

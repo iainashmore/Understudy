@@ -29,7 +29,7 @@ from flowrunner.drivers import build as build_driver
 from flowrunner.flow import FlowError, load_flow
 from flowrunner.prompts import PromptsError, prompts_for
 from flowrunner.suite import SuiteError, is_suite_file, load_suite
-from flowrunner.report import write_report
+from flowrunner.transcript import write_transcript
 from flowrunner.resolvers import build as build_resolver
 from flowrunner.runner import Runner, Status, run_directory, write_csv
 
@@ -52,7 +52,7 @@ class RunJob:
     events: queue.Queue = field(default_factory=queue.Queue)
     status: str = "starting"
     results: list[dict[str, Any]] = field(default_factory=list)
-    report: str | None = None
+    transcript: str | None = None
     error: str | None = None
 
     def emit(self, kind: str, **payload: Any) -> None:
@@ -408,13 +408,13 @@ flows: []
 
             job.results = [result.as_dict() for result in results]
             write_csv(results, job.out_dir / "results.csv")
-            job.report = self.workspace.relative(write_report(job.out_dir))
+            job.transcript = self.workspace.relative(write_transcript(job.out_dir))
             job.status = "finished"
             job.emit(
                 "finished",
                 ok=sum(1 for r in results if r.status is Status.OK),
                 total=len(results),
-                report=job.report,
+                transcript=job.transcript,
             )
         except Exception as exc:
             job.status = "failed"
@@ -452,9 +452,9 @@ flows: []
     def test_credentials(self) -> dict[str, Any]:
         return credentials.check()
 
-    def rebuild_report(self, run_dir: str) -> dict[str, Any]:
-        path = write_report(self.workspace.resolve(run_dir))
-        return {"report": self.workspace.relative(path)}
+    def rebuild_transcript(self, run_dir: str) -> dict[str, Any]:
+        path = write_transcript(self.workspace.resolve(run_dir))
+        return {"transcript": self.workspace.relative(path)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -537,8 +537,8 @@ class Handler(BaseHTTPRequestHandler):
                 ))
             elif route == "/api/run":
                 self._json(self.api.start_run(body))
-            elif route == "/api/report":
-                self._json(self.api.rebuild_report(body["run_dir"]))
+            elif route == "/api/transcript":
+                self._json(self.api.rebuild_transcript(body["run_dir"]))
             elif route == "/api/credentials":
                 self._json(self.api.save_credentials(body))
             elif route == "/api/credentials/clear":

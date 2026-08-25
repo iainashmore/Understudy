@@ -166,3 +166,104 @@ def test_native_escapes_sendkeys_syntax_in_the_prompt(monkeypatch, no_sleep):
     driver.type(TARGET, "C++ ~ 50%", timeout_ms=5000, clear=False)
 
     assert handle.keys == ["C", "{+}", "{+}", " ", "{~}", " ", "5", "0", "{%}"]
+
+
+# -- pointer ------------------------------------------------------------------
+
+
+class FakeMouse:
+    def __init__(self):
+        self.moves: list[tuple[int, int]] = []
+        self.clicks: list[tuple[int, int]] = []
+
+    def move(self, x, y):
+        self.moves.append((int(x), int(y)))
+
+    def click(self, x, y):
+        self.clicks.append((int(x), int(y)))
+
+
+class FakeBoxLocator(FakeLocator):
+    """A locator that knows where it is, like a real one."""
+
+    def __init__(self, box):
+        super().__init__()
+        self._box = box
+
+    def bounding_box(self):
+        return self._box
+
+
+def pointer_driver(monkeypatch, locator, style=None):
+    driver = WebDriver()
+    driver.page = FakePage()
+    driver.page.mouse = FakeMouse()
+    driver.page.viewport_size = {"width": 900, "height": 700}
+    driver.typing_style = TypingStyle(mode="instant")
+    if style is not None:
+        driver.mouse_style = style
+    monkeypatch.setattr(driver, "resolve", lambda target, timeout: (locator, resolution()))
+    return driver
+
+
+def test_pointer_travels_to_a_locator_rather_than_jumping(monkeypatch, no_sleep):
+    locator = FakeBoxLocator({"x": 700, "y": 100, "width": 80, "height": 30})
+    driver = pointer_driver(monkeypatch, locator)
+    driver.click(TARGET, timeout_ms=5000)
+
+    moves = driver.page.mouse.moves
+    assert len(moves) > 10                    # a path, not a teleport
+    assert moves[0] == (450, 690)             # parked at the foot of the page
+    assert moves[-1] == (740, 115)            # the locator's centre
+    assert locator.clicks == 1
+
+
+def test_pointer_path_is_continuous(monkeypatch, no_sleep):
+    locator = FakeBoxLocator({"x": 700, "y": 100, "width": 80, "height": 30})
+    driver = pointer_driver(monkeypatch, locator)
+    driver.click(TARGET, timeout_ms=5000)
+
+    moves = driver.page.mouse.moves
+    hops = [
+        max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+        for a, b in zip(moves, moves[1:])
+    ]
+    assert max(hops) < 60                     # no jump big enough to look like one
+
+
+def test_pointer_resumes_from_where_it_was_left(monkeypatch, no_sleep):
+    locator = FakeBoxLocator({"x": 700, "y": 100, "width": 80, "height": 30})
+    driver = pointer_driver(monkeypatch, locator)
+    driver.click(TARGET, timeout_ms=5000)
+    first_end = driver.page.mouse.moves[-1]
+
+    driver.page.mouse.moves.clear()
+    locator._box = {"x": 100, "y": 500, "width": 40, "height": 20}
+    driver.click(TARGET, timeout_ms=5000)
+
+    assert driver.page.mouse.moves[0] == first_end
+    assert driver.page.mouse.moves[-1] == (120, 510)
+
+
+def test_pointer_travels_before_typing_too(monkeypatch, no_sleep):
+    locator = FakeBoxLocator({"x": 40, "y": 300, "width": 500, "height": 60})
+    driver = pointer_driver(monkeypatch, locator)
+    driver.type(TARGET, "hello", timeout_ms=5000)
+    assert len(driver.page.mouse.moves) > 10
+
+
+def test_instant_mouse_style_teleports(monkeypatch, no_sleep):
+    from flowrunner.cursor import MouseStyle
+
+    locator = FakeBoxLocator({"x": 700, "y": 100, "width": 80, "height": 30})
+    driver = pointer_driver(monkeypatch, locator, MouseStyle(mode="instant"))
+    driver.click(TARGET, timeout_ms=5000)
+    assert driver.page.mouse.moves == []      # Playwright's own click still lands
+
+
+def test_a_locator_without_a_box_is_clicked_anyway(monkeypatch, no_sleep):
+    """A detached or zero-size element should not take the run down."""
+    locator = FakeBoxLocator(None)
+    driver = pointer_driver(monkeypatch, locator)
+    driver.click(TARGET, timeout_ms=5000)
+    assert locator.clicks == 1

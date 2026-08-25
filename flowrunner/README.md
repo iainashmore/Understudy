@@ -28,7 +28,7 @@ python3 -m flowrunner.cli ui                     # the authoring and replay UI
 python3 -m flowrunner.cli validate examples/fixture_chat.yaml examples/prompts.yaml
 python3 -m flowrunner.cli run      examples/fixture_chat.yaml examples/prompts.yaml --csv
 python3 -m flowrunner.cli run flow.yaml prompts.csv --only baseline,terse --repeat 3
-python3 -m flowrunner.cli report   runs/2026-08-24T14-32-00
+python3 -m flowrunner.cli transcript runs/2026-08-24T14-32-00
 ```
 
 ## The UI
@@ -36,7 +36,7 @@ python3 -m flowrunner.cli report   runs/2026-08-24T14-32-00
 `flowrunner ui --workspace <folder>` serves a local page on 127.0.0.1 that
 covers the working loop: open a flow and a prompts file, edit either by hand,
 save or save-as, validate, replay with live progress, read the output with the
-screenshots inline, and view the report.
+screenshots inline, and view the transcript.
 
 Built on the standard library — no web framework. This has to run on the machine
 that has CATIA on it, which is not necessarily a machine where installing things
@@ -59,7 +59,7 @@ otherwise.
 python3 -m flowrunner.cli run flow.yaml --record
 ```
 
-One video per variant, in the variant's folder, linked from the report.
+One video per variant, in the variant's folder, linked from the transcript.
 **H.264 mp4, no audio track**, from both backends — Playwright writes WebM, so
 the web driver transcodes and drops the intermediate.
 
@@ -124,6 +124,36 @@ always draws the same path. A tool whose value is that only the prompt varies
 between runs cannot introduce randomness into the pointer, even the cosmetic
 kind. `mouse: {mode: instant}` turns the animation off for unattended sweeps.
 
+### It is the real cursor
+
+By default the **operating system's cursor** is what moves and clicks, on both
+backends. This matters more than it sounds. Playwright's own mouse API sends CDP
+input events: the page reacts to them exactly as it reacts to a person — hover
+states, focus, clicks — but they are delivered inside the renderer, so the arrow
+drawn on the desktop never moves. Anything filming the screen from outside,
+Camtasia included, records a panel operating itself while the cursor sits where
+you left it. For an embedded web view inside a native application that is the
+only kind of recording there is.
+
+So `click` goes through `SetCursorPos` and `SendInput` on Windows, and XTest on
+X11. The element is still found through CDP; only the click is delivered by the
+desktop. The page cannot tell the difference, which is the point.
+
+It degrades rather than failing. A headless browser has no window for a cursor
+to be over, so an OS click would land on whatever else is at those coordinates —
+headless falls back to synthetic clicks. So does a machine with no reachable
+cursor. Either way the reason is recorded as `pointer_note` on every variant and
+printed in the transcript, because a run whose pointer never moved looks broken
+and should not be a mystery. `mouse: {input: cdp}` asks for synthetic clicks
+deliberately.
+
+The translation from page coordinates to screen coordinates is the part that
+goes wrong: the viewport's corner on the desktop, plus the browser chrome above
+it, times the display scaling. On an unscaled single monitor with the window at
+the origin every term is zero or one, which is exactly why getting it wrong
+survives testing. `tools/probe_native.py` prints the numbers it computes so the
+mapping can be checked in a few seconds on a real machine.
+
 ## Multiple monitors
 
 Everything a flow declares — anchors, regions — is **window-relative**, so it
@@ -145,15 +175,15 @@ re-located in each run's own screenshot.
 
 ## Reports
 
-Every run writes `report.md` beside its screenshots: what was run, a summary
+Every run writes `transcript.md` beside its screenshots: what was run, a summary
 table, prompts against responses for scanning, then a section per variant with
 the prompt, the response (or the response *pixels* where there was no text), the
 screenshots inline, and a collapsible step table showing how each target
 resolved.
 
 Paths are relative, so the run folder can be zipped, committed or attached and
-still renders. `--embed-report` inlines the images as data URIs when it has to
-travel as a single file. `flowrunner report <run_dir>` rebuilds one for a past
+still renders. `--embed-transcript` inlines the images as data URIs when it has to
+travel as a single file. `flowrunner transcript <run_dir>` rebuilds one for a past
 run.
 
 ## Driving an embedded web view (WebView2 / CEF)
@@ -357,9 +387,26 @@ whole-window stability *never* settles — measured, not assumed: the fixture's
 spinning viewport makes a full-window wait hit its timeout every time, while the
 same wait scoped to the reply rectangle settles in about 1.5s.
 
-Text stability on a painted response is worse than useless: it settles
-instantly on the empty string and reports success having captured nothing. That
-silent failure is pinned by a test.
+**The wait has two conditions, and the first is the one that is easy to
+forget.** An assistant that thinks for eight seconds before printing anything
+leaves its panel perfectly unchanged for those eight seconds, so "unchanged for
+a second" is satisfied immediately -- and the run captures an empty answer and
+calls it a pass. So the watched area must first *change*, and only then start
+settling. A response that never arrives is a timeout that says
+`never-started`, which is a different thing to look into than one that never
+stopped. `require_change: false` restores the naive behaviour for a step that is
+waiting for something to stop moving rather than start arriving.
+
+That also turns the nastiest case loud: text stability on a painted response
+used to settle instantly on the empty string and report success having captured
+nothing. Both behaviours are pinned by tests.
+
+**A completion signal beats both.** `until_hidden: stop_button` waits for the
+control that only exists while a reply is generating to disappear -- then still
+serves out the settle window, because the text lags the spinner by a frame or
+two and stopping on the signal truncates the last token. Where the application
+offers such a control, name it: it is the only thing that reliably distinguishes
+a finished answer from a long pause mid-stream.
 
 A timeout is a step status, never a crash. The run still produces its row, its
 screenshots, and whatever text had arrived.

@@ -109,7 +109,7 @@
       <button data-tab="flow" class="active">Flow</button>
       <button data-tab="run">Run</button>
       <button data-tab="output">Output</button>
-      <button data-tab="report">Report</button>
+      <button data-tab="transcript">Transcript</button>
       <button data-tab="record">Record</button>
       <button data-tab="credentials">Credentials</button>
     </nav>
@@ -152,14 +152,14 @@
 
       <section id="tab-output"><p class="muted">Nothing run yet.</p></section>
 
-      <section id="tab-report">
+      <section id="tab-transcript">
         <div class="row">
-          <strong id="reportPath" class="muted">no report yet</strong>
+          <strong id="transcriptPath" class="muted">no transcript yet</strong>
           <span class="grow"></span>
-          <button id="rebuildReport">Rebuild</button>
-          <a id="openReport" target="_blank"><button>Open raw</button></a>
+          <button id="rebuildTranscript">Rebuild</button>
+          <a id="openTranscript" target="_blank"><button>Open raw</button></a>
         </div>
-        <pre id="reportText" class="muted">Run a flow to produce a report.</pre>
+        <pre id="transcriptText" class="muted">Run a flow to produce a transcript.</pre>
       </section>
 
       <section id="tab-record">
@@ -222,7 +222,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const state = { flow: null, flows: [], suites: [], runId: null, results: [],
-                report: null, outDir: null };
+                transcript: null, outDir: null };
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.onclick = () => {
@@ -514,7 +514,7 @@ function listen(runId) {
     if (event.type === "finished") {
       logLine(`done: ${event.ok}/${event.total} ok`,
               event.ok === event.total ? "ok" : "warn");
-      loadReport(event.report);
+      loadTranscript(event.transcript);
     }
     if (event.type === "failed") logLine("failed: " + event.error, "bad");
     if (event.type === "end") { events.close(); $("run").disabled = false; }
@@ -550,22 +550,22 @@ function renderOutput() {
   });
 }
 
-async function loadReport(path) {
+async function loadTranscript(path) {
   if (!path) return;
-  state.report = path;
-  $("reportPath").textContent = path;
-  $("reportPath").classList.remove("muted");
-  $("openReport").href = "/files/" + encodeURI(path);
+  state.transcript = path;
+  $("transcriptPath").textContent = path;
+  $("transcriptPath").classList.remove("muted");
+  $("openTranscript").href = "/files/" + encodeURI(path);
   const response = await fetch("/files/" + encodeURI(path));
-  $("reportText").textContent = await response.text();
-  $("reportText").classList.remove("muted");
+  $("transcriptText").textContent = await response.text();
+  $("transcriptText").classList.remove("muted");
 }
 
-$("rebuildReport").onclick = async () => {
-  if (!state.report) return;
-  const rebuilt = await post("/api/report",
-    { run_dir: state.report.replace(/\/report\.md$/, "") });
-  loadReport(rebuilt.report);
+$("rebuildTranscript").onclick = async () => {
+  if (!state.transcript) return;
+  const rebuilt = await post("/api/transcript",
+    { run_dir: state.transcript.replace(/\/transcript\.md$/, "") });
+  loadTranscript(rebuilt.transcript);
 };
 
 /* ---------- credentials ---------- */

@@ -18,7 +18,7 @@ from flowrunner.flow import FlowError, load_flow
 from flowrunner.authoring import AuthoringError, duplicate_file
 from flowrunner.narrate import ClaudeNarrator, narrate_run
 from flowrunner.prompts import PromptsError, prompts_for
-from flowrunner.report import write_report, write_suite_index
+from flowrunner.transcript import write_transcript, write_suite_index
 from flowrunner.resolvers import build as build_resolver, credentials_available
 from flowrunner.runner import Runner, Status, run_directory, write_csv
 from flowrunner.suite import SuiteError, load_suite
@@ -59,7 +59,7 @@ def command_narrate(args) -> int:
     for key, description in narration.items():
         print(f"  {key:<28} {description}")
     print(f"\n{len(narration)} step(s) -> {Path(args.run_dir) / 'narration.json'}")
-    print(f"report -> {write_report(args.run_dir)}")
+    print(f"transcript -> {write_transcript(args.run_dir)}")
     return 0
 
 
@@ -107,7 +107,7 @@ def command_suite(args) -> int:
             backend=args.backend, only=",".join(entry.only) if entry.only else None,
             repeat=1, out=str(out_dir / entry.slug), runs_root=args.runs_root,
             headed=args.headed, csv=True, reset_level=1, strict=False,
-            agent="off", learned_dir=None, no_report=False, embed_report=False,
+            agent="off", learned_dir=None, no_transcript=False, embed_transcript=False,
             narrate=False, capture_steps=False, record=False,
         )
         print(f"\n--- {entry.name}")
@@ -154,9 +154,9 @@ def command_ui(args) -> int:
     return 0
 
 
-def command_report(args) -> int:
-    path = write_report(args.run_dir, embed=args.embed_report)
-    print(f"report -> {path}")
+def command_transcript(args) -> int:
+    path = write_transcript(args.run_dir, embed=args.embed_transcript)
+    print(f"transcript -> {path}")
     return 0
 
 
@@ -224,8 +224,8 @@ def command_run(args) -> int:
             print(f"narrated {len(narration)} step(s) (cached in {cache})")
         except Exception as exc:
             print(f"narration skipped: {exc}", file=sys.stderr)
-    if not args.no_report:
-        print(f"report -> {write_report(out_dir, embed=args.embed_report)}")
+    if not args.no_transcript:
+        print(f"transcript -> {write_transcript(out_dir, embed=args.embed_transcript)}")
     failed = [r for r in results if r.status is not Status.OK]
     print(f"\n{len(results) - len(failed)}/{len(results)} ok -> {runner.results_path}")
     return 1 if failed and args.strict else 0
@@ -242,10 +242,10 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--no-open", action="store_true")
     ui.set_defaults(handler=command_ui)
 
-    report = sub.add_parser("report", help="rebuild the report for a past run")
-    report.add_argument("run_dir")
-    report.add_argument("--embed-report", action="store_true")
-    report.set_defaults(handler=command_report)
+    transcript = sub.add_parser("transcript", help="rebuild the transcript for a past run")
+    transcript.add_argument("run_dir")
+    transcript.add_argument("--embed-transcript", action="store_true")
+    transcript.set_defaults(handler=command_transcript)
 
     copy = sub.add_parser("duplicate", help="copy a flow under a new identity")
     copy.add_argument("flow")
@@ -297,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
             child.add_argument(
                 "--narrate", action="store_true",
                 help="capture every step and have a model describe each one in "
-                     "the report; cached per flow, so it costs once",
+                     "the transcript; cached per flow, so it costs once",
             )
             child.add_argument(
                 "--record", action="store_true",
@@ -307,11 +307,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             child.add_argument("--capture-steps", action="store_true",
                                help="screenshot after every step, without narrating")
-            child.add_argument("--no-report", action="store_true",
-                               help="skip the markdown report")
-            child.add_argument("--embed-report", action="store_true",
+            child.add_argument("--no-transcript", action="store_true",
+                               help="skip the markdown transcript")
+            child.add_argument("--embed-transcript", action="store_true",
                                help="inline screenshots as data URIs, so the "
-                                    "report travels as a single file")
+                                    "transcript travels as a single file")
             child.add_argument(
                 "--learned-dir", default=None,
                 help="where anchors the agent finds are cached "

@@ -82,6 +82,10 @@ class VariantResult:
     repeat_index: int = 0
     recording: str | None = None
     recording_error: str | None = None
+    #: Set when clicks could not be delivered by the desktop cursor, with the
+    #: reason. A run whose pointer never moved looks wrong on a screen capture,
+    #: and the transcript should say why rather than leaving it a mystery.
+    pointer_note: str | None = None
     reads: dict[str, str] = field(default_factory=dict)
     #: Where a read came from pixels, the pixels are kept: a transcription is a
     #: lossy derivative and the image is the evidence.
@@ -137,6 +141,7 @@ class VariantResult:
             "screenshots": self.screenshots,
             "recording": self.recording,
             "recording_error": self.recording_error,
+            "pointer_note": self.pointer_note,
             "used_fallbacks": self.used_fallbacks,
             "agent_resolutions": self.agent_resolutions,
             "learned_anchors": self.learned_anchors,
@@ -229,6 +234,7 @@ class Runner:
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         counter = {"n": 0}
+        result.pointer_note = getattr(self.driver, "pointer_note", None)
         recording_started = self._start_recording(folder)
 
         try:
@@ -431,9 +437,11 @@ class Runner:
                     return ""
             equivalent = text_equivalent
 
+        require_change = bool(step.params.get("require_change", True))
         outcome = wait_until_stable(
             sample=sample, equivalent=equivalent, stable_for_ms=stable_for,
             timeout_ms=timeout_ms, poll_interval_ms=poll, done_signal=signal,
+            require_change=require_change,
         )
         status.detail.update(
             waited_ms=outcome.waited_ms, samples=outcome.samples,
@@ -443,7 +451,11 @@ class Runner:
             # A timeout is a step status, never a crash: the run still produces
             # a row and its screenshots.
             status.status = Status.TIMEOUT
-            status.error = f"still changing after {timeout_ms}ms"
+            status.error = (
+                f"nothing changed within {timeout_ms}ms -- the response never "
+                f"started" if outcome.signal == "never-started"
+                else f"still changing after {timeout_ms}ms"
+            )
 
     def _step_image(self, step: Step, folder: str, sequence: int) -> str | None:
         relative = f"{folder}/steps/{sequence + 1:02d}-{step.phase}-{step.action}.png"
