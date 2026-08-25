@@ -37,3 +37,9 @@ packages = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    # The only tests that touch a real desktop. Skipped off Windows, and run
+    # in CI on a windows-latest runner -- they drive Notepad, so they need a
+    # session with a desktop in it and they are not safe to run in parallel.
+    "native_live: drives a real Windows application",
+]

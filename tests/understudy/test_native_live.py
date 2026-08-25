@@ -1,0 +1,201 @@
+"""The native driver, against a real window.
+
+Everything else about this driver is tested against synthetic trees. This is
+the only test that makes it touch Windows: it drives Notepad end to end --
+finds the window, walks the UIA tree, moves the actual desktop cursor, clicks,
+types at a human speed, reads the text back, and screenshots it.
+
+It exists because 22 of the driver's 41 methods had never executed a single
+line, and the first time they were going to was in front of CATIA with somebody
+watching. Notepad is not CATIA, but every pywinauto and Win32 call is the same
+one: `Desktop(backend='uia')`, the tree walk, `SetCursorPos`, `SendInput`,
+`type_keys`, the UIA value pattern, the clipboard fallback, `capture_as_image`,
+and the DPI and monitor calls underneath all of it.
+
+Skipped everywhere but Windows, and run in CI on a `windows-latest` runner.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import time
+
+import pytest
+
+from understudy.flow import Strategy, Target
+
+pytestmark = [
+    pytest.mark.skipif(sys.platform != "win32", reason="needs Windows"),
+    pytest.mark.native_live,
+]
+
+pywinauto = pytest.importorskip("pywinauto", reason="needs pywinauto")
+
+#: Notepad's editing surface. `Document` on the newer builds, `Edit` on the
+#: classic one; the driver is asked for both because which one a runner has is
+#: not something this test should care about.
+EDIT_AREA = Target(
+    name="edit_area",
+    intent="the text area",
+    strategies={"native": (
+        Strategy(backend="native", fields={"control_type": "Document"}),
+        Strategy(backend="native", fields={"control_type": "Edit"}),
+    )},
+)
+
+TYPED = "Understudy typed this."
+
+
+@pytest.fixture(scope="module")
+def notepad():
+    """One Notepad for the module, closed however the tests end."""
+    process = subprocess.Popen(["notepad.exe"])
+    time.sleep(2.0)
+    yield process
+    try:
+        subprocess.run(["taskkill", "/pid", str(process.pid), "/f", "/t"],
+                       capture_output=True, timeout=20)
+    except Exception:
+        process.kill()
+
+
+@pytest.fixture(scope="module")
+def driver(notepad):
+    from understudy.drivers.native import NativeDriver
+
+    native = NativeDriver()
+    native.start({
+        "window_title_pattern": "*Notepad*",
+        # Instant: a runner has no one watching, and the animation only costs
+        # time here. The animated path has its own tests.
+        "mouse": {"mode": "instant"},
+        "typing": {"mode": "human", "cps": 40},
+    })
+    yield native
+    try:
+        native.stop()
+    except Exception:
+        pass
+
+
+class TestGettingHold:
+    def test_it_finds_the_window(self, driver):
+        assert driver.window is not None
+
+    def test_it_reads_the_geometry(self, driver):
+        geometry = driver.geometry
+        assert geometry is not None
+        assert geometry.width > 0 and geometry.height > 0
+
+    def test_it_became_dpi_aware(self, driver):
+        """Without this the coordinates on a scaled display are virtualised:
+        they look plausible and every click lands short."""
+        assert driver.dpi_awareness, "make_dpi_aware() reported nothing"
+
+    def test_it_enumerated_the_monitors(self, driver):
+        assert driver.monitors, "no monitors found"
+        assert all(m.width > 0 for m in driver.monitors)
+
+    def test_the_window_is_on_a_known_monitor(self, driver):
+        assert driver.geometry.monitor, "the window is on no monitor we know of"
+
+
+class TestTheTreeWalk:
+    def test_it_walks_something(self, driver):
+        from understudy.drivers.native import walk
+
+        found = list(walk(driver.window))
+        assert len(found) > 1, "the UIA tree came back with nothing in it"
+
+    def test_it_resolves_the_edit_area(self, driver):
+        handle, resolution = driver.resolve(EDIT_AREA, 5000)
+        assert handle is not None
+        assert resolution.target == "edit_area"
+
+    def test_a_target_that_is_not_there_fails_as_not_found(self, driver):
+        from understudy.drivers.base import TargetNotFound
+
+        missing = Target(name="nope", strategies={"native": (
+            Strategy(backend="native",
+                     fields={"automation_id": "definitely-not-in-notepad"}),
+        )})
+        with pytest.raises(TargetNotFound):
+            driver.resolve(missing, 800)
+
+
+class TestInput:
+    def test_the_desktop_cursor_moves(self, driver):
+        """The real one. Synthetic events would leave it where it was, and a
+        screen recording would show nothing."""
+        import ctypes
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        before = POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(before))
+
+        centre = driver.geometry.to_screen(
+            driver.geometry.width // 2, driver.geometry.height // 2)
+        driver.move_pointer_to(*centre)
+        time.sleep(0.2)
+
+        after = POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(after))
+        assert (after.x, after.y) != (before.x, before.y) or \
+            (abs(after.x - centre[0]) < 4 and abs(after.y - centre[1]) < 4)
+
+    def test_it_clicks_and_types(self, driver):
+        driver.type(EDIT_AREA, TYPED, 5000)
+        time.sleep(0.4)
+        text, _ = driver.read(EDIT_AREA, 5000)
+        assert TYPED in text, f"read back {text!r}"
+
+    def test_typing_again_replaces_rather_than_appends(self, driver):
+        """The bug that contaminated every variant after the first: select-all
+        then typing does not clear the field on every control."""
+        driver.type(EDIT_AREA, "second", 5000)
+        time.sleep(0.4)
+        text, _ = driver.read(EDIT_AREA, 5000)
+        assert "second" in text
+        assert TYPED not in text, f"the previous text survived: {text!r}"
+
+    def test_a_prompt_containing_sendkeys_syntax_arrives_literally(self, driver):
+        """Unescaped, `~` is Enter and `+` is Shift -- a prompt would submit
+        itself halfway through being typed."""
+        awkward = "C++ at 50% (yes) ~ done"
+        driver.type(EDIT_AREA, awkward, 5000)
+        time.sleep(0.4)
+        text, _ = driver.read(EDIT_AREA, 5000)
+        assert awkward in text, f"read back {text!r}"
+
+    def test_a_key_press_reaches_the_window(self, driver):
+        driver.type(EDIT_AREA, "line one", 5000)
+        driver.key("{ENTER}", EDIT_AREA, 5000)
+        driver.type(EDIT_AREA, "line two", 5000, clear=False)
+        time.sleep(0.4)
+        text, _ = driver.read(EDIT_AREA, 5000)
+        assert "line one" in text and "line two" in text
+
+
+class TestSeeing:
+    def test_it_screenshots_the_window(self, driver):
+        from harness.image import load_rgb
+
+        image = driver.screenshot()
+        pixels = load_rgb(image)
+        assert pixels.shape[0] > 50 and pixels.shape[1] > 50
+
+    def test_it_screenshots_a_region(self, driver):
+        from harness.image import load_rgb
+
+        image = driver.screenshot(region={"x": 0, "y": 0, "width": 120, "height": 60})
+        assert load_rgb(image).shape[:2] == (60, 120)
+
+    def test_it_can_tell_whether_something_is_visible(self, driver):
+        assert driver.is_visible(EDIT_AREA)
+
+    def test_wait_for_element_returns_rather_than_hanging(self, driver):
+        resolution = driver.wait_for_element(EDIT_AREA, "visible", 5000)
+        assert resolution.target == "edit_area"

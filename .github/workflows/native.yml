@@ -1,0 +1,66 @@
+# The native driver, against a real Windows desktop.
+#
+# Everything else about that driver is tested against synthetic UIA trees. This
+# is the only job that makes it touch Windows: it drives Notepad end to end, so
+# every pywinauto and Win32 call runs at least once somewhere before it runs in
+# front of a CAD application with somebody watching.
+#
+# Notepad is not CATIA. But Desktop(backend='uia'), the tree walk, SetCursorPos,
+# SendInput, type_keys, the UIA value pattern, the clipboard fallback,
+# capture_as_image and the DPI calls underneath are all the same ones.
+
+name: native
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "understudy/drivers/native.py"
+      - "understudy/native_match.py"
+      - "understudy/geometry.py"
+      - "understudy/os_pointer.py"
+      - "understudy/keyboard.py"
+      - "understudy/cursor.py"
+      - "tests/understudy/test_native_live.py"
+      - ".github/workflows/native.yml"
+  pull_request:
+    paths:
+      - "understudy/drivers/native.py"
+      - "understudy/native_match.py"
+      - "tests/understudy/test_native_live.py"
+
+jobs:
+  notepad:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[native,ocr]" pytest
+
+      - name: What this runner looks like
+        shell: python
+        run: |
+          # Printed whatever happens: if the tests fail, the first question is
+          # whether the runner had a desktop at all.
+          from understudy.geometry import enumerate_monitors, make_dpi_aware
+          print("dpi awareness:", make_dpi_aware())
+          for monitor in enumerate_monitors():
+              print(" ", monitor)
+
+      - name: Drive Notepad
+        run: pytest tests/understudy/test_native_live.py -v -m native_live
+
+      - name: Everything else, on Windows
+        # The rest of the suite has only ever run on Linux. Windows path
+        # handling and line endings are their own category of bug.
+        run: pytest tests/understudy -q -m "not native_live" --deselect tests/understudy/test_cdp_attach.py
