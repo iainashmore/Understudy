@@ -73,19 +73,36 @@ jobs:
           python -m understudy.cli run examples/notepad.yaml \
             --backend native --out runs/notepad --record --pdf
 
+      - name: Cut anchors out of a live Notepad
+        run: python tools/make_notepad_anchors.py
+
+      - name: Replay it blind — no UIA at all
+        shell: bash
+        run: |
+          # The worst case, and the one CATIA is likely to be: every control
+          # found by matching a picture, the text read by OCR off the pixels.
+          # Nothing here asks UIA for a control type, a name or an automation
+          # id, because a CAD package exposes none of them.
+          export PATH="$PWD/packaging/payload/tools:$PATH"
+          python -m understudy.cli run examples/notepad_blind.yaml \
+            --backend native --out runs/notepad-blind --record
+
       - name: Show what it produced
         if: always()
         shell: bash
         run: |
-          find runs/notepad -type f | sort
-          echo "-----"
-          cat runs/notepad/transcript.md || true
+          for run in runs/notepad runs/notepad-blind; do
+            echo "===== $run"
+            find "$run" -type f | sort
+            echo "-----"
+            cat "$run/transcript.md" || true
+          done
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: notepad-run-${{ github.run_number }}
-          path: runs/notepad
+          path: runs
           if-no-files-found: error
 
       - name: Everything else, on Windows

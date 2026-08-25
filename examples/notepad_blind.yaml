@@ -1,0 +1,68 @@
+# Notepad, driven with no accessibility at all -- the CATIA rehearsal.
+#
+# Every target here is a picture. Nothing asks UIA for a control type, a name
+# or an automation id, because a CAD package draws its own spec tree, toolbars
+# and viewport and exposes none of those. The reply is read by OCR off the
+# pixels rather than through the value pattern, for the same reason.
+#
+# The anchors are cut on the machine that runs this, by
+# `tools/make_notepad_anchors.py`. Notepad's chrome differs between Windows
+# builds, themes and DPI settings, so a committed anchor would be a near-miss
+# on the next machine -- which is a fair rehearsal in itself: anchors are
+# captured on the workstation that will replay them.
+
+version: 1
+name: notepad-blind
+title: Notepad — blind, by pictures alone
+description: No UIA. Controls found by matching pictures, text read by OCR — the path a CAD application will need.
+tags: [smoke, native, blind]
+
+subject:
+  app: Notepad
+  model: none
+
+target_app:
+  native:
+    executable: notepad.exe
+    launch: true
+    window_title_pattern: "*Notepad*"
+    mouse: {mode: human, speed: 2200}
+    typing: {mode: human, cps: 25}
+
+defaults:
+  timeout_ms: 20000
+  poll_interval_ms: 200
+
+targets:
+  text_area:
+    intent: the typing surface, reached from the menu bar above it
+    native:
+      # Anchored on the menu bar, which has text and therefore features. An
+      # empty text area is a featureless white rectangle: it matches nowhere,
+      # or everywhere. Then act 120px below the anchor's centre.
+      - image: anchors/notepad/menu_bar.png
+        threshold: 0.9
+        offset: {dx: 0, dy: 120}
+
+prompts:
+  - id: blind
+    prompt: Found by picture, typed by keystroke, read by OCR.
+
+steps:
+  - action: capture
+    label: 1-before
+
+  - action: click
+    target: text_area
+  - action: type
+    target: text_area
+    text: "{{prompt}}"
+  - action: capture
+    label: 2-typed
+
+  # Read off the pixels, not out of the control. This is the rung that carries
+  # a custom-drawn panel, and the only one available when UIA sees nothing.
+  - action: read
+    mode: ocr
+    region: {x: 0, y: 60, width: 700, height: 220}
+    store_as: response

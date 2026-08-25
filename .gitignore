@@ -27,3 +27,8 @@ narration/
 desktop/node_modules/
 desktop/release/
 packaging/payload/
+
+# Anchors cut on the machine that runs the flow. Notepad's chrome differs
+# between Windows builds and DPI settings, so a committed one is a near-miss
+# everywhere else.
+examples/anchors/notepad/
