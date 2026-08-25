@@ -7,14 +7,30 @@
 name: desktop
 
 on:
+  # Dispatching only works once this file is on the default branch, which is
+  # why the branch trigger below exists as well.
   workflow_dispatch:
     inputs:
       include_browsers:
         description: "Bundle Chromium (adds ~600MB; needed only for launch-mode web flows)"
         type: boolean
-        default: true
+        default: false
+  # Development builds, only when something that affects the package changes.
+  # The full build takes the best part of an hour; running it on every commit
+  # to a branch would make it something people learn to ignore.
   push:
-    tags: ["v*"]
+    branches: ["claude/**", "main"]
+    paths:
+      - "desktop/**"
+      - "packaging/**"
+      - ".github/workflows/desktop.yml"
+      - "pyproject.toml"
+  # Releases carry the full bundle. A `release` event rather than a tag push,
+  # because a paths filter and a tag filter in the same trigger interact in a
+  # way that would silently skip the build for a release commit that happened
+  # not to touch packaging.
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -43,8 +59,14 @@ jobs:
 
       - name: Stage the bundled binaries
         shell: bash
+        env:
+          # A release carries everything. A development build skips Chromium
+          # unless asked: it is 600MB and most of the build time, and it is not
+          # needed to attach to an embedded panel over CDP, which is the case
+          # this tool exists for.
+          FULL: ${{ github.event_name == 'release' || inputs.include_browsers == true }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.include_browsers }}" = "true" ]; then
+          if [ "$FULL" = "true" ]; then
             python packaging/fetch_payload.py
           else
             python packaging/fetch_payload.py --skip-browsers
@@ -79,12 +101,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Understudy-windows-installer
+          name: Understudy-windows-installer-${{ github.run_number }}
           path: desktop/release/*.exe
           if-no-files-found: error
 
       - name: Attach it to the release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/release/*.exe
