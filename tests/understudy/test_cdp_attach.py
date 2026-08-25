@@ -96,11 +96,15 @@ def host(tmp_path_factory):
 
 
 def attach_flow(tmp_path: Path, host, **extra: str):
-    text = re.sub(
-        r'url: "file://[^"]*"',
+    # Swap the example's url for a cdp_url. Counted rather than assumed: a
+    # substitution that quietly stops matching leaves the flow launching its own
+    # browser, and the test then passes while proving nothing about attaching.
+    text, swapped = re.subn(
+        r'url: "[^"]*"',
         f'cdp_url: "{host["cdp"]}"' + "".join(f"\n    {line}" for line in extra.values()),
         FLOW_TEMPLATE,
     )
+    assert swapped == 1, f"expected to rewrite one url, rewrote {swapped}"
     path = tmp_path / "flow.yaml"
     path.write_text(text)
     return load_flow(path)

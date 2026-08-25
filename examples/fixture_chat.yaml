@@ -5,7 +5,7 @@ description: Ask the fixture chat app the same thing three ways and compare the 
 tags: [assistant, smoke]
 target_app:
   web:
-    url: "file:///home/user/harness/fixtures/chat_app/index.html?mode=stream&delay=25&dialog=portal&banner=1"
+    url: "../fixtures/chat_app/index.html?mode=stream&delay=25&dialog=portal&banner=1"
     viewport: {width: 900, height: 700}
 
 defaults:

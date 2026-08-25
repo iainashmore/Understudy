@@ -415,6 +415,20 @@ a finished answer from a long pause mid-stream.
 A timeout is a step status, never a crash. The run still produces its row, its
 screenshots, and whatever text had arrived.
 
+## Paths in a flow
+
+Anchor images and `target_app.web.url` both resolve **relative to the flow
+file**. A flow that hard-codes an absolute path only runs on the machine it was
+written on: a checkout in a different directory, a colleague's laptop, or a
+repository that has been renamed breaks every one of them. Anything with a
+scheme — `https://`, or a `file:///` you wrote deliberately — is left alone.
+
+```yaml
+target_app:
+  web:
+    url: "../fixtures/cad_app/index.html?viewport=spin"
+```
+
 ## The transcript
 
 `transcript.md` and `transcript.html`, written into the run folder beside the

@@ -234,3 +234,79 @@ def test_a_realistic_flow_round_trips(tmp_path):
     assert len(parsed.steps) == 5
     assert parsed.source_text
     parsed.validate_for_backend("web")
+
+
+class TestPortablePaths:
+    """A flow that hard-codes an absolute path only runs on the machine it was
+    written on. A checkout in a different directory -- or a repository that has
+    been renamed -- breaks every example that does it.
+    """
+
+    def write(self, tmp_path, url):
+        flow = tmp_path / "flows" / "demo.yaml"
+        flow.parent.mkdir(parents=True, exist_ok=True)
+        flow.write_text(
+            "version: 1\nname: demo\n"
+            "prompts:\n  - id: a\n    prompt: hello\n"
+            f'target_app:\n  web:\n    url: "{url}"\n'
+            "targets:\n  box:\n    web: \"#box\"\n"
+            "steps:\n  - action: click\n    target: box\n"
+        )
+        return flow
+
+    def test_a_relative_path_resolves_against_the_flow_file(self, tmp_path):
+        from understudy.flow import load_flow
+
+        (tmp_path / "fixtures").mkdir()
+        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
+        flow = load_flow(self.write(tmp_path, "../fixtures/app.html"))
+
+        url = flow.app_config("web")["url"]
+        assert url.startswith("file:///")
+        assert url.endswith("/fixtures/app.html")
+
+    def test_the_query_string_survives_the_resolution(self, tmp_path):
+        from understudy.flow import load_flow
+
+        (tmp_path / "fixtures").mkdir()
+        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
+        flow = load_flow(self.write(tmp_path, "../fixtures/app.html?mode=stream&delay=25"))
+        assert flow.app_config("web")["url"].endswith("app.html?mode=stream&delay=25")
+
+    def test_a_real_url_is_left_exactly_as_written(self, tmp_path):
+        from understudy.flow import load_flow
+
+        for url in ("https://example.com/app?a=1", "file:///opt/app/index.html"):
+            flow = load_flow(self.write(tmp_path, url))
+            assert flow.app_config("web")["url"] == url
+
+    def test_the_same_flow_works_from_two_different_directories(self, tmp_path):
+        """The point of the exercise: rename the checkout, nothing changes."""
+        import shutil
+
+        from understudy.flow import load_flow
+
+        (tmp_path / "fixtures").mkdir()
+        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
+        self.write(tmp_path, "../fixtures/app.html")
+
+        renamed = tmp_path.parent / (tmp_path.name + "-renamed")
+        shutil.copytree(tmp_path, renamed)
+
+        first = load_flow(tmp_path / "flows" / "demo.yaml").app_config("web")["url"]
+        second = load_flow(renamed / "flows" / "demo.yaml").app_config("web")["url"]
+        assert first != second, "each resolves to its own checkout"
+        assert first.endswith("/fixtures/app.html")
+        assert second.endswith("/fixtures/app.html")
+
+
+class TestExamplesArePortable:
+    def test_no_shipped_example_hard_codes_an_absolute_path(self):
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        offenders = [
+            path.name for path in sorted((repo / "examples").glob("*.yaml"))
+            if "file:///" in path.read_text()
+        ]
+        assert offenders == []

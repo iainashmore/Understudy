@@ -16,7 +16,7 @@ description: "Opaque canvas surface: visual anchors, pixel-stability waiting, OC
 tags: [cad, blind]
 target_app:
   web:
-    url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=30"
+    url: "../fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=30"
     viewport: {width: 1100, height: 700}
 
 defaults:

@@ -157,7 +157,27 @@ class Flow:
         return found
 
     def app_config(self, backend: str) -> dict[str, Any]:
-        return dict(self.target_app.get(backend) or {})
+        config = dict(self.target_app.get(backend) or {})
+        if config.get("url"):
+            config["url"] = self.resolve_url(config["url"])
+        return config
+
+    def resolve_url(self, url: str) -> str:
+        """Turn a flow-relative file path into one the browser can open.
+
+        Anchor images already resolve against the flow file, so a `url:` that
+        did not was the odd one out -- and an absolute path baked into a flow is
+        a flow that only runs on the machine it was written on. A checkout in a
+        different directory, or a repository that has been renamed, breaks every
+        example that hard-codes one.
+
+        Anything with a scheme (http:, https:, file:///...) is left alone.
+        """
+        if "://" in url or self.source_path is None:
+            return url
+        path, _, query = url.partition("?")
+        resolved = (self.source_path.parent / path).resolve()
+        return resolved.as_uri() + (f"?{query}" if query else "")
 
     def validate_for_backend(self, backend: str) -> None:
         """Check every target the flow actually uses can be found on this

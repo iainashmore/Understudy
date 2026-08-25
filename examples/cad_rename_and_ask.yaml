@@ -17,7 +17,7 @@ description: Select a tree node, rename it through a dialog that moves between r
 tags: [cad, dialog]
 target_app:
   web:
-    url: "file:///home/user/harness/fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=25&dialogpos=a"
+    url: "../fixtures/cad_app/index.html?controls=unlabelled&panel=canvas&viewport=spin&delay=25&dialogpos=a"
     viewport: {width: 1100, height: 700}
 
 defaults:

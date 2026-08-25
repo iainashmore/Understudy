@@ -28,9 +28,14 @@ pytest.importorskip("playwright", reason="web driver needs playwright")
 
 
 def make_flow(tmp_path: Path, query: str, **replacements: str):
-    text = re.sub(
-        r'url: "file://[^"]*"', f'url: "file://{FIXTURE}{query}"', FLOW_TEMPLATE
+    # The example's url is relative to the example file; these copies live in a
+    # tmp directory, so it is rewritten to an absolute one. Counted, not
+    # assumed: a substitution that stops matching is silent, and the flow then
+    # runs against a page that does not exist.
+    text, swapped = re.subn(
+        r'url: "[^"]*"', f'url: "{FIXTURE.as_uri()}{query}"', FLOW_TEMPLATE
     )
+    assert swapped == 1, f"expected to rewrite one url, rewrote {swapped}"
     for old, new in replacements.items():
         text = text.replace(old, new)
     path = tmp_path / "flow.yaml"
