@@ -197,10 +197,6 @@
           <label>Backend</label>
           <select id="backend"><option value="web">web</option>
             <option value="native">native</option></select>
-          <label title="Which of this flow's prompts to replay">Replay</label>
-          <select id="only" title="Which of this flow's prompts to replay">
-            <option value="">every prompt</option>
-          </select>
           <label title="Whether a model may resolve a control the deterministic strategies could not find">Agent</label>
           <select id="agent" title="off: deterministic only. fallback: ask a model only when everything else fails. only: let a model resolve everything.">
             <option value="off">off</option>
@@ -687,7 +683,6 @@ async function openFlow(path) {
   $("currentDesc").textContent = flow.description || "";
   markActive();
   loadSubject(path);
-  fillPromptPicker(flow);
   showTab("flow");
 }
 
@@ -800,15 +795,6 @@ $("validate").onclick = async () => {
   showTab("run");
 };
 
-function fillPromptPicker(flow) {
-  // Named, not typed. "baseline,terse" asked somebody to remember ids from a
-  // file they may not have written.
-  const ids = (flow && flow.prompt_ids) || [];
-  $("only").innerHTML = '<option value="">every prompt</option>'
-    + ids.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`)
-         .join("");
-}
-
 function backendChanged() {
   // A native application is on screen by definition. Leaving a checkbox that
   // does nothing is how somebody concludes the tool ignored them.
@@ -839,7 +825,8 @@ $("run").onclick = async () => {
   try {
     const started = await post("/api/run", {
       flow: state.flow, backend: $("backend").value,
-      only: $("only").value ? [$("only").value] : [],
+      // Every prompt, every time. A run of some of them is not a run of the
+      // flow, and two runs to compare have to have asked the same questions.
       agent: $("agent").value, headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
       record: $("record").checked,

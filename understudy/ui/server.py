@@ -157,8 +157,8 @@ class Api:
             entry: dict[str, Any] = {"path": relative, "name": "",
                                      "title": relative,
                                      "description": "", "tags": [],
-                                     "variants": 0, "prompt_ids": [],
-                                     "embedded": False, "error": None}
+                                     "variants": 0, "embedded": False,
+                                     "error": None}
             try:
                 flow = load_flow(self.workspace.resolve(relative))
                 entry.update(
@@ -167,10 +167,6 @@ class Api:
                     title=flow.title or flow.name, description=flow.description,
                     tags=list(flow.tags), steps=len(flow.steps),
                     variants=len(flow.embedded_prompts),
-                    # So the run form can offer them by name rather than
-                    # asking somebody to type ids from memory.
-                    prompt_ids=[str(entry.get("id", "")) for entry
-                                in flow.embedded_prompts if entry.get("id")],
                     embedded=bool(flow.embedded_prompts),
                 )
             except Exception as exc:
