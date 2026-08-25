@@ -15,15 +15,17 @@ on:
         description: "Bundle Chromium (adds ~600MB; needed only for launch-mode web flows)"
         type: boolean
         default: false
-  # Deliberately no build on push. A Windows runner bills at double rate and
-  # emails on every failure, and iterating on packaging through CI turns both
-  # into noise -- which is exactly what happened while this was being written.
-  # Build when you want one: the Run workflow button once this file is on the
-  # default branch, or a published release.
-  # Releases carry the full bundle. A `release` event rather than a tag push,
-  # because a paths filter and a tag filter in the same trigger interact in a
-  # way that would silently skip the build for a release commit that happened
-  # not to touch packaging.
+  # Deliberately no build on an ordinary push. A Windows runner bills at double
+  # rate and emails on every failure, and iterating on packaging through CI
+  # turns both into noise -- which is exactly what happened while this was
+  # being written. Build when you want one: the Run workflow button, a version
+  # tag, or a published release.
+  #
+  # A tag now carries no paths filter to conflict with, since ordinary pushes
+  # do not build at all. Pushing v0.1.0 produces the full bundle and creates
+  # the release with the installer attached.
+  push:
+    tags: ["v*"]
   release:
     types: [published]
 
@@ -59,7 +61,7 @@ jobs:
           # unless asked: it is 600MB and most of the build time, and it is not
           # needed to attach to an embedded panel over CDP, which is the case
           # this tool exists for.
-          FULL: ${{ github.event_name == 'release' || inputs.include_browsers == true }}
+          FULL: ${{ github.event_name == 'release' || startsWith(github.ref, 'refs/tags/') || inputs.include_browsers == true }}
         run: |
           if [ "$FULL" = "true" ]; then
             python packaging/fetch_payload.py
@@ -106,8 +108,21 @@ jobs:
           path: desktop/release/*.exe
           if-no-files-found: error
 
-      - name: Attach it to the release
-        if: github.event_name == 'release'
+      - name: Publish the release with the installer attached
+        if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/release/*.exe
+          generate_release_notes: true
+          body: |
+            The Windows installer is attached below. Download
+            `Understudy-*-win64-setup.exe` and run it — no Python, no pip and
+            no browser download, and nothing is fetched at first run.
+
+            It is not code-signed, so SmartScreen will warn on first run:
+            **More info → Run anyway**. A managed workstation may block it
+            outright, in which case whoever administers the machine has to
+            allow it.
+
+            If the window does not appear, the application is still a local
+            server: open <http://127.0.0.1:8765> in any browser.
