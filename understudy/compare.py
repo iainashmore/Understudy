@@ -92,12 +92,32 @@ class Row:
         return list(difflib.unified_diff(a, b, lineterm="", n=3))
 
 
+@dataclass(frozen=True)
+class StepView:
+    """One step of one run, as the stepper shows it."""
+
+    number: int
+    description: str
+    status: str = "ok"
+    duration_ms: int = 0
+    #: Relative to the run directory; made relative to the page when written.
+    screenshot: str = ""
+    typed: str = ""
+    response: str = ""
+
+
 @dataclass
 class Comparison:
     columns: list[Column]
     rows: list[Row]
     #: Flow names seen. More than one means somebody compared unlike things.
     flows: tuple[str, ...] = ()
+    #: prompt id -> per-column list of steps, for stepping through both runs
+    #: together. The interesting divergence is often visual and several steps
+    #: before the answer -- a dialog that opened somewhere else, a field that
+    #: did not clear -- and a wall of screenshots does not show that. Two
+    #: pictures of the same step, side by side, does.
+    steps: dict[str, list[list[StepView]]] = field(default_factory=dict)
 
     @property
     def changed(self) -> list[Row]:
@@ -170,7 +190,37 @@ def compare(run_dirs: list[Path | str]) -> Comparison:
             row.statuses.append("" if result is None else result.get("status", ""))
         rows.append(row)
 
+    steps = {}
+    for key in order:
+        per_column = [_steps_of(run.get(key)) for run in per_run]
+        if any(per_column):
+            steps[key] = per_column
+
     return Comparison(
         columns=columns, rows=rows,
         flows=tuple(dict.fromkeys(c.flow for c in columns if c.flow)),
+        steps=steps,
     )
+
+
+def _steps_of(result: dict[str, Any] | None) -> list[StepView]:
+    """The user actions of one variant, each with the screenshot taken after
+    it -- the same grouping the transcript reads by."""
+    if not result:
+        return []
+    from understudy.transcript import timeline
+
+    views = []
+    for entry in timeline(result, {}):
+        if not entry.number:
+            continue
+        views.append(StepView(
+            number=entry.number,
+            description=entry.description,
+            status=entry.status,
+            duration_ms=entry.duration_ms,
+            screenshot=entry.screenshots[-1] if entry.screenshots else "",
+            typed=entry.typed or "",
+            response="\n".join(text for _, text in entry.reads),
+        ))
+    return views

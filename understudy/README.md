@@ -1,61 +1,51 @@
 # Understudy
 
-An understudy performs the same part, the same way, as many times as it is
-asked to. This one replays a fixed UI click-path, varying only the prompt text,
-and records the response plus screenshots and video at every step. No agent
-decides what to click; no scoring. A person authors the steps once, and the tool
-repeats them exactly -- moving the real cursor and typing at a human speed, so
-what comes out is a recording of the application being used rather than of it
-being driven.
+Replays a fixed UI click-path, varying only the prompt, and records the
+response plus screenshots and video at every step. No agent decides what to
+click. Moves the real cursor and types at a human speed, so the output is a
+recording of the application being used rather than driven.
 
 ## Status
 
-| # | Component | State |
-|---|-----------|-------|
-| 1 | Flow schema + parser | done |
-| 2 | Web driver (Playwright) — launch **and CDP attach** | done |
-| 3 | Runner + output layout | done |
-| 4 | `wait_for_stable` (text and pixel modes, region-scoped) | done |
-| — | Visual anchoring + OCR reads, for surfaces with no DOM | done |
-| — | Agent fallback rung (vision model, cached) | done |
-| 5 | Web recorder (`playwright codegen` wrapper) | not started |
-| 6 | Native driver (UIAutomation) | matching done and tested; pywinauto contact unexercised |
-| 7 | Native recorder (Win32 hooks + UIA) | blocked on the probe results |
+| Component | State |
+|---|---|
+| Flow schema, parser, embedded prompts | done |
+| Web driver — launch **and CDP attach** | done |
+| Runner, transcripts (md, html, pdf), video | done |
+| `wait_for_stable`, text and pixel, region-scoped | done |
+| Visual anchoring + OCR, for surfaces with no DOM | done |
+| Agent fallback rung (vision model, cached) | done |
+| Real cursor and human typing | done |
+| Git backend, publish, GitHub/GitLab | done |
+| Subject fields and release comparison | done |
+| Desktop installer (Electron + PyInstaller) | done |
+| **Recorder** | **not started** |
+| Native driver (UIAutomation) | matching tested; pywinauto contact unexercised |
 
-Everything marked done is tested offline against `fixtures/chat_app`, a fake
-streaming chat app with switchable behaviour — streaming, instant, stalling,
-erroring, a cookie banner, and a confirm dialog rendered either inline or
-portalled to `<body>`.
+Everything marked done is tested offline against `fixtures/chat_app` and
+`fixtures/cad_app` — a fake streaming assistant and a deliberately hostile CAD
+surface: opaque canvas, unlabelled controls, a viewport that never stops moving,
+and a dialog that opens somewhere different between runs.
 
 ```bash
-python3 -m understudy.cli ui                     # the authoring and replay UI
-python3 -m understudy.cli validate examples/fixture_chat.yaml examples/prompts.yaml
-python3 -m understudy.cli run      examples/fixture_chat.yaml examples/prompts.yaml --csv
-python3 -m understudy.cli run flow.yaml prompts.csv --only baseline,terse --repeat 3
-python3 -m understudy.cli transcript runs/2026-08-24T14-32-00
+understudy ui --workspace ~/flows          # the authoring and replay app
+understudy validate examples/fixture_chat.yaml
+understudy run      examples/fixture_chat.yaml --out runs/today --record
+understudy run      flow.yaml --only baseline,terse --repeat 3
+understudy compare  runs/a runs/b --out comparisons/a-vs-b
+understudy transcript runs/today --pdf
 ```
 
 ## The UI
 
-`understudy ui --workspace <folder>` serves a local page on 127.0.0.1 that
-covers the working loop: open a flow and a prompts file, edit either by hand,
-save or save-as, validate, replay with live progress, read the output with the
-screenshots inline, and view the transcript.
+`understudy ui --workspace <folder>` serves a local page on 127.0.0.1. Tabs:
+**Flow** (edit, validate, duplicate, delete), **Run** (backend, repeats, agent
+mode, what was under test), **Output**, **Transcript** (rendered, with the video
+playing, exports to md/html/pdf), **Compare**, **Record**, **Repository**,
+**Credentials**.
 
-Built on the standard library — no web framework. This has to run on the machine
-that has CATIA on it, which is not necessarily a machine where installing things
-is quick or permitted.
-
-The workspace folder is the boundary: the UI will not read or write outside it,
-and run output under `runs/` is never offered as a source file. Runs execute on
-a worker thread and stream progress as server-sent events, so a fifty-variant
-sweep is not a blank screen.
-
-**Recording is the one part not wired up.** Which recorder to build — a picker
-injected over CDP, or Win32 hooks plus a UIAutomation lookup, or cropping
-anchors from screenshots — is decided by what `tools/probe_native.py` reports
-against the real application. The Record tab says so rather than pretending
-otherwise.
+The workspace is a local folder, a GitHub repository or a GitLab one; the last
+few are remembered.
 
 ## Recording a run
 
@@ -93,17 +83,14 @@ any real build on PATH) is what gets mp4.
 
 ## Typing
 
-Text goes in **one keystroke at a time**, at about 12 characters a second —
-roughly 145 wpm, a fast typist rather than a machine. That is not only for the
-recording: an application that enables its send button on the first character,
-autocompletes, or validates as you go only behaves the way it does for a person
-if it sees the keys arrive separately. Filling a field sets a value and skips
-all of it.
+**One keystroke at a time**, about 12 characters a second (~145 wpm). Not
+only for the recording: an application that enables its send button on the
+first character, autocompletes, or validates as you go only behaves the way it
+does for a person if the keys arrive separately.
 
-Pauses are longer after a full stop than after a comma, and each keystroke's
-timing is **seeded on the text**, so the same prompt always types at the same
-rhythm. A very long prompt is compressed to fit `max_total_s` (20s by default)
-rather than truncated.
+Pauses are longer after a full stop than a comma, and timing is **seeded on the
+text**, so the same prompt always types at the same rhythm. A long prompt is
+compressed to fit `max_total_s` (20s), not truncated.
 
 ```yaml
 typing: {mode: human, cps: 12, variance: 0.35, max_total_s: 20}
@@ -118,45 +105,36 @@ would press Enter and submit itself halfway through being typed.
 
 ## Pointer movement
 
-The pointer travels to its target rather than teleporting, so a screen recording
-shows a hand moving to a control instead of controls being pressed by nothing.
-Eased, slightly arced, with a beat on the target before the click, and parked
-inside the window at the start of a run.
+The pointer travels rather than teleporting: eased, slightly arced, with a
+beat on the target before the click, and parked inside the window at the start.
 
-The wobble is **deterministic** — seeded on the two endpoints, so the same move
-always draws the same path. A tool whose value is that only the prompt varies
-between runs cannot introduce randomness into the pointer, even the cosmetic
-kind. `mouse: {mode: instant}` turns the animation off for unattended sweeps.
+The wobble is **deterministic**, seeded on the two endpoints — a tool whose
+value is that only the prompt varies cannot introduce randomness anywhere,
+including cosmetically. `mouse: {mode: instant}` turns it off.
 
 ### It is the real cursor
 
-By default the **operating system's cursor** is what moves and clicks, on both
-backends. This matters more than it sounds. Playwright's own mouse API sends CDP
-input events: the page reacts to them exactly as it reacts to a person — hover
-states, focus, clicks — but they are delivered inside the renderer, so the arrow
-drawn on the desktop never moves. Anything filming the screen from outside,
-Camtasia included, records a panel operating itself while the cursor sits where
-you left it. For an embedded web view inside a native application that is the
-only kind of recording there is.
+By default the **operating system's cursor** moves and clicks, on both
+backends. Playwright's mouse API sends CDP input events: the page reacts as it
+would to a person, but they are delivered inside the renderer, so the desktop
+arrow never moves. Anything filming the screen — Camtasia included — records a
+panel operating itself. For an embedded web view inside a native application
+that is the only kind of recording there is.
 
-So `click` goes through `SetCursorPos` and `SendInput` on Windows, and XTest on
-X11. The element is still found through CDP; only the click is delivered by the
-desktop. The page cannot tell the difference, which is the point.
+So clicks go through `SetCursorPos`/`SendInput` on Windows, XTest on X11. The
+element is still found through CDP; only the click comes from the desktop.
 
-It degrades rather than failing. A headless browser has no window for a cursor
-to be over, so an OS click would land on whatever else is at those coordinates —
-headless falls back to synthetic clicks. So does a machine with no reachable
-cursor. Either way the reason is recorded as `pointer_note` on every variant and
-printed in the transcript, because a run whose pointer never moved looks broken
-and should not be a mystery. `mouse: {input: cdp}` asks for synthetic clicks
-deliberately.
+It degrades rather than failing. Headless has no window for a cursor to be over,
+so an OS click would land on whatever else is at those coordinates; that and a
+machine with no reachable cursor fall back to synthetic clicks, and the reason
+is recorded as `pointer_note` on every variant. `mouse: {input: cdp}` asks for
+synthetic clicks deliberately.
 
-The translation from page coordinates to screen coordinates is the part that
-goes wrong: the viewport's corner on the desktop, plus the browser chrome above
-it, times the display scaling. On an unscaled single monitor with the window at
-the origin every term is zero or one, which is exactly why getting it wrong
-survives testing. `tools/probe_native.py` prints the numbers it computes so the
-mapping can be checked in a few seconds on a real machine.
+Page-to-screen translation is the part that goes wrong: viewport corner, plus
+browser chrome, times display scaling. On an unscaled single monitor at the
+origin every term is zero or one, which is why getting it wrong survives
+testing. `tools/probe_native.py` prints the numbers so the mapping can be
+checked on a real machine.
 
 ## Multiple monitors
 
@@ -391,26 +369,19 @@ whole-window stability *never* settles — measured, not assumed: the fixture's
 spinning viewport makes a full-window wait hit its timeout every time, while the
 same wait scoped to the reply rectangle settles in about 1.5s.
 
-**The wait has two conditions, and the first is the one that is easy to
-forget.** An assistant that thinks for eight seconds before printing anything
-leaves its panel perfectly unchanged for those eight seconds, so "unchanged for
-a second" is satisfied immediately -- and the run captures an empty answer and
-calls it a pass. So the watched area must first *change*, and only then start
-settling. A response that never arrives is a timeout that says
-`never-started`, which is a different thing to look into than one that never
-stopped. `require_change: false` restores the naive behaviour for a step that is
-waiting for something to stop moving rather than start arriving.
-
-That also turns the nastiest case loud: text stability on a painted response
-used to settle instantly on the empty string and report success having captured
-nothing. Both behaviours are pinned by tests.
+**The wait has two conditions.** An assistant that thinks for eight seconds
+before printing leaves its panel unchanged for those eight seconds, so
+"unchanged for a second" is satisfied immediately and the run captures an empty
+answer as a pass. The watched area must first *change*, then settle. A response
+that never arrives times out as `never-started`, which sends you somewhere
+different from one that never stopped. `require_change: false` restores the
+naive behaviour.
 
 **A completion signal beats both.** `until_hidden: stop_button` waits for the
-control that only exists while a reply is generating to disappear -- then still
-serves out the settle window, because the text lags the spinner by a frame or
-two and stopping on the signal truncates the last token. Where the application
-offers such a control, name it: it is the only thing that reliably distinguishes
-a finished answer from a long pause mid-stream.
+control that exists only while a reply generates, then still serves out the
+settle window — text lags the spinner and stopping on the signal truncates the
+last token. Where the application offers one, name it: it is the only reliable
+way to tell a finished answer from a long pause mid-stream.
 
 A timeout is a step status, never a crash. The run still produces its row, its
 screenshots, and whatever text had arrived.
@@ -434,7 +405,7 @@ python3 -m understudy.cli publish runs/2026-09-01T14-22 --workspace ~/flows
 
 ### Which repository
 
-Yours, and you pick how. The Repository tab offers three sources:
+Yours. The Repository tab offers three sources:
 
 - **Local folder** — the default, and it needs nothing else. Flows and runs
   work exactly the same; only committing and publishing want a repository.
@@ -449,41 +420,31 @@ so the choice is legible and the panel does not jump about as you click between
 them. Whichever you pick, the whole UI follows, and the last few workspaces are
 remembered so restarting does not mean setting it up again.
 
-**Not this one.** Understudy refuses to write to a checkout of its own source,
-because the most likely `.` on the day somebody first runs the tool is the
-folder they cloned to get it, and publishing there would commit their CAD
-screenshots into a source repository and push them to whoever owns it. The
-refusal explains itself and says how to point somewhere sensible. If flows
-genuinely do belong in that checkout, a `.understudy-workspace` file says so.
+**Not this one.** Understudy refuses to write to a checkout of its own
+source: the most likely `.` on the day somebody first runs it is the folder they
+cloned to get it, and publishing there would push their CAD screenshots to
+whoever owns that repository. A `.understudy-workspace` file overrides it.
 
 ### Commit messages
 
-Written for you from what is actually being committed — `Update rename-and-ask`,
-`Publish run 2026-09-01T14-22`, `Update 3 flows` — and editable before you
-commit. Not a placeholder like "Update files": somebody reads this in a log six
-months from now, trying to find the day the click path changed.
+Written from what is being committed — `Update rename-and-ask`, `Publish run
+2026-09-01T14-22` — and editable. Not a placeholder: somebody reads this in a
+log six months from now looking for the day the click path changed.
 
-**Only the files you tick are staged.** Never `git add -A`: this is a
-repository somebody is also working in, and a tool that stages everything will
-one day commit something they were halfway through, and they will not forgive
-it. `pull` is `--ff-only` for the same reason — a merge commit invented by a
-background tool is a surprise nobody wants.
+**Only the files you tick are staged** — never `git add -A` in a repository
+somebody is also working in. `pull` is `--ff-only` for the same reason.
 
 ### What gets published
 
-A run is mostly evidence: a transcript, the screenshots it links, the results a
-machine reads — and one video per variant, which is by far the largest thing in
-it and the one thing git handles worst. Committing everything is the obvious
-choice and the wrong one: a year of daily regression runs puts gigabytes of mp4
-into a history that cannot be trimmed without rewriting it, and every clone pays
-for it forever.
+A run is mostly evidence — transcript, screenshots, results — plus one video
+per variant, the largest thing in it and the one git handles worst. A year of
+daily runs would put gigabytes of mp4 into a history that cannot be trimmed
+without rewriting it.
 
-So **video is left out by default and linked instead**, and a
-`recordings-not-committed.txt` goes in beside the transcript saying where it
-went — a transcript linking a recording that is not there looks like a broken
-link rather than a decision somebody made. A full CAD run costs about 400KB
-that way. `--include-video` overrides it for the run worth keeping whole;
-consider Git LFS first.
+So **video is left out by default and linked instead**, with a
+`recordings-not-committed.txt` beside the transcript saying where it went. A
+full CAD run costs about 400KB. `--include-video` overrides it; consider Git
+LFS first.
 
 Anything unusually large is skipped whatever its type and reported rather than
 dropped quietly, and `credentials.json` is never committed by any path through
@@ -491,9 +452,9 @@ this code.
 
 ### Tokens
 
-Nothing is needed for an SSH remote or a working credential helper, which is
-most setups. Where a token is needed it is stored **per host** in the same
-owner-only file as the API key, and:
+Nothing is needed for an SSH remote or a working credential helper. Where a
+token is needed it is stored **per host** in the same owner-only file as the API
+key:
 
 - it is never returned to the browser, only a masked form;
 - a token saved for one host is never sent to another — a GitHub token must not
@@ -520,14 +481,11 @@ target_app:
 
 ## What was under test
 
-The tool answers *did the behaviour change?*, and an answer is only comparable
-against another answer if you know what produced each one. A transcript that
-records a reply from LEO but not **which** LEO is evidence of nothing: six
-months later the model has been swapped twice and the CAD package has had three
-service packs, and the difference could be any of them.
+A reply is only comparable against another reply if you know what produced
+each one. A transcript recording an answer from LEO but not **which** LEO is
+evidence of nothing.
 
-So a run records it, in two places. The flow declares what it is *meant* to run
-against, because that belongs with the flow and rarely changes:
+Two places. The flow declares what it is *meant* to run against:
 
 ```yaml
 subject:
@@ -535,17 +493,15 @@ subject:
   model: LEO
 ```
 
-and the run records what it *actually* ran against, because that changes every
-time somebody installs a patch:
+The run records what it *actually* ran against:
 
 ```bash
 understudy run leo.yaml --app-version "R33 SP1" --model-version "2027x FD02"
 ```
 
-The run wins where it says anything. **It is remembered between runs**, per
-flow, so a service pack is typed once and every later run of that flow carries
-it — having to edit a YAML file to record a patch level is how the field ends
-up stale and lying, which is worse than empty.
+The run wins. **Remembered per flow**, so a service pack is typed once and
+later runs carry it — needing to edit YAML to record a patch level is how that
+field ends up stale, which is worse than empty.
 
 ## Comparing releases
 
@@ -555,9 +511,8 @@ The payoff, and the reason for all of the above:
 understudy compare runs/r32 runs/r33 --out comparisons/r32-vs-r33
 ```
 
-One row per prompt, one column per run, and the columns are labelled with what
-was under test rather than with a timestamp — `CATIA V5 R33 · LEO 2027x` is what
-a reader needs; `2026-09-01T14-22` is not.
+One row per prompt, one column per run, labelled with what was under test
+rather than a timestamp.
 
 ```
   runs/r32                   CATIA V5 R32 SP4 · LEO 2026x FD01
@@ -570,16 +525,23 @@ a reader needs; `2026-09-01T14-22` is not.
       CATIA V5 R33 · LEO 2027x FD02      Echo: I can summarise that for you …
 ```
 
-**What counts as changed is deliberately quiet.** Whitespace, reflowed lines, a
-trailing full stop and letter case are not behaviour changes, and a comparison
-that cries wolf over them gets ignored — which makes it worse than no
-comparison at all. A reply that is close but not identical is marked `~`
-(reworded) rather than `!` (moved). Changed rows sort to the top, because
-burying the two that moved among ninety that did not is the other way a
-comparison stops being read.
+**What counts as changed is deliberately quiet.** Whitespace, reflowed lines,
+a trailing full stop and case are not behaviour changes; a comparison that cries
+wolf gets ignored. Close-but-not-identical is `~` (reworded) rather than `!`
+(moved). Changed rows sort to the top.
 
 `--changed-only` prints just those rows and exits non-zero when there are any,
 which is what you want from a scheduled job.
+
+### Stepping through both runs
+
+A **stepper** under the table: the same step of each run side by side, with
+prev/next, a slider and arrow keys.
+
+Divergence is often visual and several steps before the answer — a dialog that
+opened elsewhere, a field that did not clear. Differing answers tell you *that*
+something changed; two pictures of step 4 tell you *where*. A run missing that
+step says so rather than lining step 3 up against step 4.
 
 In the app it is the **Compare** tab: pick a *before* and an *after* from two
 lists — labelled by what each was run against, not by timestamp — and press
@@ -594,25 +556,16 @@ screenshots they link. The page is what the tool's Transcript tab shows, with
 the video playing in place; `--pdf` (or the Export button) prints it through
 Chromium.
 
-**It reads step by step.** Each user action gets a number, the text it typed if
-it typed one, the reply it produced if it produced one, and the screenshot of
-what the screen looked like afterwards. A gallery of images at the bottom and a
-table of steps below that makes the reader do the joining, and every question
-anyone asks of a transcript — what did step 4 do, what did it look like after,
-what did the assistant actually say — is a question about one step.
+**It reads step by step.** Each user action gets a number, the text it typed,
+the reply it produced, and the screenshot of what the screen looked like after.
+Every question anyone asks of a transcript is a question about one step.
 
-The numbers cover **user actions only**: clicks, typing, keys. Capturing,
-waiting and reading are things the tool does around them, and numbering those
-alongside would make "step 4" mean different things to the person reading and
-the person who ran it. They are all still there, in a collapsed table at the end
-of each variant. The numbering is stable across variants, because every variant
-walks the same path — which is the premise of the tool and the reason a number
-is worth quoting.
+Numbers cover **user actions only** — clicks, typing, keys. Capturing, waiting
+and reading are the tool's own housekeeping, and numbering those alongside would
+make "step 4" mean two things. They are all still there in a collapsed table.
+The numbering is stable across variants, which is why a number is worth quoting.
 
-Anything the timeline cannot place against a step is still shown, under *Other
-screenshots*. A picture that exists on disk but appears nowhere is the kind of
-gap nobody notices until they are looking for the one image that would have
-explained something.
+Anything the timeline cannot place is still shown under *Other screenshots*.
 
 ## Output
 

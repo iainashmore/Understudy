@@ -12,6 +12,7 @@ than none.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -185,3 +186,97 @@ class TestTheWrittenComparison:
         paths = write_comparison(comparison, tmp_path / "r32-vs-r33.md")
         assert paths[0].name == "r32-vs-r33.md"
         assert paths[1].name == "r32-vs-r33.html"
+
+
+class TestSteppingThroughBothRuns:
+    """The divergence worth finding is often visual and several steps before
+    the answer -- a dialog that opened somewhere else, a field that did not
+    clear. A wall of screenshots does not show that; two pictures of the same
+    step, side by side, does.
+    """
+
+    def make_stepped_run(self, tmp_path, name, subject, shots):
+        run = tmp_path / name
+        (run / "baseline").mkdir(parents=True)
+        for shot in shots:
+            (run / shot).write_bytes(b"\x89PNG\r\n")
+        steps = [
+            {"index": 1, "phase": "steps", "action": "click", "target": "new_chat",
+             "status": "ok", "duration_ms": 40, "detail": {}},
+            {"index": 2, "phase": "steps", "action": "capture", "status": "ok",
+             "duration_ms": 10, "detail": {"screenshot": shots[0]}},
+            {"index": 3, "phase": "steps", "action": "type", "target": "prompt_box",
+             "status": "ok", "duration_ms": 2800, "detail": {"text": "hello"}},
+            {"index": 4, "phase": "steps", "action": "capture", "status": "ok",
+             "duration_ms": 10, "detail": {"screenshot": shots[1]}},
+        ]
+        (run / "results.jsonl").write_text(json.dumps({
+            "prompt_id": "baseline", "repeat_index": 0, "prompt": "hello",
+            "variables": {}, "response": "hi", "reads": {}, "read_images": {},
+            "status": "ok", "duration_ms": 100, "screenshots": list(shots),
+            "step_statuses": steps, "backend": "web", "flow": "demo",
+            "subject": subject, "timestamp": "2026-09-01T10:00:00Z",
+        }) + "\n")
+        return run
+
+    def comparison(self, tmp_path):
+        shots = ["baseline/01.png", "baseline/02.png"]
+        return compare([
+            self.make_stepped_run(tmp_path, "r32", R32, shots),
+            self.make_stepped_run(tmp_path, "r33", R33, shots),
+        ])
+
+    def test_the_user_actions_are_paired_up_across_runs(self, tmp_path):
+        comparison = self.comparison(tmp_path)
+        steps = comparison.steps["baseline"]
+        assert len(steps) == 2, "two columns"
+        assert [v.number for v in steps[0]] == [1, 2]
+        assert steps[0][0].description == "Click new_chat"
+
+    def test_a_step_carries_the_screenshot_taken_after_it(self, tmp_path):
+        steps = self.comparison(tmp_path).steps["baseline"]
+        assert steps[0][0].screenshot == "baseline/01.png"
+        assert steps[0][1].screenshot == "baseline/02.png"
+
+    def test_a_step_carries_what_it_typed(self, tmp_path):
+        assert self.comparison(tmp_path).steps["baseline"][0][1].typed == "hello"
+
+    def test_image_paths_are_rewritten_to_reach_out_of_the_comparison_folder(
+            self, tmp_path):
+        """The page is written to comparisons/<name>/, and the screenshots are
+        in runs/. A path relative to the run is a broken image on the page."""
+        comparison = self.comparison(tmp_path)
+        out = tmp_path / "comparisons" / "r32-vs-r33"
+        write_comparison(comparison, out)
+
+        page = (out / "comparison.html").read_text()
+        data = json.loads(re.search(r"window\.__comparison = (\{.*?\});", page,
+                                    re.S).group(1))
+        shots = [run["shot"] for step in data["prompts"]["baseline"]
+                 for run in step["runs"] if run.get("shot")]
+        assert shots, "there should be screenshots to show"
+        assert all((out / shot).exists() for shot in shots), shots
+
+    def test_a_run_missing_a_step_is_marked_rather_than_silently_shifted(self, tmp_path):
+        """Lining up step 3 of one run against step 4 of another would be
+        worse than showing nothing."""
+        shots = ["baseline/01.png", "baseline/02.png"]
+        long_run = self.make_stepped_run(tmp_path, "r32", R32, shots)
+        short = self.make_stepped_run(tmp_path, "r33", R33, shots)
+        rows = [json.loads(l) for l in (short / "results.jsonl").read_text().splitlines()]
+        rows[0]["step_statuses"] = rows[0]["step_statuses"][:2]
+        (short / "results.jsonl").write_text(json.dumps(rows[0]) + "\n")
+
+        comparison = compare([long_run, short])
+        page = render_html(comparison)
+        data = json.loads(re.search(r"window\.__comparison = (\{.*?\});", page,
+                                    re.S).group(1))
+        second_step = data["prompts"]["baseline"][1]
+        assert second_step["runs"][1]["missing"] is True
+
+    def test_the_stepper_is_left_out_when_there_is_nothing_to_step_through(self, tmp_path):
+        comparison = compare([
+            make_run(tmp_path, "before", R32, {"a": "x"}),
+            make_run(tmp_path, "after", R33, {"a": "y"}),
+        ])
+        assert "Step through" not in render_html(comparison)

@@ -10,6 +10,8 @@ that moved among ninety that did not is a comparison nobody reads twice.
 from __future__ import annotations
 
 import html
+import json
+import os
 from pathlib import Path
 
 from understudy.compare import Comparison, Row
@@ -67,7 +69,143 @@ def render_markdown(comparison: Comparison) -> str:
     return "\n".join(out) + "\n"
 
 
-def render_html(comparison: Comparison) -> str:
+def _stepper_data(comparison: Comparison, out_dir: Path | None) -> dict:
+    """Everything the stepper needs, with image paths rewritten to be relative
+    to wherever the page is written."""
+    prefixes = []
+    for column in comparison.columns:
+        if out_dir is None:
+            prefixes.append("")
+            continue
+        try:
+            prefixes.append(os.path.relpath(column.run_dir, out_dir).replace("\\", "/") + "/")
+        except ValueError:
+            # A different drive on Windows: an absolute path is all there is.
+            prefixes.append(Path(column.run_dir).as_uri() + "/")
+
+    prompts = {}
+    for prompt_id, per_column in comparison.steps.items():
+        numbers = sorted({v.number for column in per_column for v in column})
+        prompts[prompt_id] = [
+            {
+                "number": number,
+                "description": next(
+                    (v.description for column in per_column
+                     for v in column if v.number == number), ""),
+                "runs": [
+                    _step_payload(next((v for v in column if v.number == number), None),
+                                  prefixes[index])
+                    for index, column in enumerate(per_column)
+                ],
+            }
+            for number in numbers
+        ]
+    return {
+        "columns": [c.heading for c in comparison.columns],
+        "prompts": prompts,
+    }
+
+
+def _step_payload(view, prefix: str) -> dict:
+    if view is None:
+        return {"missing": True}
+    return {
+        "missing": False,
+        "status": view.status,
+        "ms": view.duration_ms,
+        "typed": view.typed,
+        "response": view.response,
+        "shot": (prefix + view.screenshot) if view.screenshot else "",
+    }
+
+
+STEPPER_SCRIPT = """
+(() => {
+  const data = window.__comparison;
+  if (!data || !Object.keys(data.prompts).length) return;
+  const pick = document.getElementById('stepPrompt');
+  const slider = document.getElementById('stepSlider');
+  const caption = document.getElementById('stepCaption');
+  const panes = document.getElementById('stepPanes');
+  const counter = document.getElementById('stepCounter');
+
+  pick.innerHTML = Object.keys(data.prompts)
+    .map((id) => `<option>${id}</option>`).join('');
+
+  let steps = [], at = 0;
+
+  function draw() {
+    const step = steps[at];
+    if (!step) return;
+    counter.textContent = `step ${step.number} of ${steps.length}`;
+    caption.textContent = step.description || '';
+    slider.max = String(steps.length - 1);
+    slider.value = String(at);
+    panes.innerHTML = step.runs.map((run, index) => {
+      if (run.missing) {
+        return `<figure><div class="absent">this run has no step ${step.number}</div>
+          <figcaption>${data.columns[index]}</figcaption></figure>`;
+      }
+      const extra = [run.typed ? `typed: ${run.typed}` : '',
+                     run.response ? `read: ${run.response}` : '',
+                     run.status !== 'ok' ? run.status : ''].filter(Boolean).join(' · ');
+      const shot = run.shot
+        ? `<img src="${run.shot}" alt="step ${step.number}" loading="lazy">`
+        : `<div class="absent">no screenshot at this step</div>`;
+      return `<figure>${shot}<figcaption><b>${data.columns[index]}</b>
+        <div class="lede">${run.ms} ms${extra ? ' · ' + extra : ''}</div>
+        </figcaption></figure>`;
+    }).join('');
+  }
+
+  function load() {
+    steps = data.prompts[pick.value] || [];
+    at = 0;
+    draw();
+  }
+  function move(by) {
+    at = Math.max(0, Math.min(steps.length - 1, at + by));
+    draw();
+  }
+
+  pick.onchange = load;
+  slider.oninput = () => { at = Number(slider.value); draw(); };
+  document.getElementById('stepPrev').onclick = () => move(-1);
+  document.getElementById('stepNext').onclick = () => move(1);
+  // Arrow keys, because that is what anybody stepping through anything tries
+  // first. Ignored while a control has focus so the select still works.
+  addEventListener('keydown', (event) => {
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+    if (event.key === 'ArrowLeft') { move(-1); event.preventDefault(); }
+    if (event.key === 'ArrowRight') { move(1); event.preventDefault(); }
+  });
+  load();
+})();
+"""
+
+
+def _stepper_markup(comparison: Comparison) -> str:
+    if not comparison.steps:
+        return ""
+    return (
+        '<h2 class="stepper">Step through</h2>'
+        '<p class="lede">The same step of each run, side by side. The divergence '
+        'worth finding is often visual and several steps before the answer — a '
+        'dialog that opened somewhere else, a field that did not clear. Arrow '
+        'keys work.</p>'
+        '<div class="row step-controls">'
+        '<select id="stepPrompt"></select>'
+        '<button id="stepPrev" type="button">‹ Back</button>'
+        '<button id="stepNext" type="button">Next ›</button>'
+        '<span id="stepCounter" class="lede"></span>'
+        '<input id="stepSlider" type="range" min="0" value="0">'
+        "</div>"
+        '<p id="stepCaption" class="step-caption"></p>'
+        '<div id="stepPanes" class="step-panes"></div>'
+    )
+
+
+def render_html(comparison: Comparison, out_dir: Path | None = None) -> str:
     rows = []
     for row in _ordered(comparison):
         mark, title = MARKS[row.verdict]
@@ -99,9 +237,14 @@ def render_html(comparison: Comparison) -> str:
         f'<p class="meta"><b>{_e(comparison.headline())}</b></p>'
         f'<div class="wrap"><table><thead><tr><th></th><th>prompt</th>{heads}'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        f"{_stepper_markup(comparison)}"
         "<footer>Generated by understudy. <code>~</code> means the wording "
         "changed but the answer did not; <code>!</code> means it moved."
-        "</footer></main></body></html>\n"
+        "</footer></main>"
+        f"<script>window.__comparison = "
+        f"{json.dumps(_stepper_data(comparison, out_dir))};</script>"
+        f"<script>{STEPPER_SCRIPT}</script>"
+        "</body></html>\n"
     )
 
 
@@ -115,6 +258,24 @@ tr.changed { background:rgba(224,92,92,.07); }
 tr.failed  { background:rgba(224,92,92,.12); }
 tbody td { vertical-align:top; }
 tbody td div.lede { margin:2px 0 0; font-size:12px; }
+
+h2.stepper { break-before:auto; }
+.step-controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+                 margin:10px 0; }
+.step-controls select, .step-controls button {
+  background:var(--panel); color:var(--fg); border:1px solid var(--line);
+  border-radius:5px; padding:5px 12px; font:inherit; cursor:pointer; }
+.step-controls input[type=range] { flex:1; min-width:160px; accent-color:var(--accent); }
+.step-caption { font-weight:600; margin:2px 0 10px; }
+.step-panes { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));
+              gap:14px; align-items:start; }
+.step-panes figure { margin:0; }
+.step-panes img { width:100%; border:1px solid var(--line); border-radius:6px;
+                  display:block; }
+.step-panes .absent { border:1px dashed var(--line); border-radius:6px;
+                      padding:34px 12px; text-align:center; color:var(--dim);
+                      font-size:12px; }
+@media print { .step-controls { display:none; } }
 """
 
 
@@ -140,5 +301,5 @@ def write_comparison(comparison: Comparison, out: Path | str) -> list[Path]:
     markdown = directory / f"{stem}.md"
     page = directory / f"{stem}.html"
     markdown.write_text(render_markdown(comparison), encoding="utf-8")
-    page.write_text(render_html(comparison), encoding="utf-8")
+    page.write_text(render_html(comparison, out_dir=directory), encoding="utf-8")
     return [markdown, page]
