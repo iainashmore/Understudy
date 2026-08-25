@@ -135,10 +135,19 @@ def test_geometry_describes_itself_for_the_log():
 
 
 def test_dpi_awareness_is_reported_not_assumed():
+    """It says which level it got, rather than assuming it got one.
+
+    On Windows that has to be a real one: without per-monitor awareness a
+    scaled display hands back virtualised coordinates, which look plausible
+    and make every click land short. Off Windows it is a no-op that says so.
+    """
     from understudy.geometry import make_dpi_aware
 
-    # Off Windows this is a no-op, and says so rather than pretending.
-    assert make_dpi_aware() == "not windows"
+    awareness = make_dpi_aware()
+    if sys.platform == "win32":
+        assert awareness in ("per-monitor-v2", "per-monitor", "system"), awareness
+    else:
+        assert awareness == "not windows"
 
 
 @pytest.mark.skipif(sys.platform == "win32",
