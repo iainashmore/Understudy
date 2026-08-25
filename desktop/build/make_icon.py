@@ -1,12 +1,12 @@
-"""The icon: layers — the same thing, again and again.
+"""The icon: a stand-in.
 
-Three identical plates, stacked and offset, the top one lit. That is what the
-application does: one path through an interface, replayed as many times as it
-is asked to, each run a copy of the last with only the prompt changed.
+Two figures — one in front, its double waiting behind. That is what an
+understudy is, and it is what the application is named for.
 
-Abstract on purpose. Figures and spotlights kept sliding towards the generic
-"contacts" icon; flat offset plates cannot, and they hold their shape all the
-way down to 16px, which is the size that decides whether an icon works.
+No spotlight, no beam. Both were tried and both fought the shapes: a gradient
+at 16px is a grey smear, and a smear reads as a rendering fault rather than as
+light. What carries the idea at every size is the pair itself, and the tone
+between them.
 
 Verified here rather than in CI: `main()` reads its own .ico back and asserts
 what is in it. electron-builder needs a 256px entry, and Pillow will happily
@@ -19,9 +19,27 @@ from PIL import Image, ImageDraw
 SS = 4                                  # supersample, then resize down
 
 PLATE = (24, 27, 32)                    # near the application's own background
-TOP = (110, 184, 240)                   # the run in front
-MID = (58, 96, 134)
-LOW = (42, 62, 84)
+FRONT = (110, 184, 240)                 # the principal
+BEHIND = (70, 90, 110)                  # the understudy, a step behind
+
+
+def figure(draw, cx, top, scale, colour):
+    """Head and shoulders. Nothing clever -- a circle and a rounded arch."""
+    head_r = 0.150 * scale
+    head_cy = top + head_r
+    draw.ellipse((cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r),
+                 fill=colour)
+
+    body_w = 0.480 * scale
+    body_top = head_cy + head_r * 1.34
+    body_h = 0.360 * scale
+    draw.rounded_rectangle(
+        (cx - body_w / 2, body_top, cx + body_w / 2, body_top + body_h),
+        radius=body_w * 0.42, fill=colour,
+    )
+    # square off the bottom of the arch so it stands on a baseline
+    draw.rectangle((cx - body_w / 2, body_top + body_h * 0.55,
+                    cx + body_w / 2, body_top + body_h), fill=colour)
 
 
 def compose(size):
@@ -30,24 +48,21 @@ def compose(size):
     draw = ImageDraw.Draw(image)
     draw.rounded_rectangle((0, 0, W - 1, W - 1), radius=int(W * 0.22), fill=PLATE)
 
-    width, height = W * 0.560, W * 0.300
-    radius = int(W * 0.055)
-    left = W * 0.500 - width / 2
-    step = W * 0.128
-    # A dark rim between the plates, cut from the background, so three plates
-    # never merge into one tall block at 16px.
-    rim = W * 0.038
+    # The understudy: behind, a little smaller, stepped to the left.
+    figure(draw, cx=W * 0.370, top=W * 0.290, scale=W * 0.84, colour=BEHIND)
 
-    for index, (colour, top) in enumerate((
-        (LOW, W * 0.185), (MID, W * 0.185 + step), (TOP, W * 0.185 + step * 2),
-    )):
-        if index:
-            draw.rounded_rectangle(
-                (left - rim, top - rim, left + width + rim, top + height + rim),
-                radius=radius + int(rim), fill=PLATE)
-        draw.rounded_rectangle((left, top, left + width, top + height),
-                               radius=radius, fill=colour)
+    # A gap punched around the front figure, cut from the background, so the
+    # two silhouettes never merge. This is the difference between "two people"
+    # and "a blob" at 16px, and the only reason this survives down there.
+    gap = W * 0.044
+    cut = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    figure(ImageDraw.Draw(cut), cx=W * 0.605, top=W * 0.228 - gap,
+           scale=W * 0.95 + gap * 2, colour=(0, 0, 0))
+    image.paste(Image.new("RGBA", (W, W), PLATE + (255,)), (0, 0),
+                cut.getchannel("A"))
 
+    draw = ImageDraw.Draw(image)
+    figure(draw, cx=W * 0.605, top=W * 0.228, scale=W * 0.95, colour=FRONT)
     return image.resize((size, size), Image.LANCZOS)
 
 

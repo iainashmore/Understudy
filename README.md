@@ -73,9 +73,11 @@ ffmpeg`, `brew install ffmpeg`, or [a Windows build](https://www.gyan.dev/ffmpeg
 ## Build the installer yourself
 
 PyInstaller cannot cross-compile, so a Windows executable has to be built on
-Windows. `.github/workflows/desktop.yml` does that on a runner and uploads the
-result; see [desktop/README.md](desktop/README.md) for building it by hand and
-for why the shell is Electron.
+Windows. `.github/workflows/desktop.yml` does that on a runner: start it from
+the Actions tab, or publish a release to get the full bundle attached to it. It
+deliberately does not build on every push. See
+[desktop/README.md](desktop/README.md) for building it by hand and for why the
+shell is Electron.
 
 ## Also here
 

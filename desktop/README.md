@@ -41,7 +41,13 @@ with `--skip-browsers` covers CATIA V5 and LEO in about 280MB.
 
 PyInstaller cannot cross-compile: a Windows executable has to be built on
 Windows. `.github/workflows/desktop.yml` does it on a `windows-latest` runner
-and uploads the installer as an artifact; a `v*` tag attaches it to a release.
+and uploads the installer as an artifact; publishing a release attaches it
+there too, with the full bundle including Chromium.
+
+**It does not build on push.** A Windows runner bills at double rate and emails
+on every failure, so a workflow that fires on every commit turns both into
+noise. Start one from the Actions tab — the *Run workflow* button, which GitHub
+only offers once this file is on the default branch — or publish a release.
 
 Locally, on the platform you are targeting:
 
