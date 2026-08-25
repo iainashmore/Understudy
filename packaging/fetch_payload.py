@@ -42,6 +42,13 @@ TESSERACT_DATA = {
     "target": "eng.traineddata",
 }
 
+#: Where the Windows installers put it. Checked after PATH, because a build
+#: machine that has it on PATH has told us which one it means.
+TESSERACT_HOMES = (
+    r"C:\Program Files\Tesseract-OCR",
+    r"C:\Program Files (x86)\Tesseract-OCR",
+)
+
 
 def report(message: str) -> None:
     print(f"  {message}", flush=True)
@@ -114,6 +121,81 @@ def stage_tessdata() -> bool:
     return True
 
 
+def installed_tesseract(
+    which=shutil.which, homes: tuple[str, ...] = TESSERACT_HOMES
+) -> Path | None:
+    """The folder holding tesseract.exe, or None."""
+    found = which("tesseract")
+    if found:
+        return Path(found).resolve().parent
+    for home in homes:
+        if (Path(home) / "tesseract.exe").exists():
+            return Path(home)
+    return None
+
+
+def copy_tesseract(home: Path, target: Path) -> list[str]:
+    """Copy the engine next to ffmpeg, and return what was copied.
+
+    The executable and the DLLs beside it, not the whole installation: its
+    tessdata is a second copy of language data the payload already stages, and
+    its documentation is of no use inside an application bundle.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for pattern in ("*.exe", "*.dll"):
+        for source in sorted(home.glob(pattern)):
+            shutil.copy2(source, target / source.name)
+            copied.append(source.name)
+    return copied
+
+
+def stage_tesseract() -> bool:
+    """Put an OCR engine in the bundle.
+
+    OCR is the bottom rung of the target ladder and the only one left on a
+    custom-drawn CAD panel, where the accessibility tree shows nothing. The
+    bundle shipped pytesseract -- a wrapper around a binary it did not ship --
+    so on every installed copy that rung failed with "OCR needs the tesseract
+    binary", on exactly the applications it exists for.
+    """
+    if sys.platform != "win32":
+        found = shutil.which("tesseract")
+        report(f"using the system tesseract at {found}" if found
+               else "no tesseract found")
+        return bool(found)
+
+    home = installed_tesseract()
+    if home is None:
+        report("no tesseract to bundle -- install one (choco install tesseract) "
+               "and run this again; OCR will be missing from the build")
+        return False
+
+    copied = copy_tesseract(home, PAYLOAD / "tools")
+    if "tesseract.exe" not in copied:
+        report(f"{home} has no tesseract.exe in it")
+        return False
+
+    # Run the copy, not the original. A binary that needs a DLL left behind in
+    # Program Files works on this machine and nowhere else, and the person who
+    # finds out is whoever installed the build.
+    staged = PAYLOAD / "tools" / "tesseract.exe"
+    try:
+        version = subprocess.run(
+            [str(staged), "--version"], capture_output=True, text=True, timeout=30
+        )
+    except Exception as exc:
+        report(f"the staged tesseract will not run: {exc}")
+        return False
+    if version.returncode != 0:
+        report(f"the staged tesseract will not run: {version.stderr.strip()[:200]}")
+        return False
+
+    first = (version.stdout or version.stderr).splitlines()[0].strip()
+    report(f"tesseract staged from {home} ({len(copied)} files, {first})")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-browsers", action="store_true")
@@ -126,6 +208,7 @@ def main() -> int:
         "chromium": True if args.skip_browsers else stage_browsers(),
         "ffmpeg": True if args.skip_ffmpeg else stage_ffmpeg(),
         "tessdata": True if args.skip_ocr else stage_tessdata(),
+        "tesseract": True if args.skip_ocr else stage_tesseract(),
     }
 
     shutil.rmtree(PAYLOAD / "_downloads", ignore_errors=True)

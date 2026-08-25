@@ -54,6 +54,9 @@ jobs:
           pip install ".[web,agent,ocr,native]"
           pip install pyinstaller
 
+      - name: Install Tesseract, so the bundle has an engine to carry
+        run: choco install tesseract -y --no-progress
+
       - name: Stage the bundled binaries
         shell: bash
         env:
@@ -69,8 +72,45 @@ jobs:
             python packaging/fetch_payload.py --skip-browsers
           fi
 
+      - name: Check the payload has everything the bundle promises
+        shell: bash
+        run: |
+          # Staging reports a missing piece and carries on, which is right for
+          # a developer build and wrong here: this artifact is the one people
+          # download, and a feature missing from it fails on their machine,
+          # not on this one.
+          python -c "
+          import pathlib, sys
+          payload = pathlib.Path('packaging/payload')
+          wanted = ['tools/ffmpeg.exe', 'tools/tesseract.exe',
+                    'tessdata/eng.traineddata']
+          missing = [name for name in wanted if not (payload / name).exists()]
+          for name in wanted:
+              path = payload / name
+              print(f'{name}: {path.stat().st_size if path.exists() else \"MISSING\"}')
+          sys.exit(1 if missing else 0)
+          "
+
       - name: Build the server
         run: pyinstaller --noconfirm --clean --distpath dist packaging/understudy-server.spec
+
+      - name: Check the engine survived the freeze and runs from the bundle
+        shell: bash
+        run: |
+          # PyInstaller collects data directories; whether a binary inside one
+          # still runs from where it landed is a different question, and the
+          # answer arrives on somebody else's machine if nobody asks it here.
+          # Found rather than assumed: PyInstaller 6 moved collected data under
+          # _internal, and hard-coding either layout breaks on the other.
+          for tool in tesseract ffmpeg; do
+            found=$(find dist/server -name "$tool.exe" | head -1)
+            if [ -z "$found" ]; then
+              echo "$tool.exe did not survive the freeze"
+              exit 1
+            fi
+            echo "$found"
+            "$found" --version 2>&1 | head -1 || "$found" -version 2>&1 | head -1
+          done
 
       - name: Check the server actually starts
         shell: bash

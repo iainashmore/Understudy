@@ -57,8 +57,10 @@ python3 -m understudy.cli ui --workspace ~/flows
 | `understudy transcript runs/today --pdf` | rebuild the transcript |
 | `understudy publish runs/today` | commit it |
 
-ffmpeg is optional, and only for recording. Tests: `pytest tests/ -q` (941, no
-network).
+ffmpeg is optional, and only for recording. OCR — the fallback read for panels
+that expose no accessibility tree — needs the tesseract binary as well as the
+`ocr` extra (`choco install tesseract`); the installer carries both. Tests:
+`pytest tests/ -q` (990, no network).
 
 ## Build the installer
 
