@@ -52,6 +52,7 @@
   .run { display:flex; align-items:center; gap:6px; padding:3px 6px 3px 34px;
          font-size:12px; cursor:pointer; color:var(--dim, #9aa5b1); }
   .run:hover { background:#2b323a; }
+  .run.active { background:#31435a; color:var(--text); }
   .run .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .run .pick { cursor:pointer; margin:0; }
   .run .count.bad { color:#e05c5c; }
@@ -71,6 +72,14 @@
   nav button { border:none; border-radius:0; background:transparent; color:var(--dim);
                padding:8px 14px; border-bottom:2px solid transparent; }
   nav button.active { color:var(--text); border-bottom-color:var(--accent); }
+  nav button:disabled { opacity:.35; cursor:default; }
+  nav button:disabled:hover { background:transparent; }
+  /* What the group of tabs to the right of it is about. */
+  .scope { align-self:center; padding:0 8px 0 2px; font-size:10.5px;
+           text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+           max-width:190px; overflow:hidden; text-overflow:ellipsis;
+           white-space:nowrap; }
+  .scope-rule { width:1px; margin:8px 8px; background:var(--line); }
   .pane { padding:14px; overflow:auto; }
   section { display:none; } section.active { display:block; }
   textarea { width:100%; height:calc(100vh - 250px); min-height:280px;
@@ -166,14 +175,22 @@
 
   <main>
     <nav>
-      <button data-tab="flow" class="active">Flow</button>
-      <button data-tab="run">Run</button>
-      <button data-tab="output">Output</button>
-      <button data-tab="transcript">Transcript</button>
-      <button data-tab="compare">Compare</button>
-      <button data-tab="record"><span class="rec-dot"></span>Record</button>
-      <button data-tab="repo">Repository <span id="repoBadge" class="badge"></span></button>
-      <button data-tab="credentials">Credentials</button>
+      <!-- Three scopes, in the order you work in: the flow you are editing,
+           the run it produced, and the things that belong to no flow at all.
+           A tab whose subject is not selected is disabled rather than hidden,
+           so the shape of the tool does not change under the reader. -->
+      <span class="scope" id="scopeFlow">flow</span>
+      <button data-tab="flow" data-scope="flow" class="active">Flow</button>
+      <button data-tab="run" data-scope="flow">Run</button>
+      <button data-tab="record" data-scope="flow"><span class="rec-dot"></span>Record</button>
+      <span class="scope-rule"></span>
+      <span class="scope" id="scopeRun">run</span>
+      <button data-tab="transcript" data-scope="run">Transcript</button>
+      <button data-tab="output" data-scope="run">Output</button>
+      <button data-tab="compare" data-scope="runs">Compare</button>
+      <span class="scope-rule"></span>
+      <button data-tab="repo" data-scope="global">Repository <span id="repoBadge" class="badge"></span></button>
+      <button data-tab="credentials" data-scope="global">Credentials</button>
     </nav>
     <div class="pane">
       <section id="tab-flow" class="active">
@@ -457,16 +474,49 @@
 const $ = (id) => document.getElementById(id);
 const state = { flow: null, flows: [], suites: [], runId: null, results: [],
                 transcript: null, transcriptHtml: null, outDir: null,
-                runFilter: "", subject: { fields: {}, tags: [] } };
+                runFilter: "", run: null,
+                subject: { fields: {}, tags: [] } };
 
 document.querySelectorAll("nav button").forEach((button) => {
   button.onclick = () => {
+    if (button.disabled) return;
     document.querySelectorAll("nav button").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll("section").forEach((s) => s.classList.remove("active"));
     button.classList.add("active");
     $("tab-" + button.dataset.tab).classList.add("active");
   };
 });
+
+function refreshScopes() {
+  // A tab is about a flow, about one of its runs, or about neither. Enabling
+  // them from what is selected is the difference between a tool with three
+  // clear scopes and one with eight tabs of which some quietly do nothing.
+  const enabled = {
+    flow: Boolean(state.flow),
+    run: Boolean(state.run),
+    runs: knownRuns.length > 1,
+    global: true,
+  };
+  document.querySelectorAll("nav button").forEach((button) => {
+    const allowed = enabled[button.dataset.scope];
+    button.disabled = !allowed;
+    button.title = allowed ? "" : {
+      flow: "Open a flow first.",
+      run: "Choose a run under a flow first.",
+      runs: "Two runs are needed to compare.",
+    }[button.dataset.scope] || "";
+    // Never leave the reader looking at a pane about something they have
+    // since deselected.
+    if (!allowed && button.classList.contains("active")) showTab("flow");
+  });
+  $("scopeRun").textContent = state.run ? runLabel(state.run) : "run";
+  $("scopeFlow").textContent = state.flow
+    ? (currentFlow().title || "flow").slice(0, 26) : "flow";
+}
+
+function runLabel(run) {
+  return run.short || run.subject || run.name || "run";
+}
 const showTab = (name) => document.querySelector(`nav button[data-tab="${name}"]`).click();
 
 async function api(path, options) {
@@ -610,6 +660,8 @@ function runList(flow) {
     // run from the others, because the list is narrow and the shared half is
     // the half that gets truncated over the top of the useful one.
     line.title = [run.subject, run.name, run.when].filter(Boolean).join(" · ");
+    line.dataset.dir = run.dir;
+    if (state.run && state.run.dir === run.dir) line.classList.add("active");
     const tick = line.querySelector(".pick");
     tick.dataset.dir = run.dir;
     tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
@@ -649,7 +701,10 @@ async function compareTicked() {
 }
 
 async function openRun(run) {
-  document.querySelectorAll(".run-list .run").forEach((r) => r.classList.remove("active"));
+  state.run = run;
+  document.querySelectorAll(".run-list .run").forEach((r) =>
+    r.classList.toggle("active", r.dataset.dir === run.dir));
+  refreshScopes();
   showTab("transcript");
   await loadTranscript(run.dir + "/transcript.md");
 }
@@ -680,7 +735,10 @@ async function openFlow(path) {
   $("current").textContent = flow.title || path;
   $("current").classList.remove("muted");
   $("currentDesc").textContent = flow.description || "";
+  // A different flow, so the run that was open is not this flow's run.
+  state.run = null;
   markActive();
+  refreshScopes();
   loadSubject(path);
   showWhatItDrives(flow);
   showTab("flow");
@@ -1554,6 +1612,7 @@ loadRuns()
   .catch(() => {})
   .then(loadTree)
   .then(() => {
+    refreshScopes();
     if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
   })
   .catch((error) => logLine("could not list flows: " + error.message, "bad"));

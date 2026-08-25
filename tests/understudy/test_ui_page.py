@@ -149,6 +149,48 @@ def test_the_tag_box_offers_what_has_been_used_before(page):
     assert "model-version:FD03" in values, "the prefixed form is offered too"
 
 
+class TestTheThreeScopes:
+    """A tab is about the flow, about one of its runs, or about neither.
+    Eight tabs of which some quietly do nothing is not the same tool."""
+
+    def test_run_tabs_are_off_until_a_run_is_chosen(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+
+        assert page.locator('nav button[data-tab="flow"]').is_enabled()
+        assert page.locator('nav button[data-tab="transcript"]').is_disabled()
+        assert "Choose a run" in (
+            page.locator('nav button[data-tab="transcript"]').get_attribute("title"))
+
+    def test_choosing_a_run_turns_them_on_and_names_it(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        page.locator(".run-list:not([hidden]) .run").first.click()
+        page.wait_for_timeout(500)
+
+        assert page.locator('nav button[data-tab="transcript"]').is_enabled()
+        assert "FD03" in page.locator("#scopeRun").inner_text()
+
+    def test_opening_another_flow_lets_go_of_its_run(self, page):
+        """Leaving a reader looking at a transcript belonging to a flow they
+        have navigated away from is worse than an empty pane."""
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        page.locator(".run-list:not([hidden]) .run").first.click()
+        page.wait_for_timeout(500)
+        assert page.locator('nav button[data-tab="transcript"]').is_enabled()
+
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(400)
+        assert page.locator('nav button[data-tab="transcript"]').is_disabled()
+        assert page.locator('section#tab-flow').is_visible(), \
+            "and it does not leave the run's pane on screen"
+
+    def test_the_global_tabs_never_need_anything_selected(self, page):
+        for tab in ("repo", "credentials"):
+            assert page.locator(f'nav button[data-tab="{tab}"]').is_enabled()
+
+
 class TestTheTagBox:
     """One control, not five boxes. A tag is a word; a tag with a known prefix
     fills a field, which is the only reason the fields still exist -- a
