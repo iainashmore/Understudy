@@ -20,6 +20,10 @@ from understudy.ui.server import Api, Workspace, WorkspaceError, serve
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = (REPO / "fixtures" / "chat_app" / "index.html").resolve()
+# as_uri(), not "file://" + str(). A Windows path is C:\..., whose backslashes
+# are escape sequences inside a double-quoted YAML scalar -- the flow does not
+# parse at all, and every test that loads it fails somewhere else entirely.
+FIXTURE_URL = FIXTURE.as_uri()
 
 FLOW = f"""version: 1
 name: ui-test-flow
@@ -30,7 +34,7 @@ prompts:
     prompt: first prompt
 target_app:
   web:
-    url: "file://{FIXTURE}?mode=instant&dialog=none"
+    url: "{FIXTURE_URL}?mode=instant&dialog=none"
 targets:
   prompt_box:
     web: "textarea[data-testid=prompt-input]"

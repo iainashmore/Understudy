@@ -9,6 +9,8 @@ somewhere else.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from understudy.drivers.native import NativeDriver, _Point
@@ -139,6 +141,8 @@ def test_dpi_awareness_is_reported_not_assumed():
     assert make_dpi_aware() == "not windows"
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="this is the off-Windows behaviour")
 def test_enumerating_monitors_off_windows_is_empty_not_an_error():
     from understudy.geometry import enumerate_monitors
 

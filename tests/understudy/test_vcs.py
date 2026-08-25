@@ -10,6 +10,7 @@ judgement is).
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -567,6 +568,17 @@ class TestAutomaticCommitMessages:
         assert repository.git.log(limit=1)[0]["subject"] == "Update two"
 
 
+#: An absolute path on whichever platform the tests are running. "/home/me"
+#: is not absolute on Windows -- there is no drive -- so hard-coding a Unix
+#: path makes every one of these fail there for a reason that has nothing to
+#: do with what they are testing.
+def absolute(*parts: str) -> str:
+    from pathlib import Path as _Path
+
+    root = _Path("C:/") if sys.platform == "win32" else _Path("/")
+    return str(root.joinpath(*parts))
+
+
 class TestChoosingTheSource:
     """A folder, a GitHub repository, or a GitLab one.
 
@@ -582,38 +594,38 @@ class TestChoosingTheSource:
         return parse(payload)
 
     def test_a_local_folder_needs_nothing_else(self):
-        source = self.parse(kind="local", directory="/home/me/flows")
+        source = self.parse(kind="local", directory=absolute("home", "me", "flows"))
         assert source.clone_url == ""
 
     def test_github_builds_its_own_url(self):
         source = self.parse(kind="github", project="hoppalabs/flows",
-                            directory="/home/me/flows")
+                            directory=absolute("home", "me", "flows"))
         assert source.clone_url == "https://github.com/hoppalabs/flows.git"
 
     def test_gitlab_defaults_to_the_public_instance(self):
         source = self.parse(kind="gitlab", project="cad/flows",
-                            directory="/home/me/flows")
+                            directory=absolute("home", "me", "flows"))
         assert source.clone_url == "https://gitlab.com/cad/flows.git"
 
     def test_a_self_hosted_gitlab_is_honoured(self):
         source = self.parse(kind="gitlab", project="cad/tools/flows",
-                            host="gitlab.bigco.example", directory="/home/me/f")
+                            host="gitlab.bigco.example", directory=absolute("home", "me", "f"))
         assert source.clone_url == "https://gitlab.bigco.example/cad/tools/flows.git"
 
     def test_gitlab_groups_may_nest_and_github_repos_may_not(self):
         from understudy.vcs.source import SourceError
 
-        assert self.parse(kind="gitlab", project="a/b/c", directory="/x").project
+        assert self.parse(kind="gitlab", project="a/b/c", directory=absolute("x")).project
         with pytest.raises(SourceError, match="only GitLab nests"):
-            self.parse(kind="github", project="a/b/c", directory="/x")
+            self.parse(kind="github", project="a/b/c", directory=absolute("x"))
 
     def test_a_missing_repository_says_which_shape_it_wants(self):
         from understudy.vcs.source import SourceError
 
         with pytest.raises(SourceError, match="owner/repo"):
-            self.parse(kind="github", directory="/x")
+            self.parse(kind="github", directory=absolute("x"))
         with pytest.raises(SourceError, match="group/project"):
-            self.parse(kind="gitlab", directory="/x")
+            self.parse(kind="gitlab", directory=absolute("x"))
 
     def test_a_pasted_url_is_refused_with_an_explanation(self):
         """It is the commonest thing to type into that box."""
@@ -621,7 +633,7 @@ class TestChoosingTheSource:
 
         with pytest.raises(SourceError, match="not the whole URL"):
             self.parse(kind="github", project="https://github.com/a/b",
-                       directory="/x")
+                       directory=absolute("x"))
 
     def test_a_relative_folder_is_refused(self):
         from understudy.vcs.source import SourceError

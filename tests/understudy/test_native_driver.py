@@ -135,6 +135,16 @@ class TestAnchorPoints:
 
 class TestUnavailablePaths:
     def test_starting_without_pywinauto_says_what_to_install(self):
+        # Only meaningful where pywinauto is genuinely absent. Where it is
+        # installed the driver gets past the import and spends a minute
+        # waiting for a CATIA window that is not there.
+        try:
+            import pywinauto  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            pytest.skip("pywinauto is installed, so this path cannot be reached")
+
         with pytest.raises(DriverError, match="pywinauto"):
             NativeDriver().start({"window_title_pattern": "*CATIA*"})
 

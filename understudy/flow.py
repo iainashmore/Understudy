@@ -377,8 +377,33 @@ def load_flow(path: Path | str) -> Flow:
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise FlowError(f"{path}: not valid YAML -- {exc}") from None
+        raise FlowError(f"{path}: not valid YAML -- {exc}{_yaml_hint(text, exc)}") from None
     return parse_flow(data, source_path=path, source_text=text)
+
+
+def _yaml_hint(text: str, exc: Exception) -> str:
+    """A nudge for the mistake a Windows user makes on their first flow.
+
+    `url: "file://C:\\Users\\me\\app.html"` is not a broken URL, it is
+    broken YAML: inside double quotes those backslashes are escape sequences,
+    and the parser fails somewhere that looks unrelated. Single quotes fix it,
+    a relative path is better, and neither is guessable from the scanner's own
+    message.
+    """
+    if "double-quoted scalar" not in str(exc):
+        return ""
+    culprits = [
+        line.strip() for line in text.splitlines()
+        if '\\' in line and '"' in line
+    ]
+    if not culprits:
+        return ""
+    return (
+        "\n\nA Windows path inside double quotes is the usual cause: the "
+        "backslashes are read as escape sequences. Use single quotes, forward "
+        "slashes, or -- better -- a path relative to this file.\n"
+        f"  {culprits[0]}"
+    )
 
 
 def substitute(text: str, variables: dict[str, str]) -> str:

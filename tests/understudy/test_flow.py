@@ -310,3 +310,42 @@ class TestExamplesArePortable:
             if "file:///" in path.read_text()
         ]
         assert offenders == []
+
+
+class TestTheWindowsPathTrap:
+    """`url: "C:\\Users\\me\\app.html"` is not a broken URL, it is broken YAML:
+    inside double quotes those backslashes are escape sequences. The scanner's
+    own message points at a column and says nothing about why."""
+
+    def write(self, tmp_path, url_line):
+        flow = tmp_path / "flow.yaml"
+        flow.write_text(
+            "version: 1\nname: x\n"
+            "prompts:\n  - id: a\n    prompt: hello\n"
+            "steps:\n  - action: capture\n    label: shot\n"
+            f"target_app:\n  web:\n    {url_line}\n")
+        return flow
+
+    def test_the_error_names_the_actual_problem(self, tmp_path):
+        from understudy.flow import FlowError, load_flow
+
+        with pytest.raises(FlowError) as caught:
+            load_flow(self.write(tmp_path, r'url: "file://C:\Users\me\app.html"'))
+        message = str(caught.value)
+        assert "backslashes are read as escape sequences" in message
+        assert r"C:\Users\me\app.html" in message, "it should quote the line"
+
+    def test_single_quotes_are_fine(self, tmp_path):
+        from understudy.flow import load_flow
+
+        flow = load_flow(self.write(tmp_path, r"url: 'file:///C:/Users/me/app.html'"))
+        assert flow.app_config("web")["url"].endswith("app.html")
+
+    def test_an_unrelated_yaml_error_gets_no_spurious_hint(self, tmp_path):
+        from understudy.flow import FlowError, load_flow
+
+        flow = tmp_path / "flow.yaml"
+        flow.write_text("version: 1\nname: x\n  bad: indentation\n")
+        with pytest.raises(FlowError) as caught:
+            load_flow(flow)
+        assert "backslashes" not in str(caught.value)
