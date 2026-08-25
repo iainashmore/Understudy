@@ -283,19 +283,31 @@ class NativeDriver:
             return (0, 0)
 
     def move_pointer_to(self, x: int, y: int) -> None:
-        """Travel to a screen point, so a recording of the session is
-        followable rather than a sequence of jumps."""
+        """Put the pointer on a screen point, travelling there when animated.
+
+        Instant means instant, not absent. This used to return without moving
+        anything when the animation was off, which left the cursor wherever it
+        happened to be -- fine for a click, which places it itself, and wrong
+        for everything else that assumes the pointer is where it was put. The
+        web driver always moved; the two backends disagreed, and only one of
+        them was right.
+        """
+        target = (int(x), int(y))
         if not self.mouse_style.animated:
+            _set_cursor(*target)
             return
+
         start = self.pointer_position()
         if start == (0, 0):
+            # Nowhere to travel from. Landing on the target beats not moving.
+            _set_cursor(*target)
             return
-        move_pointer(start, (x, y), self.mouse_style)
+        move_pointer(start, target, self.mouse_style)
 
     def park_pointer(self) -> None:
         """Put the pointer inside the target window before the first step, so a
         recording does not open with a jump in from wherever it was left."""
-        if self.geometry is None or not self.mouse_style.animated:
+        if self.geometry is None:
             return
         centre = self.geometry.to_screen(
             self.geometry.width // 2, self.geometry.height // 2
@@ -632,6 +644,14 @@ def _act(operation) -> None:
         operation()
     except Exception as exc:
         raise DriverError(f"{type(exc).__name__}: {exc}") from None
+
+
+def _set_cursor(x: int, y: int) -> None:  # pragma: no cover - needs Windows
+    """One call, no animation. Separate so the animated path and the instant
+    one cannot drift apart again."""
+    from pywinauto import mouse
+
+    mouse.move(coords=(int(x), int(y)))
 
 
 def _glob_to_regex(pattern: str) -> str:

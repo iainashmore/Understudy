@@ -125,26 +125,39 @@ class TestTheTreeWalk:
 
 
 class TestInput:
-    def test_the_desktop_cursor_moves(self, driver):
-        """The real one. Synthetic events would leave it where it was, and a
-        screen recording would show nothing."""
+    def cursor(self):
         import ctypes
 
         class POINT(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-        before = POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(before))
+        point = POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+        return (point.x, point.y)
 
-        centre = driver.geometry.to_screen(
-            driver.geometry.width // 2, driver.geometry.height // 2)
-        driver.move_pointer_to(*centre)
+    def test_the_desktop_cursor_ends_up_where_it_was_sent(self, driver):
+        """The real one. Synthetic events would leave it where it was, and
+        anything filming the screen would show nothing.
+
+        Instant means instant, not absent: this caught the driver returning
+        without moving anything whenever the animation was off.
+        """
+        target = driver.geometry.to_screen(60, 60)
+        driver.move_pointer_to(*target)
         time.sleep(0.2)
 
-        after = POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(after))
-        assert (after.x, after.y) != (before.x, before.y) or \
-            (abs(after.x - centre[0]) < 4 and abs(after.y - centre[1]) < 4)
+        landed = self.cursor()
+        assert abs(landed[0] - target[0]) <= 2, f"{landed} not near {target}"
+        assert abs(landed[1] - target[1]) <= 2, f"{landed} not near {target}"
+
+    def test_it_moves_again_to_somewhere_else(self, driver):
+        first = driver.geometry.to_screen(40, 40)
+        second = driver.geometry.to_screen(180, 140)
+        driver.move_pointer_to(*first)
+        time.sleep(0.15)
+        driver.move_pointer_to(*second)
+        time.sleep(0.15)
+        assert self.cursor() != first
 
     def test_it_clicks_and_types(self, driver):
         driver.type(EDIT_AREA, TYPED, 5000)
