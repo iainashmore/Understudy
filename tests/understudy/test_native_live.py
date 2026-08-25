@@ -192,6 +192,71 @@ class TestInput:
         assert "line one" in text and "line two" in text
 
 
+class TestFindingThingsByLookingAtThem:
+    """The path CATIA will actually use.
+
+    A CAD package draws its own spec tree, its own toolbars and its own
+    viewport, so UIA is likely to show a window with almost nothing useful
+    inside it. When that happens the driver falls back to finding a control by
+    matching a picture of it against a screenshot, and reading text by OCR.
+
+    That chain has been proven against web pixels. This proves it against a
+    native window, which is a different capture path entirely --
+    `capture_as_image` on a real HWND rather than a browser screenshot.
+    """
+
+    def test_a_control_can_be_found_by_matching_a_picture_of_it(self, driver, tmp_path):
+        from understudy.vision import crop, locate_all
+        from harness.image import load_rgb, to_png_bytes
+
+        window = load_rgb(driver.screenshot())
+        assert window.shape[0] > 40 and window.shape[1] > 120
+
+        # Crop a patch out of the window and ask the matcher to find it again.
+        # If the capture path and the matcher disagree about anything -- colour
+        # order, scaling, the alpha channel -- this is where it shows.
+        patch = crop(window, x=8, y=8, width=90, height=24)
+        found = locate_all(window, patch, threshold=0.95)
+
+        assert found, "a patch cut from the window could not be found in it"
+        assert found[0].score > 0.99, f"scored only {found[0].score:.3f}"
+        assert abs(found[0].x - 8) <= 2 and abs(found[0].y - 8) <= 2, \
+            f"found at ({found[0].x}, {found[0].y}), expected about (8, 8)"
+
+    def test_the_driver_resolves_an_image_target_end_to_end(self, driver, tmp_path):
+        """The same thing through the driver: an `image:` strategy, resolved
+        against a live screenshot, giving a clickable point."""
+        from understudy.vision import crop
+        from harness.image import load_rgb, to_png_bytes
+
+        window = load_rgb(driver.screenshot())
+        anchor = tmp_path / "anchor.png"
+        anchor.write_bytes(to_png_bytes(crop(window, x=10, y=10, width=80, height=22)))
+
+        by_picture = Target(name="by_picture", strategies={"native": (
+            Strategy(backend="native",
+                     fields={"image": str(anchor), "threshold": 0.95}),
+        )})
+        handle, resolution = driver.resolve(by_picture, 8000)
+
+        assert resolution.via in ("anchor", "learned-anchor"), resolution.via
+        x, y = handle.point
+        assert 0 <= x < window.shape[1] and 0 <= y < window.shape[0]
+
+    def test_reading_text_off_the_pixels(self, driver):
+        """OCR, the last rung. Notepad has real UIA text, so this is checking
+        the mechanism rather than the necessity -- but on a custom-drawn panel
+        it is the only thing left."""
+        from understudy.ocr import read_text
+
+        driver.type(EDIT_AREA, "READBACK", 5000)
+        time.sleep(0.5)
+        outcome = read_text(driver.screenshot())
+        if not outcome.available:
+            pytest.skip(f"no OCR engine on this machine: {outcome.error}")
+        assert "READBACK" in outcome.text.upper().replace(" ", "")
+
+
 class TestSeeing:
     def test_it_screenshots_the_window(self, driver):
         from harness.image import load_rgb
