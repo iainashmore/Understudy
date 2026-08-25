@@ -21,7 +21,7 @@ from understudy.compare import compare, normalise
 from understudy.compare_report import render_html, render_markdown, write_comparison
 
 
-def make_run(tmp_path, name, subject, answers, statuses=None):
+def make_run(tmp_path, name, subject, answers, statuses=None, prompts=None):
     run = tmp_path / name
     run.mkdir(parents=True)
     (run / "flow.yaml").write_text("version: 1\nname: leo-regression\n")
@@ -29,7 +29,8 @@ def make_run(tmp_path, name, subject, answers, statuses=None):
     for index, (prompt_id, response) in enumerate(answers.items()):
         rows.append({
             "prompt_id": prompt_id, "repeat_index": 0,
-            "prompt": f"prompt for {prompt_id}", "variables": {},
+            "prompt": (prompts or {}).get(prompt_id, f"prompt for {prompt_id}"),
+            "variables": {},
             "response": response, "reads": {}, "read_images": {},
             "status": (statuses or {}).get(prompt_id, "ok"),
             "duration_ms": 100, "screenshots": [], "step_statuses": [],
@@ -280,3 +281,78 @@ class TestSteppingThroughBothRuns:
             make_run(tmp_path, "after", R33, {"a": "y"}),
         ])
         assert "Step through" not in render_html(comparison)
+
+
+class TestWhenTheQuestionItselfChanged:
+    """A flow is edited between runs -- a prompt reworded by one word -- and
+    from the answers alone that is indistinguishable from a release that
+    started replying differently. Reporting it as a behaviour change is
+    reporting the wrong thing with confidence."""
+
+    def two(self, tmp_path, before_prompt, after_prompt, before="X", after="Y"):
+        return compare([
+            make_run(tmp_path, "before", R32, {"a": before},
+                     prompts={"a": before_prompt}),
+            make_run(tmp_path, "after", R33, {"a": after},
+                     prompts={"a": after_prompt}),
+        ]).rows[0]
+
+    def test_a_changed_prompt_is_called_out_rather_than_the_answer(self, tmp_path):
+        row = self.two(tmp_path, "How wide is the pad?", "How wide is the bracket?")
+        assert row.verdict == "asked"
+        assert row.interesting
+
+    def test_it_outranks_a_failure_because_it_invalidates_everything(self, tmp_path):
+        rows = compare([
+            make_run(tmp_path, "before", R32, {"a": "X"}, prompts={"a": "one"}),
+            make_run(tmp_path, "after", R33, {"a": "Y"},
+                     statuses={"a": "error"}, prompts={"a": "two"}),
+        ]).rows
+        assert rows[0].verdict == "asked"
+
+    def test_the_same_question_worded_with_different_spacing_is_the_same(self, tmp_path):
+        row = self.two(tmp_path, "How wide is the pad?", "  How wide is the pad?  ",
+                       before="Same", after="Same")
+        assert row.verdict == "same"
+
+    def test_the_headline_does_not_say_no_change(self, tmp_path):
+        """It did, over a row reporting that the two runs were asked different
+        questions -- and the headline is the one line a reader might act on
+        without reading further."""
+        comparison = compare([
+            make_run(tmp_path, "before", R32, {"a": "X"}, prompts={"a": "one"}),
+            make_run(tmp_path, "after", R33, {"a": "X"}, prompts={"a": "two"}),
+        ])
+        assert "no change" not in comparison.headline()
+        assert "asked differently" in comparison.headline()
+
+    def test_the_report_says_which_run_asked_what(self, tmp_path):
+        comparison = compare([
+            make_run(tmp_path, "before", R32, {"a": "40mm"},
+                     prompts={"a": "How wide is the pad?"}),
+            make_run(tmp_path, "after", R33, {"a": "55mm"},
+                     prompts={"a": "How wide is the bracket?"}),
+        ])
+        text = render_markdown(comparison)
+
+        assert "not the same prompt" in text
+        assert "How wide is the pad?" in text and "How wide is the bracket?" in text
+        page = render_html(comparison)
+        assert 'class="asked"' in page
+
+    def test_a_conversation_is_compared_on_what_it_actually_said(self, tmp_path):
+        """A conversation flow names its turns opening/followup/closing and has
+        no variable called `prompt` at all. Reading one compares two empty
+        strings and calls them identical."""
+        from understudy.compare import asked_in
+
+        result = {
+            "prompt": "", "reads": {"r1": "ok"},
+            "step_statuses": [
+                {"index": 1, "phase": "steps", "action": "type", "target": "box",
+                 "status": "ok", "duration_ms": 1, "detail": {"text": "first turn"}},
+                {"index": 2, "phase": "steps", "action": "read", "target": "reply",
+                 "status": "ok", "duration_ms": 1, "detail": {"store_as": "r1"}},
+            ],
+        }
+        assert asked_in(result) == "first turn"

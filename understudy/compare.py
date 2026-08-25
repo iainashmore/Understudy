@@ -33,7 +33,9 @@ from understudy.transcript import load_results
 #: the tool's job here is to point at the interesting rows, not to grade them.
 SIMILAR_ENOUGH = 0.995
 
-VERDICTS = ("same", "reworded", "changed", "missing", "failed")
+#: "asked" comes first because it disqualifies the rest: if the question is
+#: not the same question, the answer moving says nothing about the release.
+VERDICTS = ("asked", "same", "reworded", "changed", "missing", "failed")
 
 
 def normalise(text: str) -> str:
@@ -64,9 +66,24 @@ class Row:
     prompt: str
     responses: list[str] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
+    #: What each run actually asked. Usually the same text in every column --
+    #: that is the whole design -- but a flow gets edited between runs, and a
+    #: prompt reworded by one word is indistinguishable, from the answers
+    #: alone, from a release that started replying differently.
+    prompts: list[str] = field(default_factory=list)
+
+    @property
+    def asked_differently(self) -> bool:
+        present = [p for p in self.prompts if p is not None]
+        return len({normalise(p) for p in present}) > 1
 
     @property
     def verdict(self) -> str:
+        if self.asked_differently:
+            # Before everything else. Whatever the answers did, they answered
+            # different questions, and reporting that as a behaviour change
+            # would be reporting the wrong thing with confidence.
+            return "asked"
         if any(s not in ("ok", "") for s in self.statuses):
             return "failed"
         present = [r for r in self.responses if r is not None]
@@ -83,7 +100,13 @@ class Row:
 
     @property
     def interesting(self) -> bool:
-        return self.verdict in ("changed", "missing", "failed")
+        return self.verdict in ("asked", "changed", "missing", "failed")
+
+    def prompt_diff(self, left: int = 0, right: int = -1) -> list[str]:
+        """A word-level diff between what two of the runs asked."""
+        a = (self.prompts[left] or "").split()
+        b = (self.prompts[right] or "").split()
+        return list(difflib.unified_diff(a, b, lineterm="", n=3))
 
     def diff(self, left: int = 0, right: int = -1) -> list[str]:
         """A word-level diff between two of the columns."""
@@ -135,10 +158,27 @@ class Comparison:
 
     def headline(self) -> str:
         counts = self.counts()
-        if counts["changed"] or counts["failed"] or counts["missing"]:
-            parts = [f"{counts[v]} {v}" for v in VERDICTS if counts[v]]
+        # "asked" counts. It said "no change across 2 prompts" over a row
+        # reporting that the two runs were asked different questions, which is
+        # the one summary line a reader might act on without reading further.
+        if any(counts[v] for v in ("asked", "changed", "failed", "missing")):
+            names = {"asked": "asked differently"}
+            parts = [f"{counts[v]} {names.get(v, v)}" for v in VERDICTS if counts[v]]
             return ", ".join(parts)
         return f"no change across {len(self.rows)} prompt(s)"
+
+
+def asked_in(result: dict[str, Any]) -> str:
+    """What this prompt run actually said to the assistant.
+
+    The steps, not the `prompt` variable: a conversation names its turns
+    opening/followup/closing and has no variable called `prompt` at all, so
+    reading one would compare two empty strings and call them identical.
+    """
+    from understudy.transcript import exchanges
+
+    said = [turn.prompt.strip() for turn in exchanges(result) if turn.prompt.strip()]
+    return "\n".join(said) if said else (result.get("prompt") or "")
 
 
 def _column_for(run_dir: Path, results: list[dict[str, Any]]) -> Column:
@@ -183,11 +223,12 @@ def compare(run_dirs: list[Path | str]) -> Comparison:
     rows = []
     for key in order:
         first = next((run[key] for run in per_run if key in run), {})
-        row = Row(prompt_id=key, prompt=first.get("prompt", ""))
+        row = Row(prompt_id=key, prompt=asked_in(first))
         for run in per_run:
             result = run.get(key)
             row.responses.append(None if result is None else (result.get("response") or ""))
             row.statuses.append("" if result is None else result.get("status", ""))
+            row.prompts.append(None if result is None else asked_in(result))
         rows.append(row)
 
     steps = {}

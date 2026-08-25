@@ -191,10 +191,16 @@ def command_compare(args) -> int:
 
     rows = comparison.changed if args.changed_only else comparison.rows
     for row in rows:
-        mark = {"same": "  ", "reworded": "~ ", "changed": "! ",
+        mark = {"asked": "?!", "same": "  ", "reworded": "~ ", "changed": "! ",
                 "missing": "? ", "failed": "x "}[row.verdict]
-        print(f"{mark}{row.prompt_id:<22} {row.verdict}")
-        if row.verdict in ("changed", "missing"):
+        note = ("the question changed — these answers are to different "
+                "questions" if row.verdict == "asked" else row.verdict)
+        print(f"{mark}{row.prompt_id:<22} {note}")
+        if row.verdict == "asked":
+            for column, asked in zip(comparison.columns, row.prompts):
+                text = "(no run)" if asked is None else " ".join(asked.split())
+                print(f"      {column.heading[:34]:<34} asked {text[:64]}")
+        elif row.verdict in ("changed", "missing"):
             for column, response in zip(comparison.columns, row.responses):
                 text = "(no run)" if response is None else response.strip()
                 print(f"      {column.heading[:34]:<34} {text[:70]}")
