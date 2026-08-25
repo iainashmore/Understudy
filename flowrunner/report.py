@@ -262,6 +262,18 @@ def _variant_section(run_dir: Path, result: dict[str, Any], embed: bool,
         out += ["", f"Recorded `{name}` region:", "",
                 _image(run_dir, relative, RESPONSE_IMAGE_WIDTH, embed)]
 
+    if result.get("recording"):
+        out += ["", "### Recording", "",
+                f"[{result['recording']}]({result['recording']})",
+                "",
+                "<video controls width=\"460\" src=\"" + result["recording"] +
+                "\"></video>",
+                "",
+                "_Video players differ; if it does not play inline, the link "
+                "above opens the file._"]
+    elif result.get("recording_error"):
+        out += ["", f"_No recording: {_escape(result['recording_error'])}_"]
+
     screenshots = [
         shot for shot in result.get("screenshots", [])
         if shot not in (result.get("read_images") or {}).values()

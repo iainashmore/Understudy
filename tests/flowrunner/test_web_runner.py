@@ -186,3 +186,49 @@ def test_multiple_variants_all_run_and_export(tmp_path):
     csv_path = write_csv(results, tmp_path / "results.csv")
     body = csv_path.read_text()
     assert "Echo: first" in body and "Echo: second" in body
+
+
+class TestRecording:
+    """Playwright records the page itself, so the web backend needs no external
+    tool. A video belongs to a browser context, so this implies a fresh context
+    per variant -- level-2 isolation, whether or not it was asked for."""
+
+    def test_each_variant_gets_its_own_video(self, tmp_path):
+        prompts = prompts_from_entries([
+            {"id": "a", "prompt": "first"}, {"id": "b", "prompt": "second"},
+        ])
+        flow = make_flow(tmp_path, "?mode=instant&dialog=none")
+        driver = build("web")
+        driver.start(flow.app_config("web"))
+        try:
+            runner = Runner(flow, driver, tmp_path / "out", record=True)
+            runner.prepare(prompts)
+            results = [runner.run_variant(variant) for variant in prompts]
+        finally:
+            driver.stop()
+
+        for result in results:
+            assert result.recording, result.recording_error
+            video = (tmp_path / "out" / result.recording)
+            assert video.exists() and video.stat().st_size > 1000
+
+    def test_the_run_still_works_when_recording_is_off(self, tmp_path):
+        results, _ = execute(tmp_path, "?mode=instant&dialog=none")
+        assert results[0].status is Status.OK
+        assert results[0].recording is None
+
+    def test_a_driver_that_cannot_record_does_not_fail_the_run(self, tmp_path):
+        """A missing recorder is a note in the results, never a lost sweep."""
+        flow = make_flow(tmp_path, "?mode=instant&dialog=none")
+        driver = build("web")
+        driver.start(flow.app_config("web"))
+        driver.start_recording = lambda path: False
+        try:
+            runner = Runner(flow, driver, tmp_path / "out", record=True)
+            runner.prepare(PROMPTS)
+            result = runner.run_variant(PROMPTS.variants[0])
+        finally:
+            driver.stop()
+
+        assert result.status is Status.OK
+        assert result.recording is None

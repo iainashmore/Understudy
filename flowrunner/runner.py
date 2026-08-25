@@ -80,6 +80,8 @@ class VariantResult:
     backend: str
     timestamp: str
     repeat_index: int = 0
+    recording: str | None = None
+    recording_error: str | None = None
     reads: dict[str, str] = field(default_factory=dict)
     #: Where a read came from pixels, the pixels are kept: a transcription is a
     #: lossy derivative and the image is the evidence.
@@ -133,6 +135,8 @@ class VariantResult:
             "duration_ms": self.duration_ms,
             "step_statuses": [status.as_dict() for status in self.step_statuses],
             "screenshots": self.screenshots,
+            "recording": self.recording,
+            "recording_error": self.recording_error,
             "used_fallbacks": self.used_fallbacks,
             "agent_resolutions": self.agent_resolutions,
             "learned_anchors": self.learned_anchors,
@@ -161,6 +165,7 @@ class Runner:
         out_dir: Path | str,
         reset_level: int = 1,
         capture_steps: bool = False,
+        record: bool = False,
     ) -> None:
         self.flow = flow
         self.driver = driver
@@ -170,6 +175,9 @@ class Runner:
         #: Kept apart from `screenshots` because these are evidence for
         #: narration and debugging, not part of what the flow asked for.
         self.capture_steps = capture_steps
+        #: Video per variant, when the driver can manage it. A backend that
+        #: cannot is a note in the results, never a failed run.
+        self.record = record
         self.results_path = self.out_dir / "results.jsonl"
 
     # -- setup ----------------------------------------------------------------
@@ -221,6 +229,7 @@ class Runner:
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
         counter = {"n": 0}
+        recording_started = self._start_recording(folder)
 
         try:
             if self.reset_level >= 2:
@@ -241,8 +250,41 @@ class Runner:
             elif Status.TIMEOUT in worst:
                 result.status = Status.TIMEOUT
 
+        if recording_started:
+            self._stop_recording(result)
+
         result.duration_ms = int((time.monotonic() - started) * 1000)
         return result
+
+    def _start_recording(self, folder: str) -> bool:
+        if not self.record:
+            return False
+        starter = getattr(self.driver, "start_recording", None)
+        if starter is None:
+            return False
+        try:
+            return bool(starter(self.out_dir / folder / "recording.mp4"))
+        except Exception:
+            return False
+
+    def _stop_recording(self, result: VariantResult) -> None:
+        stopper = getattr(self.driver, "stop_recording", None)
+        if stopper is None:
+            return
+        try:
+            recording = stopper()
+        except Exception as exc:
+            result.recording_error = f"{type(exc).__name__}: {exc}"
+            return
+        if getattr(recording, "ok", False):
+            try:
+                result.recording = str(
+                    Path(recording.path).relative_to(self.out_dir)
+                ).replace("\\", "/")
+            except ValueError:
+                result.recording = str(recording.path)
+        else:
+            result.recording_error = getattr(recording, "error", "unknown")
 
     # -- steps ----------------------------------------------------------------
 

@@ -108,7 +108,7 @@ def command_suite(args) -> int:
             repeat=1, out=str(out_dir / entry.slug), runs_root=args.runs_root,
             headed=args.headed, csv=True, reset_level=1, strict=False,
             agent="off", learned_dir=None, no_report=False, embed_report=False,
-            narrate=False, capture_steps=False,
+            narrate=False, capture_steps=False, record=False,
         )
         print(f"\n--- {entry.name}")
         try:
@@ -186,7 +186,8 @@ def command_run(args) -> int:
     driver.start(flow.app_config(args.backend))
     try:
         runner = Runner(flow, driver, out_dir, reset_level=args.reset_level,
-                        capture_steps=args.narrate or args.capture_steps)
+                        capture_steps=args.narrate or args.capture_steps,
+                        record=args.record)
         results = []
         runner.prepare(prompts)
         for variant in prompts:
@@ -203,6 +204,10 @@ def command_run(args) -> int:
                     drift += f"  [agent: {', '.join(result.agent_resolutions)}]"
                 if result.learned_anchors:
                     drift += f"  [learned: {', '.join(result.learned_anchors)}]"
+                if result.recording:
+                    drift += f"  [video: {result.recording}]"
+                elif result.recording_error and args.record:
+                    drift += f"  [no video: {result.recording_error[:50]}]"
                 print(
                     f"  {marker:8} {result.prompt_id:<20} "
                     f"{result.duration_ms:>6}ms  {len(result.response):>5} chars{drift}"
@@ -293,6 +298,12 @@ def main(argv: list[str] | None = None) -> int:
                 "--narrate", action="store_true",
                 help="capture every step and have a model describe each one in "
                      "the report; cached per flow, so it costs once",
+            )
+            child.add_argument(
+                "--record", action="store_true",
+                help="record each variant to video: ffmpeg on native, "
+                     "Playwright on web (which implies a fresh browser context "
+                     "per variant)",
             )
             child.add_argument("--capture-steps", action="store_true",
                                help="screenshot after every step, without narrating")

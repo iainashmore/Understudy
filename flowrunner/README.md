@@ -53,6 +53,96 @@ anchors from screenshots — is decided by what `tools/probe_native.py` reports
 against the real application. The Record tab says so rather than pretending
 otherwise.
 
+## Recording a run
+
+```bash
+python3 -m flowrunner.cli run flow.yaml --record
+```
+
+One video per variant, in the variant's folder, linked from the report.
+**H.264 mp4, no audio track**, from both backends — Playwright writes WebM, so
+the web driver transcodes and drops the intermediate.
+
+**Native** uses ffmpeg. It captures the *monitor region* by default, not the
+window rectangle: menus, tooltips and modal dialogs routinely fall outside the
+window, and a recording that clips those off is a recording of the wrong thing.
+Since the application under test has a screen to itself, that screen is the
+right frame. `record: {mode: window}` captures the window instead, and
+`framerate` is configurable. ffmpeg is found on PATH or from Playwright's
+bundled copy; a missing one is a note in the results, never a lost sweep.
+
+**Web** uses Playwright, which records the page and needs no external tool. A
+video belongs to a browser context, so recording implies a **fresh context per
+variant** — level-2 isolation whether or not it was asked for. That is a real
+behaviour change, which is why it only happens when recording is on. Recording
+is unavailable when attached over CDP: the context belongs to the host
+application, and closing it would take their panel down.
+
+Camtasia remains the better tool for a polished capture. This exists so a run's
+video is filed with its own results, rather than being something to line up
+afterwards.
+
+Writing mp4 needs an ffmpeg with an H.264 encoder. Playwright's bundled copy has
+only VP8/WebM, so if that is the one found, the web driver keeps the WebM and
+says so in the results rather than failing the sweep. `apt install ffmpeg` (or
+any real build on PATH) is what gets mp4.
+
+## Typing
+
+Text goes in **one keystroke at a time**, at about 12 characters a second —
+roughly 145 wpm, a fast typist rather than a machine. That is not only for the
+recording: an application that enables its send button on the first character,
+autocompletes, or validates as you go only behaves the way it does for a person
+if it sees the keys arrive separately. Filling a field sets a value and skips
+all of it.
+
+Pauses are longer after a full stop than after a comma, and each keystroke's
+timing is **seeded on the text**, so the same prompt always types at the same
+rhythm. A very long prompt is compressed to fit `max_total_s` (20s by default)
+rather than truncated.
+
+```yaml
+typing: {mode: human, cps: 12, variance: 0.35, max_total_s: 20}
+```
+
+`mode: instant` fills the field, for unattended sweeps where nobody is watching
+the video. A single step can override the pacing with `delay_ms`.
+
+On Windows the characters are escaped before they reach `send_keys`, which
+otherwise reads `^ % + ~ ( ) { } [ ]` as instructions: a prompt containing `~`
+would press Enter and submit itself halfway through being typed.
+
+## Pointer movement
+
+The pointer travels to its target rather than teleporting, so a screen recording
+shows a hand moving to a control instead of controls being pressed by nothing.
+Eased, slightly arced, with a beat on the target before the click, and parked
+inside the window at the start of a run.
+
+The wobble is **deterministic** — seeded on the two endpoints, so the same move
+always draws the same path. A tool whose value is that only the prompt varies
+between runs cannot introduce randomness into the pointer, even the cosmetic
+kind. `mouse: {mode: instant}` turns the animation off for unattended sweeps.
+
+## Multiple monitors
+
+Everything a flow declares — anchors, regions — is **window-relative**, so it
+means the same thing wherever the window is. Screen coordinates are derived at
+click time by translating through the window rectangle.
+
+That translation is the bug worth knowing about: an anchor match is in window
+coordinates, the mouse is driven in virtual-desktop coordinates, and on a single
+monitor with the window at the origin the two are identical — which is exactly
+why getting it wrong survives testing. On a second monitor they differ by the
+window origin, and on a monitor placed left of or above the primary that origin
+is negative.
+
+The process declares per-monitor DPI awareness before reading any coordinate. A
+flow can name the monitor it expects (`target_app.native.monitor`) and the run
+refuses to start on another, because anchors do not survive a scale change. A
+resize or rescale mid-run is warned about; a move is not, since anchors are
+re-located in each run's own screenshot.
+
 ## Reports
 
 Every run writes `report.md` beside its screenshots: what was run, a summary

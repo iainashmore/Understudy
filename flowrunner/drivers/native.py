@@ -31,6 +31,7 @@ from typing import Any
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
 from flowrunner.cursor import MouseStyle, move as move_pointer
 from flowrunner.flow import Strategy, Target
+from flowrunner.keyboard import TypingStyle, escape_send_keys, type_text
 from flowrunner.geometry import (
     WindowGeometry,
     enumerate_monitors,
@@ -45,6 +46,7 @@ from flowrunner.native_match import (
     resolve as resolve_in_tree,
 )
 from flowrunner.ocr import read_text
+from flowrunner.recording import FfmpegRecorder, NullRecorder, Recording
 from flowrunner.resolvers import NullResolver, Resolver
 from flowrunner.vision import Match, crop, locate_all
 from harness.image import to_png_bytes
@@ -136,6 +138,8 @@ class NativeDriver:
         self.dpi_awareness = "not set"
         self.warnings: list[str] = []
         self.mouse_style = MouseStyle()
+        self.typing_style = TypingStyle()
+        self.recorder = NullRecorder("start() has not run yet")
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -161,6 +165,7 @@ class NativeDriver:
         self.dpi_awareness = make_dpi_aware()
         self.monitors = enumerate_monitors()
         self.mouse_style = MouseStyle.from_config(app_config.get("mouse"))
+        self.typing_style = TypingStyle.from_config(app_config.get("typing"))
 
         try:
             if executable and app_config.get("launch", False):
@@ -223,6 +228,42 @@ class NativeDriver:
         )
         if message not in self.warnings:
             self.warnings.append(message)
+
+    # -- recording ------------------------------------------------------------
+
+    def _prepare_recorder(self, app_config: dict[str, Any]) -> None:
+        """Capture the monitor the window is on, by default.
+
+        A window rectangle is the wrong boundary: menus, tooltips and modal
+        dialogs routinely fall outside it, and a recording that clips those off
+        is a recording of the wrong thing. Since the application has a screen to
+        itself, that screen is the right frame.
+        """
+        settings = app_config.get("record") or {}
+        if settings.get("mode") == "window":
+            self.recorder = FfmpegRecorder(
+                window_title=app_config.get("window_title_pattern"),
+                framerate=int(settings.get("framerate", 12)),
+            )
+            return
+
+        region = None
+        monitor = monitor_for(self.monitors, self.geometry) if self.geometry else None
+        if monitor is not None:
+            region = {"x": monitor.left, "y": monitor.top,
+                      "width": monitor.width, "height": monitor.height}
+        elif self.geometry is not None:
+            region = {"x": self.geometry.left, "y": self.geometry.top,
+                      "width": self.geometry.width, "height": self.geometry.height}
+        self.recorder = FfmpegRecorder(
+            region=region, framerate=int(settings.get("framerate", 12))
+        )
+
+    def start_recording(self, path) -> bool:
+        return self.recorder.start(path)
+
+    def stop_recording(self) -> Recording:
+        return self.recorder.stop()
 
     # -- pointer --------------------------------------------------------------
 
@@ -407,7 +448,14 @@ class NativeDriver:
             # first appends on some controls, which silently carries the
             # previous variant's text into this one.
             _act(lambda: handle.type_keys("^a{DELETE}"))
-        _act(lambda: handle.type_keys(text, with_spaces=True, with_newlines=False))
+        _act(lambda: type_text(
+            text,
+            send=lambda chunk: handle.type_keys(
+                escape_send_keys(chunk), with_spaces=True, with_newlines=False
+            ),
+            sleep=time.sleep,
+            style=self.typing_style,
+        ))
         self.refresh()
         return resolution
 

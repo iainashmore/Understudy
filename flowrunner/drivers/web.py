@@ -43,7 +43,9 @@ from typing import Any
 
 from flowrunner.drivers.base import DriverError, Resolution, TargetNotFound
 from flowrunner.flow import Strategy, Target
+from flowrunner.keyboard import TypingStyle, type_text
 from flowrunner.learned import LearnedAnchors
+from flowrunner.recording import Recording, transcode_to_mp4
 from flowrunner.resolvers import NullResolver, Resolver
 from flowrunner.vision import crop, locate_all
 from harness.image import to_png_bytes
@@ -173,6 +175,9 @@ class WebDriver:
         self.page = None
         self._app_config: dict[str, Any] = {}
         self.attached = False
+        self.typing_style = TypingStyle()
+        self._recording_to: Path | None = None
+        self._video_dir: Path | None = None
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -180,6 +185,7 @@ class WebDriver:
         from playwright.sync_api import sync_playwright
 
         self._app_config = dict(app_config)
+        self.typing_style = TypingStyle.from_config(app_config.get("typing"))
         self._playwright = sync_playwright().start()
 
         if self._app_config.get("cdp_url"):
@@ -245,6 +251,13 @@ class WebDriver:
 
     def _open_context(self) -> None:
         options: dict[str, Any] = {}
+        if self._video_dir is not None:
+            options["record_video_dir"] = str(self._video_dir)
+            viewport = self._app_config.get("viewport")
+            if viewport:
+                options["record_video_size"] = {
+                    "width": viewport["width"], "height": viewport["height"]
+                }
         storage_state = self._app_config.get("storage_state")
         if storage_state:
             # Log in once by hand, save the state, reuse it every run. Without
@@ -262,6 +275,53 @@ class WebDriver:
         self._context = self._browser.new_context(**options)
         self.page = self._context.new_page()
         self.page.goto(self._app_config["url"])
+
+    def start_recording(self, path) -> bool:
+        """Playwright records the page, which needs no external tool.
+
+        A video belongs to a browser context, so recording means a fresh
+        context for each variant -- level-2 isolation, whether or not it was
+        asked for. That is a real behaviour change, so it only happens when
+        recording is switched on.
+        """
+        if self.attached:
+            # The context belongs to the host application; we cannot recreate
+            # it, and closing it would take their panel down.
+            return False
+        import tempfile
+
+        self._recording_to = Path(path)
+        self._video_dir = Path(tempfile.mkdtemp(prefix="flowrunner-video-"))
+        self._context.close()
+        self._open_context()
+        return True
+
+    def stop_recording(self) -> Recording:
+        if self._recording_to is None:
+            return Recording(backend="playwright", error="not started")
+
+        target, video_dir = self._recording_to, self._video_dir
+        self._recording_to = self._video_dir = None
+        video = getattr(self.page, "video", None)
+        try:
+            # The file is only finalised when the context closes.
+            self._context.close()
+            source = Path(video.path()) if video else None
+        except Exception as exc:
+            self._open_context()
+            return Recording(backend="playwright", error=f"could not save video: {exc}")
+
+        self._open_context()
+        if source and source.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Playwright writes WebM; mp4 is what plays everywhere. Convert,
+            # and if that is not possible keep the WebM rather than losing the
+            # recording -- but say so, so nobody assumes they have an mp4.
+            intermediate = target.with_suffix(".webm")
+            source.replace(intermediate)
+            return transcode_to_mp4(intermediate, target.with_suffix(".mp4"))
+        return Recording(backend="playwright",
+                         error=f"playwright produced no video in {video_dir}")
 
     def reset(self) -> None:
         """Level-2 isolation: throw the context away and start again."""
@@ -483,8 +543,18 @@ class WebDriver:
         if clear:
             locator.fill("", timeout=timeout_ms)
         locator.click(timeout=timeout_ms)
-        locator.press_sequentially(text, delay=delay_ms, timeout=timeout_ms)
+        if delay_ms:
+            # An explicit per-key delay on the step wins over the app's style.
+            locator.press_sequentially(text, delay=delay_ms, timeout=timeout_ms)
+            return resolution
+        # Human-paced by default. The field fills the way a person fills it on
+        # the recording, and the application sees the keystrokes spread out
+        # rather than arriving as one indivisible burst.
+        type_text(text, self._send_keys, time.sleep, self.typing_style)
         return resolution
+
+    def _send_keys(self, chunk: str) -> None:
+        self.page.keyboard.type(chunk)
 
     def read(self, target: Target, timeout_ms: int) -> tuple[str, Resolution]:
         locator, resolution = self.resolve(target, timeout_ms)

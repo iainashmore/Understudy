@@ -144,6 +144,7 @@
             <option value="fallback">fallback</option><option value="only">only</option></select>
           <label><input id="headed" type="checkbox"> headed</label>
           <label><input id="captureSteps" type="checkbox"> shot every step</label>
+          <label><input id="record" type="checkbox"> record video</label>
         </div>
         <div id="validation"></div>
         <div id="log"></div>
@@ -483,6 +484,7 @@ $("run").onclick = async () => {
       only: $("only").value.split(",").map((s) => s.trim()).filter(Boolean),
       agent: $("agent").value, headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
+      record: $("record").checked,
     });
     state.runId = started.run_id;
     logLine(`run ${started.run_id} -> ${started.out_dir}`);

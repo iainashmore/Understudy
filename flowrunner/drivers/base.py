@@ -95,3 +95,17 @@ class Driver(Protocol):
     def wait_for_element(
         self, target: Target, state: str, timeout_ms: int
     ) -> Resolution: ...
+
+    # -- optional -------------------------------------------------------------
+
+    def start_recording(self, path: Any) -> bool:
+        """Begin recording to `path`. False when this backend cannot.
+
+        Optional: the runner checks the return value and carries on either way.
+        A missing screen recorder is a note in the results, not a lost sweep.
+        """
+        ...
+
+    def stop_recording(self) -> Any:
+        """Finish and return a `Recording`."""
+        ...

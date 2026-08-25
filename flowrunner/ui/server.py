@@ -394,7 +394,8 @@ flows: []
             driver.start(flow.app_config(backend))
 
             runner = Runner(flow, driver, job.out_dir,
-                            capture_steps=bool(request.get("capture_steps")))
+                            capture_steps=bool(request.get("capture_steps")),
+                            record=bool(request.get("record")))
             runner.prepare(prompts)
             results = []
             for variant in prompts:
