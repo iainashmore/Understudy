@@ -16,3 +16,10 @@ credentials.json
 # Anchors the agent learned, and cached step narration: run artefacts, not source.
 learned/
 narration/
+
+# Packaged builds. The installer is a release asset, not a repository file.
+dist/
+build/
+desktop/node_modules/
+desktop/release/
+packaging/payload/

@@ -1,0 +1,90 @@
+# Builds the downloadable Understudy application.
+#
+# On a Windows runner because PyInstaller cannot cross-compile: a Windows
+# executable has to be produced on Windows, and there is no way around that.
+# The installer lands as a workflow artifact, and on a tag as a release asset.
+
+name: desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_browsers:
+        description: "Bundle Chromium (adds ~600MB; needed only for launch-mode web flows)"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the Python side
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[web,agent,ocr,native]"
+          pip install pyinstaller
+
+      - name: Stage the bundled binaries
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.include_browsers }}" = "true" ]; then
+            python packaging/fetch_payload.py
+          else
+            python packaging/fetch_payload.py --skip-browsers
+          fi
+
+      - name: Build the server
+        run: pyinstaller --noconfirm --clean --distpath dist packaging/understudy-server.spec
+
+      - name: Check the server actually starts
+        shell: bash
+        run: |
+          # A build that imports cleanly and then cannot serve a page is the
+          # failure this catches, and the one that would otherwise be found by
+          # the person who downloaded it.
+          ./dist/server/understudy-server.exe --port 8791 &
+          for attempt in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:8791/; then
+              echo "the packaged server is serving"
+              curl -sf http://127.0.0.1:8791/api/flows > /dev/null && echo "and answering the API"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "the packaged server never came up"
+          exit 1
+
+      - name: Build the installer
+        working-directory: desktop
+        run: |
+          npm install
+          npm run dist:win
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Understudy-windows-installer
+          path: desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Attach it to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*.exe

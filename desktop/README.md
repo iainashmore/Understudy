@@ -1,0 +1,63 @@
+# The downloadable application
+
+A window around the local server, so Understudy can be downloaded and run on a
+machine with no Python, no pip and no network.
+
+## Why Electron
+
+The UI is a local web page, so the "app" is a window around it, and the light
+options — Tauri, pywebview — draw that window with **WebView2**. It ships with
+Windows 10 and 11, but a locked-down enterprise image can strip or block it,
+and pywebview's fallback in that case is IE11, which will not render this page
+at all. Electron carries its own Chromium and renders regardless.
+
+That costs about 150MB, which would be the deciding argument against it if the
+build were small. It is not: Chromium for Playwright is bundled anyway, so the
+download is roughly 900MB either way and Electron is about 17% of it.
+
+Two things matter more than the shell, and hold whichever it is:
+
+* **The server is a plain HTTP server on the loopback interface.** If the
+  window never appears, the URL still works in any browser, and the failure
+  dialog says so and offers to open it. The app degrades to a link.
+* **Closing the window stops the server.** An orphaned Python process holding
+  port 8765 is the sidecar bug everybody writes once.
+
+## What is in the download
+
+| | |
+|---|---|
+| the app: Python, numpy, Pillow, the UI | ~92 MB |
+| Playwright — needed to attach to LEO over CDP | ~146 MB |
+| Chromium — only for flows that launch their own browser | ~600 MB |
+| ffmpeg — recording, H.264, no audio | ~40 MB |
+| Tesseract language data — the OCR fallback | ~4 MB |
+
+Attaching to an embedded panel over CDP does **not** need the bundled Chromium;
+it connects to the WebView2 the host application is already running. A build
+with `--skip-browsers` covers CATIA V5 and LEO in about 280MB.
+
+## Building
+
+PyInstaller cannot cross-compile: a Windows executable has to be built on
+Windows. `.github/workflows/desktop.yml` does it on a `windows-latest` runner
+and uploads the installer as an artifact; a `v*` tag attaches it to a release.
+
+Locally, on the platform you are targeting:
+
+```bash
+pip install ".[web,agent,ocr,native]" pyinstaller
+python packaging/fetch_payload.py            # or --skip-browsers for a small build
+pyinstaller --noconfirm --clean --distpath dist packaging/understudy-server.spec
+cd desktop && npm install && npm run dist
+```
+
+`npm start` runs the shell against the repository checkout instead of a frozen
+server, which is the loop worth using while changing `main.js`.
+
+## Before it reaches a corporate machine
+
+**Sign it.** An unsigned installer of this size will trip SmartScreen, and on a
+managed CAD workstation may be stopped by AppLocker before it runs at all. That
+is a procurement conversation, not a build flag, and it is worth starting
+before the day of the demo.

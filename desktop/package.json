@@ -1,0 +1,46 @@
+{
+  "name": "understudy",
+  "productName": "Understudy",
+  "version": "0.1.0",
+  "description": "Replays a fixed UI click-path many times, varying only the prompt",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "uk.co.hoppalabs.understudy",
+    "productName": "Understudy",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["main.js", "build/icon.*"],
+    "extraResources": [
+      {
+        "from": "../dist/server",
+        "to": "server",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "artifactName": "Understudy-${version}-win64-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Understudy"
+    },
+    "linux": {
+      "target": [{ "target": "dir", "arch": ["x64"] }],
+      "category": "Development"
+    }
+  }
+}
