@@ -17,18 +17,34 @@
   "build": {
     "appId": "uk.co.hoppalabs.understudy",
     "productName": "Understudy",
-    "directories": { "output": "release", "buildResources": "build" },
-    "files": ["main.js", "build/icon.*"],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "build/icon.*"
+    ],
     "extraResources": [
       {
         "from": "../dist/server",
         "to": "server",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "artifactName": "Understudy-${version}-win64-setup.${ext}"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Understudy-${version}-win64-setup.${ext}",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -36,11 +52,25 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Understudy"
+      "shortcutName": "Understudy",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     },
     "linux": {
-      "target": [{ "target": "dir", "arch": ["x64"] }],
-      "category": "Development"
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
     }
-  }
+  },
+  "author": {
+    "name": "Hoppa Labs"
+  },
+  "license": "UNLICENSED"
 }

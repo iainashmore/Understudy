@@ -82,6 +82,12 @@ jobs:
           # failure this catches, and the one that would otherwise be found by
           # the person who downloaded it.
           ./dist/server/understudy-server.exe --port 8791 &
+          server=$!
+          # Stopped however this step ends. Leaving it running makes the
+          # runner's orphan cleanup do it instead, which hides a server that
+          # hung rather than exited.
+          trap 'taskkill //PID $server //F //T > /dev/null 2>&1 || kill $server 2>/dev/null || true' EXIT
+
           for attempt in $(seq 1 60); do
             if curl -sf -o /dev/null http://127.0.0.1:8791/; then
               echo "the packaged server is serving"
