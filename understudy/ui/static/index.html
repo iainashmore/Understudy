@@ -60,9 +60,20 @@
                 padding:2px 6px; }
   .tree-item .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .tree-item .count { color:var(--dim); font-size:11px; }
-  .tree-item .actions { display:none; gap:2px; }
-  .tree-item:hover .actions, .tree-group > .head:hover .actions { display:flex; }
-  .tree-group > .head .actions { display:none; gap:2px; margin-left:auto; }
+  /* Right-click, not a row of link buttons that appear on hover. Hover
+     buttons in a narrow column crowd the name they belong to, and "del"
+     one pixel from "copy" is a bad place to be imprecise. */
+  #menu { position:fixed; z-index:50; min-width:170px; padding:4px;
+          background:var(--panel); border:1px solid var(--line);
+          border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.4);
+          display:flex; flex-direction:column; }
+  #menu button { border:none; background:none; text-align:left; color:var(--text);
+                 padding:6px 10px; border-radius:4px; font:inherit; }
+  #menu button:hover { background:#333c47; }
+  #menu button.danger:hover { background:rgba(224,92,92,.2); color:#ffb3b3; }
+  #menu .sep { height:1px; margin:4px 6px; background:var(--line); }
+  #menu .heading { padding:4px 10px 6px; font-size:11px; color:var(--dim);
+                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .desc { color:var(--dim); font-size:11px; padding:0 6px 4px 20px; }
 
   main { overflow:auto; min-height:0; }
@@ -161,6 +172,8 @@
     <button data-view="credentials">Credentials</button>
   </div>
 </header>
+
+<div id="menu" hidden></div>
 
 <div id="body">
   <aside id="sidebar">
@@ -544,11 +557,12 @@ function group(name, path, description, flowPaths, error) {
   const head = document.createElement("div");
   head.className = "head";
   head.innerHTML = `<span>${escapeHtml(name)}</span>
-    <span class="count">${flowPaths.length}</span><span class="actions"></span>`;
-  head.querySelector(".actions").append(
-    action("open", () => openFlow(path)),
-    action("delete", () => removeCollection(path, name)),
-  );
+    <span class="count">${flowPaths.length}</span>`;
+  head.oncontextmenu = (event) => openMenu(event, name, [
+    ["Open", () => openFlow(path)],
+    "-",
+    ["Delete collection…", () => removeCollection(path, name), true],
+  ]);
   wrapper.appendChild(head);
   if (description) {
     const line = document.createElement("div");
@@ -575,15 +589,23 @@ function item(flow) {
   row.dataset.path = flow.path;
   row.innerHTML = `<span class="label" title="${escapeHtml(flow.path)}">${
     escapeHtml(flow.error ? flow.path : flow.title)}</span>
-    <span class="count">${flow.variants || ""}</span><span class="actions"></span>`;
+    <span class="count">${flow.variants || ""}</span>`;
   if (flow.error) row.querySelector(".label").classList.add("bad");
-  row.onclick = (event) => {
-    if (!event.target.closest(".actions")) openFlow(flow.path);
-  };
-  row.querySelector(".actions").append(
-    action("copy", () => duplicateFlow(flow.path)),
-    action("del", () => removeFlow(flow.path, flow.title)),
-  );
+  row.onclick = () => openFlow(flow.path);
+  row.oncontextmenu = (event) => openMenu(event, flow.title || flow.path, [
+    ["Open", () => openFlow(flow.path)],
+    ["Replay", () => openFlow(flow.path).then(() => $("run").click())],
+    ["Validate", () => openFlow(flow.path).then(() => $("validate").click())],
+    "-",
+    ["Record steps", () => openFlow(flow.path).then(() => showTab("record"))],
+    "-",
+    ["Duplicate…", () => duplicateFlow(flow.path)],
+    ["Save as…", () => openFlow(flow.path).then(() => {
+      const to = prompt("Save as (path in the workspace)", flow.path);
+      if (to) saveFlow(to).catch((error) => alert(error.message));
+    })],
+    ["Delete…", () => removeFlow(flow.path, flow.title), true],
+  ]);
   wrapper.appendChild(row);
   wrapper.appendChild(runList(flow));
   return wrapper;
@@ -622,7 +644,7 @@ function runList(flow) {
     list.appendChild(none);
     return list;
   }
-  runs.forEach((run) => {
+  runs.forEach((run, index) => {
     const failed = run.total && run.ok < run.total;
     const line = document.createElement("div");
     line.className = "run";
@@ -641,6 +663,23 @@ function runList(flow) {
     tick.dataset.dir = run.dir;
     tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
     line.onclick = () => openRun(run);
+    // The run below it in the list is the one before it in time, which is
+    // what "did this change?" almost always means.
+    const previous = runs[index + 1];
+    line.oncontextmenu = (event) => openMenu(event, run.subject || run.name, [
+      ["Open transcript", () => openRun(run)],
+      ...(previous
+        ? [[`Compare with ${runLabel(previous)}`, () => compareRuns(previous, run)]]
+        : []),
+      "-",
+      ["Rebuild transcript", () => rebuildRun(run)],
+      "-",
+      ["Export PDF", () => exportRun(run, "pdf")],
+      ["Export a standalone page", () => exportRun(run, "standalone")],
+      ["Download the markdown", () => download(run.dir + "/transcript.md")],
+      "-",
+      ["Publish to the repository…", () => publishRun(run)],
+    ]);
     list.appendChild(line);
   });
   const bar = document.createElement("div");
@@ -668,7 +707,14 @@ function refreshCompareBar() {
 
 async function compareTicked() {
   const [before, after] = ticked().map((box) => box.dataset.dir);
-  if (!before || !after) return;
+  if (before && after) await compare(before, after);
+}
+
+async function compareRuns(before, after) {
+  await compare(before.dir, after.dir);
+}
+
+async function compare(before, after) {
   await loadRuns().catch(() => {});
   showTab("compare");
   $("cmpLeft").value = before;
@@ -685,11 +731,83 @@ async function openRun(run) {
   await loadTranscript(run.dir + "/transcript.md");
 }
 
-function action(text, handler) {
-  const button = document.createElement("button");
-  button.className = "link"; button.textContent = text;
-  button.onclick = (event) => { event.stopPropagation(); handler(); };
-  return button;
+/* ---------- what the context menu does ---------- */
+
+async function rebuildRun(run) {
+  const rebuilt = await post("/api/transcript", { run_dir: run.dir });
+  await openRun(run);
+  await loadTranscript(rebuilt.transcript, rebuilt.transcript_html);
+  transcriptStatus("rebuilt", "ok");
+}
+
+async function exportRun(run, kind) {
+  await openRun(run);
+  transcriptStatus(kind === "pdf" ? "printing… this takes a few seconds"
+                                  : "writing a standalone page…");
+  const route = kind === "pdf" ? "/api/transcript/pdf"
+                               : "/api/transcript/standalone";
+  const done = await post(route, { run_dir: run.dir });
+  if (done.error) return transcriptStatus(done.error, "bad");
+  transcriptStatus("");
+  download(done.pdf || done.html);
+}
+
+function publishRun(run) {
+  // The repository view already asks the questions publishing needs -- which
+  // run, whether the video goes too, what the message says -- so this puts
+  // the run into it rather than committing behind a menu item.
+  showTab("repo");
+  const picker = $("repoRun");
+  if (picker) {
+    picker.value = run.dir;
+    showPublishPreview();
+  }
+}
+
+/* ---------- the context menu ---------- */
+
+function closeMenu() {
+  $("menu").hidden = true;
+}
+document.addEventListener("click", closeMenu);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeMenu();
+});
+window.addEventListener("blur", closeMenu);
+
+function openMenu(event, heading, items) {
+  event.preventDefault();
+  event.stopPropagation();
+  const menu = $("menu");
+  menu.innerHTML = "";
+  if (heading) {
+    const label = document.createElement("div");
+    label.className = "heading";
+    label.textContent = heading;
+    menu.appendChild(label);
+  }
+  for (const entry of items) {
+    if (entry === "-") {
+      const rule = document.createElement("div");
+      rule.className = "sep";
+      menu.appendChild(rule);
+      continue;
+    }
+    const [text, handler, danger] = entry;
+    const button = document.createElement("button");
+    button.textContent = text;
+    if (danger) button.className = "danger";
+    button.onclick = () => { closeMenu(); handler(); };
+    menu.appendChild(button);
+  }
+  menu.hidden = false;
+  // Placed after it is measurable, and kept on screen: a menu opened near the
+  // bottom of a long list otherwise puts Delete off the edge.
+  const box = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth - box.width - 6);
+  const y = Math.min(event.clientY, window.innerHeight - box.height - 6);
+  menu.style.left = Math.max(6, x) + "px";
+  menu.style.top = Math.max(6, y) + "px";
 }
 
 function markActive() {

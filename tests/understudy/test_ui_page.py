@@ -198,6 +198,87 @@ class TestSelectionDrivesThePane:
         assert page.locator("#run").is_visible()
 
 
+class TestTheContextMenu:
+    """Right-click, not link buttons that appear on hover. A narrow column of
+    names is a bad place to put "del" one pixel from "copy"."""
+
+    def entries(self, page):
+        return [b.inner_text() for b in page.locator("#menu button").all()]
+
+    def test_a_flow_offers_what_can_be_done_to_a_flow(self, page):
+        page.locator(".tree-item").first.click(button="right")
+        page.wait_for_timeout(200)
+
+        entries = self.entries(page)
+        # Everything a flow can be told to do, in one place.
+        for expected in ("Open", "Replay", "Validate", "Record steps",
+                         "Duplicate…", "Save as…"):
+            assert expected in entries, f"{expected} missing from {entries}"
+        assert any(e.startswith("Delete") for e in entries)
+
+    def test_a_run_offers_what_can_be_done_to_a_run(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        page.locator(".run-list:not([hidden]) .run").first.click(button="right")
+        page.wait_for_timeout(200)
+
+        entries = self.entries(page)
+        for expected in ("Open transcript", "Rebuild transcript", "Export PDF",
+                         "Export a standalone page", "Download the markdown"):
+            assert expected in entries, f"{expected} missing from {entries}"
+        assert any(e.startswith("Publish") for e in entries)
+        # A run cannot be duplicated or edited; offering it would be a lie.
+        assert "Duplicate…" not in entries
+
+    def test_a_run_offers_the_comparison_you_almost_always_want(self, page):
+        """Against the run before it. "Did this change?" nearly always means
+        "since last time"."""
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        page.locator(".run-list:not([hidden]) .run").first.click(button="right")
+        page.wait_for_timeout(200)
+
+        assert not any(e.startswith("Compare with") for e in self.entries(page)), \
+            "this workspace has one run, so there is nothing to compare against"
+
+    def test_it_names_what_it_is_acting_on(self, page):
+        """Menus opened by right-clicking a list are opened next to the row
+        above as often as the right one."""
+        page.locator(".tree-item").first.click(button="right")
+        page.wait_for_timeout(200)
+        assert "Chat assistant" in page.locator("#menu .heading").inner_text() \
+            or page.locator("#menu .heading").inner_text().strip()
+
+    def test_escape_closes_it(self, page):
+        page.locator(".tree-item").first.click(button="right")
+        page.wait_for_timeout(200)
+        assert page.locator("#menu").is_visible()
+
+        page.keyboard.press("Escape")
+        assert page.locator("#menu").is_hidden()
+
+    def test_it_stays_on_screen_near_the_bottom(self, page):
+        """A menu opened low in a long list otherwise puts Delete off the
+        edge, which is the item you least want to have to guess at."""
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        rows = page.locator(".run-list:not([hidden]) .run")
+        rows.last.click(button="right", position={"x": 5, "y": 5})
+        page.wait_for_timeout(200)
+
+        box = page.locator("#menu").bounding_box()
+        height = page.evaluate("() => window.innerHeight")
+        assert box["y"] + box["height"] <= height, box
+
+    def test_nothing_is_only_reachable_from_it(self, page):
+        """A context menu is a shortcut, not the only door: every action in it
+        exists somewhere a keyboard can reach."""
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        for selector in ("#duplicate", "#deleteFlow", "[data-saveas]"):
+            assert page.locator(selector).first.is_visible(), selector
+
+
 class TestTheTagBox:
     """One control, not five boxes. A tag is a word; a tag with a known prefix
     fills a field, which is the only reason the fields still exist -- a
