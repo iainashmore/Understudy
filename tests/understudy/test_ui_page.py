@@ -198,6 +198,23 @@ class TestSelectionDrivesThePane:
         assert page.locator("#run").is_visible()
 
 
+class TestTheCountsInTheTree:
+    """The same-looking number in the same column meant two things: how many
+    prompts a flow has, and how many of a run's prompt runs passed."""
+
+    def test_a_flow_says_what_its_number_counts(self, page):
+        count = page.locator(".tree-item .count").first
+        assert "prompt" in count.inner_text()
+
+    def test_a_run_is_a_ratio_and_says_so(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        count = page.locator(".run-list:not([hidden]) .run .count").first
+
+        assert count.inner_text().strip() == "1/1"
+        assert "passed" in count.get_attribute("title")
+
+
 class TestTheContextMenu:
     """Right-click, not link buttons that appear on hover. A narrow column of
     names is a bad place to put "del" one pixel from "copy"."""

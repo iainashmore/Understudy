@@ -569,7 +569,8 @@ function group(name, path, description, flowPaths, error) {
   const head = document.createElement("div");
   head.className = "head";
   head.innerHTML = `<span>${escapeHtml(name)}</span>
-    <span class="count">${flowPaths.length}</span>`;
+    <span class="count" title="${flowPaths.length} flow(s) in this collection"
+      >${flowPaths.length}</span>`;
   head.oncontextmenu = (event) => openMenu(event, name, [
     ["Open", () => openFlow(path)],
     "-",
@@ -601,7 +602,8 @@ function item(flow) {
   row.dataset.path = flow.path;
   row.innerHTML = `<span class="label" title="${escapeHtml(flow.path)}">${
     escapeHtml(flow.error ? flow.path : flow.title)}</span>
-    <span class="count">${flow.variants || ""}</span>`;
+    <span class="count" title="${flow.variants} prompt(s) in this flow"
+      >${flow.variants ? flow.variants + "&nbsp;prompts" : ""}</span>`;
   if (flow.error) row.querySelector(".label").classList.add("bad");
   row.onclick = () => openFlow(flow.path);
   row.oncontextmenu = (event) => openMenu(event, flow.title || flow.path, [
@@ -664,7 +666,9 @@ function runList(flow) {
     // row opens one. The same list, both jobs, no second place to look.
     line.innerHTML = `<input type="checkbox" class="pick" title="compare">
       <span class="label">${escapeHtml(run.short || run.subject || run.name)}</span>
-      <span class="count ${failed ? "bad" : ""}">${run.ok}/${run.total}</span>`;
+      <span class="count ${failed ? "bad" : ""}"
+        title="${run.ok} of ${run.total} prompt run(s) passed"
+        >${run.ok}/${run.total}</span>`;
     // The whole subject on hover: the row shows only what distinguishes this
     // run from the others, because the list is narrow and the shared half is
     // the half that gets truncated over the top of the useful one.
