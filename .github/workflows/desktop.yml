@@ -146,9 +146,8 @@ jobs:
           # Against the packaged build specifically, because "PyInstaller
           # collected the page" and "the frozen server serves it correctly
           # from where it landed" are different questions.
-          bundle=$(dirname "$(find dist/server -name understudy-server.exe | head -1)")
           python packaging/check_packaged_ui.py \
-            ./dist/server/understudy-server.exe "$bundle"
+            ./dist/server/understudy-server.exe dist/server
 
       - name: Build the installer
         working-directory: desktop
