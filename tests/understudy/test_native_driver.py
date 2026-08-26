@@ -13,6 +13,7 @@ import pytest
 
 from understudy.drivers import build
 from understudy.drivers.base import Driver, DriverError
+from understudy.windows import OpenWindow
 from understudy.drivers.native import (NativeDriver, _Point, attach_failure,
                                         walk)
 from understudy.vision import Match
@@ -240,3 +241,60 @@ class TestUnavailablePaths:
     def test_using_it_before_start_is_a_clear_error(self):
         with pytest.raises(DriverError, match="before start"):
             NativeDriver().refresh()
+
+
+class TestPickingTheWindowOutOfACrowd:
+    """3DEXPERIENCE runs as several processes, more than one of which owns a
+    top-level window of the same name. Attaching by title alone used to fail
+    every replay with pywinauto's "there are 6 elements that match"."""
+
+    CLIENT = OpenWindow(title="3DEXPERIENCE R2026x", pid=1, process="CATIA.exe",
+                        width=1920, height=1040, visible=True, wrapper="the client")
+    SPLASH = OpenWindow(title="3DEXPERIENCE", pid=2, process="CATSplash.exe",
+                        width=400, height=300, visible=False, wrapper="the splash")
+    OTHER = OpenWindow(title="3DEXPERIENCE R2026x", pid=3, process="CATIA.exe",
+                       width=1600, height=900, visible=True, wrapper="another document")
+
+    def _windows(self, monkeypatch, *windows):
+        monkeypatch.setattr("understudy.drivers.native.open_windows",
+                            lambda pattern: list(windows))
+
+    def test_the_one_live_window_is_taken_over_its_splash_screen(self, monkeypatch):
+        self._windows(monkeypatch, self.CLIENT, self.SPLASH)
+        driver = NativeDriver()
+        assert driver._attach("*3DEXPERIENCE*", None) == "the client"
+
+    def test_choosing_is_recorded_rather_than_done_quietly(self, monkeypatch):
+        self._windows(monkeypatch, self.CLIENT, self.SPLASH)
+        driver = NativeDriver()
+        driver._attach("*3DEXPERIENCE*", None)
+        assert any("chosen over 1 other window" in w for w in driver.warnings), \
+            driver.warnings
+
+    def test_the_ordinary_single_match_says_nothing(self, monkeypatch):
+        self._windows(monkeypatch, self.CLIENT)
+        driver = NativeDriver()
+        driver._attach("*Notepad*", None)
+        assert driver.warnings == [], "one candidate is not a choice worth reporting"
+
+    def test_two_live_windows_are_refused_with_both_named(self, monkeypatch):
+        self._windows(monkeypatch, self.CLIENT, self.OTHER)
+        with pytest.raises(DriverError) as raised:
+            NativeDriver()._attach("*3DEXPERIENCE*", None)
+        message = str(raised.value)
+        assert "matches 2 windows" in message
+        assert "pid 1" in message and "pid 3" in message
+
+    def test_the_process_key_settles_it(self, monkeypatch):
+        rival = OpenWindow(title="3DEXPERIENCE R2026x", pid=4,
+                           process="CATSplash.exe", width=1900, height=1000,
+                           visible=True, wrapper="the impostor")
+        self._windows(monkeypatch, self.CLIENT, rival)
+        assert NativeDriver()._attach("*3DEXPERIENCE*", "CATIA") == "the client"
+
+    def test_narrowing_by_process_is_offered_when_processes_differ(self, monkeypatch):
+        mixed = OpenWindow(title="3DEXPERIENCE R2026x", pid=4, process="CATSplash.exe",
+                           width=1900, height=1000, visible=True)
+        self._windows(monkeypatch, self.CLIENT, mixed)
+        with pytest.raises(DriverError, match="target_app.native.process"):
+            NativeDriver()._attach("*3DEXPERIENCE*", None)

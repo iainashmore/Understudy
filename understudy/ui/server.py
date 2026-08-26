@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import traceback
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ from understudy.subject import FIELDS as SUBJECT_FIELDS
 from understudy.subject import Subject, remember, resolve_subject
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import Git, GitError
+from understudy.windows import open_windows as list_windows
 from understudy.vcs.remote import parse_remote
 from understudy.vcs import recent as recent_workspaces
 from understudy.vcs.source import SourceError, WorkspaceSource
@@ -412,6 +414,11 @@ flows: []
                 ),
             )
             driver.start(flow.app_config(backend))
+            # Which window it attached to, when there was a choice. Otherwise
+            # this is a decision made silently, and "it typed into the wrong
+            # 3DEXPERIENCE window" is not a thing to discover from a video.
+            for note in getattr(driver, "warnings", []):
+                job.emit("note", text=note)
 
             # What was under test: whatever the form said, falling back to
             # what this flow was last run against, so it is typed once.
@@ -517,6 +524,22 @@ flows: []
             runs.append(entry)
         _label_by_difference(runs)
         return {"runs": runs}
+
+    def open_windows(self, pattern: str = "*") -> dict[str, Any]:
+        """What is open on this machine, for the window picker.
+
+        A native flow attaches by window title, and on a CAD workstation the
+        title is not enough on its own: 3DEXPERIENCE runs as several processes
+        and more than one of them owns a window of the same name. Picking from
+        a list of what is actually running beats guessing a glob.
+        """
+        found = list_windows(pattern)
+        return {
+            "windows": [window.as_dict() for window in found],
+            # An empty list means two different things, and the page should be
+            # able to say which: nothing matched, or this is not Windows.
+            "supported": sys.platform == "win32",
+        }
 
     def known_subject_values(self) -> dict[str, Any]:
         """Every value ever recorded for each field, so they can be reused.
@@ -840,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.describe_runs())
             elif route == "/api/subjects":
                 self._json(self.api.known_subject_values())
+            elif route == "/api/windows":
+                self._json(self.api.open_windows(params.get("pattern", "*")))
             elif route == "/api/repo":
                 self._json(self.api.repo_state())
             elif route == "/api/workspace":

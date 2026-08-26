@@ -8,6 +8,7 @@ its own smaller pass for routing, static serving and the path guard.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from understudy.windows import OpenWindow
 from understudy.ui.server import Api, Workspace, WorkspaceError, serve
 
 REPO = Path(__file__).resolve().parents[2]
@@ -356,10 +358,38 @@ class TestHttp:
             self.get(server + "/files/../../../etc/passwd")
         assert caught.value.code in (400, 404)
 
+    def test_the_window_list_is_served_for_the_picker(self, server):
+        _, body = self.get(server + "/api/windows")
+        listed = json.loads(body)
+        assert isinstance(listed["windows"], list)
+        # Empty means two different things and the page says which, so the
+        # flag has to come back either way.
+        assert listed["supported"] in (True, False)
+
     def test_an_unknown_route_is_a_404(self, server):
         with pytest.raises(urllib.error.HTTPError) as caught:
             self.get(server + "/api/nope")
         assert caught.value.code == 404
+
+
+class TestPickingTheWindow:
+    """A native flow attaches by window title, and 3DEXPERIENCE offers several
+    windows of that name. The picker lists what is open so the flow can name
+    one instead of guessing a glob."""
+
+    def test_it_reports_whether_this_machine_can_even_look(self, api):
+        listed = api.open_windows()
+        assert listed["supported"] is (sys.platform == "win32")
+
+    def test_each_window_carries_what_tells_it_from_its_siblings(self, api, monkeypatch):
+        monkeypatch.setattr("understudy.ui.server.list_windows", lambda pattern: [
+            OpenWindow(title="3DEXPERIENCE R2026x", pid=7788, process="CATIA.exe",
+                       width=1920, height=1040, visible=True, wrapper=object()),
+        ])
+        window = api.open_windows("*3DEXPERIENCE*")["windows"][0]
+        assert window["process"] == "CATIA.exe"
+        assert (window["width"], window["visible"]) == (1920, True)
+        assert "wrapper" not in window, "the live handle is not the page's business"
 
 
 class TestComparingFromTheApp:

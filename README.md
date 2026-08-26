@@ -62,6 +62,40 @@ that expose no accessibility tree — needs the tesseract binary as well as the
 `ocr` extra (`choco install tesseract`); the installer carries both. Tests:
 `pytest tests/ -q` (990, no network).
 
+## Point a flow at a Windows application
+
+A native flow attaches to a window that is already open. It does not know
+where the application is installed and does not launch it; the window title is
+the whole handle. That is not enough on its own for 3DEXPERIENCE, which runs
+as a crowd of processes -- several own a top-level window and answer to the
+same name, so a title glob can match six things.
+
+Ask the machine what is open rather than guessing:
+
+```
+python tools/probe_native.py --list
+```
+
+Each line is a ready-to-paste `--title`, with the process that owns the window
+and how big it is, largest visible first. The client fills a monitor; the
+splash screen is 400x300 and the licensing helper has no pixels at all. In the
+app, **Pick window…** on an open flow does the same thing and writes the
+answer into the YAML.
+
+Where the title alone still cannot separate two windows, name the executable:
+
+```yaml
+target_app:
+  native:
+    window_title_pattern: "*3DEXPERIENCE*"
+    process: "CATIA.exe"
+```
+
+The driver takes the one visible match and says in the run's warnings what it
+chose over. Two windows genuinely up at once is a refusal, not a guess --
+replaying into the wrong open document is destructive -- and the error names
+them both.
+
 ## Build the installer
 
 PyInstaller cannot cross-compile, so Windows builds on Windows —

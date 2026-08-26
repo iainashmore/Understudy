@@ -49,6 +49,7 @@ from understudy.ocr import read_text
 from understudy.recording import FfmpegRecorder, NullRecorder, Recording
 from understudy.resolvers import NullResolver, Resolver
 from understudy.vision import Match, crop, locate_all
+from understudy.windows import OpenWindow, choose, open_windows, owned_by
 from harness.image import to_png_bytes
 
 #: How long to let a freshly-opened window settle before walking it.
@@ -121,35 +122,37 @@ def matching_titles(pattern: str | None) -> list[str]:
     """Every top-level window the pattern matches, or [] if we cannot look."""
     if not pattern:
         return []
-    try:
-        from pywinauto import Desktop
-
-        return [
-            window.window_text()
-            for window in Desktop(backend="uia").windows(
-                title_re=_glob_to_regex(pattern), top_level_only=True
-            )
-        ]
-    except Exception:
-        return []
+    return [window.title for window in open_windows(pattern)]
 
 
 def attach_failure(pattern: str | None, executable: str | None,
-                   exc: Exception, titles: list[str]) -> str:
+                   exc: Exception | None, candidates: list) -> str:
     """Why the attach failed, in terms the person who wrote the flow can act on.
 
-    Two windows matching one pattern is not an edge case on a CAD workstation:
-    CATIA V5 and 3DX side by side, two documents open, a splash screen that has
-    not gone away. pywinauto reports it as "There are 2 elements that match the
-    criteria {'title_re': ...}", which says nothing about which two.
+    Several windows matching one pattern is not an edge case on a CAD
+    workstation: CATIA V5 and 3DX side by side, two documents open, a splash
+    screen that has not gone away, and 3DEXPERIENCE's several processes each
+    owning a window of the same name. pywinauto reports it as "There are 6
+    elements that match the criteria {'title_re': ...}", which says nothing
+    about which six.
     """
-    if len(titles) > 1:
-        listed = "\n".join(f"  - {title!r}" for title in titles)
+    if len(candidates) > 1:
+        listed = "\n".join(
+            f"  - {c.described() if isinstance(c, OpenWindow) else repr(c)}"
+            for c in candidates
+        )
+        processes = {c.process for c in candidates if isinstance(c, OpenWindow) and c.process}
+        fix = (
+            f"Add target_app.native.process (one of: {', '.join(sorted(processes))}), "
+            f"tighten .window_title_pattern, or close the others."
+            if len(processes) > 1 else
+            "Tighten target_app.native.window_title_pattern until it matches "
+            "one of them, or close the others."
+        )
         return (
-            f"{pattern!r} matches {len(titles)} windows, so there is no way to "
-            f"tell which one the flow means:\n{listed}\n"
-            f"Tighten target_app.native.window_title_pattern until it matches "
-            f"one of them, or close the others."
+            f"{pattern!r} matches {len(candidates)} windows, none of them the "
+            f"obvious one, so there is no way to tell which the flow means:\n"
+            f"{listed}\n{fix}"
         )
     return f"could not attach to {pattern or executable!r}: {exc}"
 
@@ -207,12 +210,12 @@ class NativeDriver:
         try:
             if executable and app_config.get("launch", False):
                 self.app = Application(backend="uia").start(executable)
-            desktop = Desktop(backend="uia")
-            self.window = desktop.window(title_re=_glob_to_regex(pattern or "*"))
-            self.window.wait("exists ready", timeout=60)
+            self.window = self._attach(pattern or "*", app_config.get("process"))
+        except DriverError:
+            raise
         except Exception as exc:
             raise DriverError(
-                attach_failure(pattern, executable, exc, matching_titles(pattern))
+                attach_failure(pattern, executable, exc, open_windows(pattern or "*"))
             ) from None
 
         self.refresh()
@@ -231,6 +234,45 @@ class NativeDriver:
                 f"target_app.native.monitor. Anchors and regions are captured "
                 f"per monitor and do not carry across a DPI change."
             )
+
+    def _attach(self, pattern: str, process: str | None):
+        """The window this flow means, out of everything answering to the name.
+
+        A CAD workstation offers several: 3DEXPERIENCE runs as a crowd of
+        processes and more than one of them owns a top-level window with the
+        same title. Where exactly one of those is visible, that is the client
+        and the rest are splash screens and message-only windows -- taking it
+        is not a guess. Where two are genuinely up, replaying into the wrong
+        one is destructive, so this refuses and names them.
+        """
+        deadline = time.time() + 60
+        candidates: list[OpenWindow] = []
+        while time.time() < deadline:
+            candidates = owned_by(open_windows(pattern), process)
+            chosen, _ = choose(candidates)
+            if chosen is not None:
+                # Only worth saying when there was something to choose between:
+                # every Notepad run matches exactly one window and does not
+                # need a warning about it.
+                if len(candidates) > 1:
+                    self.warnings.append(
+                        f"attached to {chosen.described()}, chosen over "
+                        f"{len(candidates) - 1} other window(s) matching "
+                        f"{pattern!r}"
+                    )
+                return chosen.wrapper
+            if len(candidates) > 1:
+                raise DriverError(attach_failure(pattern, process, None, candidates))
+            time.sleep(1)
+
+        # Nothing matched for a minute. Fall back to pywinauto's own wait, so
+        # the failure reads the same as it always did where enumeration is not
+        # available at all (no pywinauto, a locked desktop).
+        from pywinauto import Desktop
+
+        window = Desktop(backend="uia").window(title_re=_glob_to_regex(pattern))
+        window.wait("exists ready", timeout=1)
+        return window
 
     def refresh(self) -> None:
         """Re-walk the tree and re-read the window's placement."""

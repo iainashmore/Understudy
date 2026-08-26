@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import probe_native  # noqa: E402
 
 from understudy.drivers.web import find_chromium  # noqa: E402
+from understudy.windows import OpenWindow  # noqa: E402
 
 PORT = 9412
 FIXTURE = (Path(__file__).resolve().parents[2] / "fixtures" / "chat_app" / "index.html")
@@ -189,3 +190,96 @@ class TestReporting:
 def test_title_globs_become_anchored_regexes():
     assert probe_native._glob_to_regex("*CATIA*") == "^.*CATIA.*$"
     assert probe_native._glob_to_regex("Example App") == "^Example\\ App$"
+
+
+class TestFindingTheApplication:
+    """The probe attaches to what is running; the title is its only handle.
+
+    3DEXPERIENCE runs as a crowd of processes, several owning a window and
+    answering to the same name, so these are the parts that tell them apart.
+    Windows-only shell output, parsed here against captured samples.
+    """
+
+    NETSTAT = """
+Active Connections
+
+  Proto  Local Address          Foreign Address        State
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1044
+  TCP    127.0.0.1:9222         0.0.0.0:0              LISTENING       7788
+  TCP    192.168.1.5:139        0.0.0.0:0              LISTENING       4
+  TCP    127.0.0.1:5040         10.0.0.1:443           ESTABLISHED     900
+  TCP    [::1]:49670            [::]:0                 LISTENING       2200
+"""
+
+    def test_a_window_is_described_by_more_than_its_title(self):
+        described = probe_native.format_window(OpenWindow(
+            title="3DEXPERIENCE R2026x", pid=7788, process="CATIA.exe",
+            width=1920, height=1040, visible=True,
+        ))
+        assert "--title '3DEXPERIENCE R2026x'" in described
+        assert "CATIA.exe pid 7788" in described
+        assert "1920x1040" in described
+
+    def test_an_invisible_window_says_so(self):
+        described = probe_native.format_window(OpenWindow(
+            title="3DEXPERIENCE", pid=9, process="helper.exe",
+            width=0, height=0, visible=False,
+        ))
+        assert "not visible" in described
+
+    def test_missing_the_title_lists_what_is_open(self):
+        lines = "\n".join(probe_native.verdict([], {
+            "available": True,
+            "error": "no window matching '*3DX*'",
+            "matched": [],
+            "open_windows": [
+                {"title": "3DEXPERIENCE R2026x", "pid": 7788, "process": "CATIA.exe",
+                 "width": 1920, "height": 1040, "visible": True},
+            ],
+        }))
+        assert "no window with that title" in lines
+        assert "--title '3DEXPERIENCE R2026x'" in lines
+
+    def test_walking_one_of_several_matches_admits_it(self):
+        lines = "\n".join(probe_native.verdict([], {
+            "available": True,
+            "others": [{"title": "3DEXPERIENCE splash"}],
+            **probe_native.summarise_tree(TestReporting.NODES),
+        }))
+        assert "2 windows matched" in lines
+        assert "largest visible one" in lines
+
+    def test_an_endpoint_reports_which_process_answered(self, monkeypatch):
+        monkeypatch.setattr(probe_native, "fetch_json", lambda url, timeout=1.5: (
+            {"Browser": "Chrome/120"} if url.endswith("version") else []
+        ))
+        found = probe_native.probe_cdp([9222], owners={9222: 7788},
+                                       names={7788: "CATIA.exe"})
+        assert found[0]["process"] == "CATIA.exe"
+        assert found[0]["pid"] == 7788
+
+
+class TestWhatNoEndpointMeans:
+    """"No CDP" is two different findings with two different next steps."""
+
+    def test_a_webview_host_makes_the_debug_port_worth_chasing(self):
+        hosts = probe_native.browser_hosts(
+            {1: "explorer.exe", 2: "msedgewebview2.exe", 3: "CATIA.exe"}
+        )
+        assert hosts == ["msedgewebview2.exe"]
+        lines = "\n".join(probe_native.verdict(
+            [], {"available": True, "browser_hosts": hosts,
+                 **probe_native.summarise_tree(TestReporting.NODES)}
+        ))
+        assert "embedded browser host is running" in lines
+        assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in lines
+
+    def test_no_host_says_stop_chasing_it(self):
+        lines = "\n".join(probe_native.verdict(
+            [], {"available": True, "browser_hosts": [],
+                 **probe_native.summarise_tree(TestReporting.NODES)}
+        ))
+        assert "probably native drawing" in lines
+
+    def test_cef_counts_too(self):
+        assert probe_native.browser_hosts({1: "libcef.dll.exe"}) == ["libcef.dll.exe"]

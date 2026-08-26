@@ -328,6 +328,8 @@ def command_run(args) -> int:
 
     print(f"{flow.name}: {len(prompts)} prompt run(s) x {args.repeat} -> {out_dir}")
     driver.start(flow.app_config(args.backend))
+    for note in getattr(driver, "warnings", []):
+        print(f"note: {note}")
     try:
         runner = Runner(flow, driver, out_dir, reset_level=args.reset_level,
                         capture_steps=args.narrate or args.capture_steps,

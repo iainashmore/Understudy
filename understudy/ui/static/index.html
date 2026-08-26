@@ -230,6 +230,7 @@
           <button data-save="flow">Save</button>
           <button data-saveas="flow">Save as…</button>
           <button id="duplicate">Duplicate…</button>
+          <button id="pickWindow">Pick window…</button>
           <button id="recordSteps"><span class="rec-dot"></span>Record steps</button>
           <button id="deleteFlow">Delete…</button>
         </div>
@@ -888,6 +889,77 @@ function markActive() {
     list.hidden = list.dataset.for !== state.flow);
 }
 
+/* ---------- which window the flow drives ---------- */
+
+// A native flow attaches by window title, and on a CAD workstation the title
+// is not enough on its own: 3DEXPERIENCE runs as several processes and more
+// than one owns a window of the same name. So this writes the process in too,
+// and the driver uses it to tell them apart.
+function withNativeTarget(text, title, process) {
+  const q = (value) => JSON.stringify(value);
+  const lines = [`window_title_pattern: ${q(title)}`];
+  if (process) lines.push(`process: ${q(process)}`);
+
+  const existing = text.match(/^([ \t]*)window_title_pattern:.*$/m);
+  if (existing) {
+    const indent = existing[1];
+    let out = text.replace(existing[0], `${indent}window_title_pattern: ${q(title)}`);
+    const owner = out.match(/^([ \t]*)process:.*$/m);
+    if (process && owner) return out.replace(owner[0], `${owner[1]}process: ${q(process)}`);
+    if (process) {
+      return out.replace(`${indent}window_title_pattern: ${q(title)}`,
+        `${indent}window_title_pattern: ${q(title)}\n${indent}process: ${q(process)}`);
+    }
+    return owner ? out.replace(owner[0] + "\n", "") : out;
+  }
+
+  const native = text.match(/^([ \t]*)native:[ \t]*$/m);
+  if (native) {
+    const indent = native[1] + "  ";
+    return text.replace(native[0],
+      native[0] + "\n" + lines.map((line) => indent + line).join("\n"));
+  }
+  const target = text.match(/^([ \t]*)target_app:[ \t]*$/m);
+  if (target) {
+    const indent = target[1] + "  ";
+    return text.replace(target[0],
+      `${target[0]}\n${indent}native:\n` +
+      lines.map((line) => indent + "  " + line).join("\n"));
+  }
+  return text.replace(/\s*$/, "") + "\n\ntarget_app:\n  native:\n" +
+    lines.map((line) => "    " + line).join("\n") + "\n";
+}
+
+function windowLabel(window) {
+  const size = `${window.width}\u00d7${window.height}`;
+  const owner = window.process || `pid ${window.pid}`;
+  return `${window.title || "(untitled)"} — ${owner} ${size}` +
+    (window.visible ? "" : " (hidden)");
+}
+
+async function pickWindow(event) {
+  let listed;
+  try {
+    listed = await api("/api/windows");
+  } catch (error) {
+    alert(error.message);
+    return;
+  }
+  if (!listed.windows.length) {
+    openMenu(event, "Pick a window", [[
+      listed.supported ? "Nothing is open to pick"
+                       : "Only on Windows — this machine cannot look",
+      () => {},
+    ]]);
+    return;
+  }
+  openMenu(event, "Pick the window this flow drives",
+    listed.windows.map((window) => [windowLabel(window), () => {
+      $("flowText").value = withNativeTarget($("flowText").value,
+        window.title, window.process);
+    }]));
+}
+
 /* ---------- open / save / new / duplicate / delete ---------- */
 
 async function openFlow(path) {
@@ -912,6 +984,8 @@ async function saveFlow(path) {
   $("flowPath").textContent = path + "  (saved)";
   await loadTree();
 }
+
+$("pickWindow").onclick = (event) => pickWindow(event);
 
 document.querySelectorAll("[data-save]").forEach((button) => {
   button.onclick = () => saveFlow(state.flow).catch((e) => alert(e.message));
@@ -1092,6 +1166,7 @@ function listen(runId) {
       state.outDir = event.out_dir;
       logLine(`running ${event.variants} prompt run(s)`);
     }
+    if (event.type === "note") logLine("  note: " + event.text);
     if (event.type === "variant_started") logLine(`  ${event.prompt_id} ...`);
     if (event.type === "variant_finished") {
       const r = event.result;

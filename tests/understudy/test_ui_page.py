@@ -402,3 +402,65 @@ class TestComparingFromTheMenu:
         box = page.locator(".flyout").bounding_box()
         assert box["x"] + box["width"] <= page.evaluate("() => window.innerWidth")
         assert box["y"] + box["height"] <= page.evaluate("() => window.innerHeight")
+
+
+class TestThePickWindowButton:
+    """Naming the window a native flow drives, by picking it rather than
+    guessing a glob. 3DEXPERIENCE offers several windows of the same name, so
+    the process goes into the flow too."""
+
+    def test_it_says_when_the_machine_cannot_look(self, run_tab):
+        # These tests run on Linux, where there are no windows to enumerate --
+        # which is itself a case the menu has to handle without throwing.
+        run_tab.click("#pickWindow")
+        run_tab.wait_for_timeout(200)
+        assert run_tab.locator("#menu").is_visible()
+        assert "Only on Windows" in run_tab.locator("#menu").inner_text()
+        assert run_tab.errors == []
+
+    def test_a_flow_with_no_target_gets_a_whole_native_block(self, page):
+        written = page.evaluate(
+            """() => withNativeTarget("title: A flow\\n", "3DX R2026x", "CATIA.exe")"""
+        )
+        assert written.endswith(
+            'target_app:\n  native:\n'
+            '    window_title_pattern: "3DX R2026x"\n'
+            '    process: "CATIA.exe"\n'
+        )
+
+    def test_an_existing_native_block_is_filled_in_not_duplicated(self, page):
+        written = page.evaluate(
+            """() => withNativeTarget(
+                 "target_app:\\n  native:\\n    monitor: primary\\n",
+                 "3DX R2026x", "CATIA.exe")"""
+        )
+        assert written.count("native:") == 1
+        assert '    window_title_pattern: "3DX R2026x"' in written
+        assert "    monitor: primary" in written, "the rest of the block survives"
+
+    def test_picking_again_replaces_rather_than_appends(self, page):
+        once = page.evaluate(
+            """() => withNativeTarget(
+                 'target_app:\\n  native:\\n    window_title_pattern: "*Old*"\\n'
+                 + '    process: "old.exe"\\n', "3DX R2026x", "CATIA.exe")"""
+        )
+        assert once.count("window_title_pattern") == 1
+        assert once.count("process:") == 1
+        assert "*Old*" not in once and "old.exe" not in once
+
+    def test_a_web_flow_keeps_its_own_target(self, page):
+        written = page.evaluate(
+            """() => withNativeTarget(
+                 'target_app:\\n  web:\\n    url: "https://example.com/"\\n',
+                 "3DX", "CATIA.exe")"""
+        )
+        assert 'url: "https://example.com/"' in written
+        assert "native:" in written
+
+    def test_a_window_is_labelled_by_more_than_its_title(self, page):
+        label = page.evaluate(
+            """() => windowLabel({title: "3DEXPERIENCE", process: "CATIA.exe",
+                                  pid: 7788, width: 1920, height: 1040,
+                                  visible: true})"""
+        )
+        assert "CATIA.exe" in label and "1920" in label
