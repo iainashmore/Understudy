@@ -74,6 +74,18 @@
   #menu .sep { height:1px; margin:4px 6px; background:var(--line); }
   #menu .heading { padding:4px 10px 6px; font-size:11px; color:var(--dim);
                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #menu .has-submenu button { display:flex; width:100%; align-items:center;
+                              justify-content:space-between; gap:12px; }
+  #menu .chevron { color:var(--dim); }
+  .flyout { position:fixed; z-index:51; min-width:150px; max-height:60vh;
+            overflow:auto; padding:4px; background:var(--panel);
+            border:1px solid var(--line); border-radius:6px;
+            box-shadow:0 6px 20px rgba(0,0,0,.4);
+            display:flex; flex-direction:column; }
+  .flyout button { border:none; background:none; text-align:left;
+                   color:var(--text); padding:6px 10px; border-radius:4px;
+                   font:inherit; white-space:nowrap; }
+  .flyout button:hover { background:#333c47; }
   .desc { color:var(--dim); font-size:11px; padding:0 6px 4px 20px; }
 
   main { overflow:auto; min-height:0; }
@@ -663,14 +675,20 @@ function runList(flow) {
     tick.dataset.dir = run.dir;
     tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
     line.onclick = () => openRun(run);
-    // The run below it in the list is the one before it in time, which is
-    // what "did this change?" almost always means.
-    const previous = runs[index + 1];
+    // Every other run of this flow, newest first -- the only set a comparison
+    // makes sense across. The one directly below is the one before it in time,
+    // and comes first because "did this change?" usually means "since when I
+    // last looked".
+    const others = runs.filter((other) => other.dir !== run.dir);
     line.oncontextmenu = (event) => openMenu(event, run.subject || run.name, [
       ["Open transcript", () => openRun(run)],
-      ...(previous
-        ? [[`Compare with ${runLabel(previous)}`, () => compareRuns(previous, run)]]
-        : []),
+      ...(others.length ? [{
+        submenu: "Compare with…",
+        items: others.map((other) => [
+          runLabel(other) + (other.when ? "  " + other.when.slice(0, 10) : ""),
+          () => compareRuns(other, run),
+        ]),
+      }] : []),
       "-",
       ["Rebuild transcript", () => rebuildRun(run)],
       "-",
@@ -768,6 +786,50 @@ function publishRun(run) {
 
 function closeMenu() {
   $("menu").hidden = true;
+  closeFlyouts();
+}
+
+function closeFlyouts() {
+  document.querySelectorAll(".flyout").forEach((node) => node.remove());
+}
+
+// "Compare with…" is a question with as many answers as there are other runs,
+// so it asks rather than guessing one. The list is the flow's own runs, which
+// is the only set a comparison makes sense across.
+function submenuItem(entry) {
+  const holder = document.createElement("div");
+  holder.className = "has-submenu";
+  const button = document.createElement("button");
+  button.innerHTML = `<span>${escapeHtml(entry.submenu)}</span><span
+    class="chevron">›</span>`;
+  holder.appendChild(button);
+
+  const open = () => {
+    closeFlyouts();
+    if (!entry.items.length) return;
+    const flyout = document.createElement("div");
+    flyout.className = "flyout";
+    for (const [text, handler] of entry.items) {
+      const child = document.createElement("button");
+      child.textContent = text;
+      child.onclick = () => { closeMenu(); handler(); };
+      flyout.appendChild(child);
+    }
+    document.body.appendChild(flyout);
+
+    // Beside the item it belongs to, and flipped or clamped rather than
+    // hanging off the edge -- the same rule as the menu itself.
+    const anchor = button.getBoundingClientRect();
+    const box = flyout.getBoundingClientRect();
+    const right = anchor.right + box.width + 4 <= window.innerWidth;
+    flyout.style.left = (right ? anchor.right + 2
+                               : Math.max(6, anchor.left - box.width - 2)) + "px";
+    flyout.style.top =
+      Math.max(6, Math.min(anchor.top, window.innerHeight - box.height - 6)) + "px";
+  };
+  button.onmouseenter = open;
+  button.onclick = (event) => { event.stopPropagation(); open(); };
+  return holder;
 }
 document.addEventListener("click", closeMenu);
 document.addEventListener("keydown", (event) => {
@@ -793,10 +855,15 @@ function openMenu(event, heading, items) {
       menu.appendChild(rule);
       continue;
     }
+    if (entry.submenu) {
+      menu.appendChild(submenuItem(entry));
+      continue;
+    }
     const [text, handler, danger] = entry;
     const button = document.createElement("button");
     button.textContent = text;
     if (danger) button.className = "danger";
+    button.onmouseenter = closeFlyouts;
     button.onclick = () => { closeMenu(); handler(); };
     menu.appendChild(button);
   }

@@ -230,16 +230,16 @@ class TestTheContextMenu:
         # A run cannot be duplicated or edited; offering it would be a lie.
         assert "Duplicate…" not in entries
 
-    def test_a_run_offers_the_comparison_you_almost_always_want(self, page):
-        """Against the run before it. "Did this change?" nearly always means
-        "since last time"."""
+    def test_comparing_asks_which_run_rather_than_guessing_one(self, page):
+        """A workspace of one run has nothing to compare against, so the item
+        is not offered at all -- a submenu that opens onto nothing is worse
+        than a missing one."""
         page.locator(".tree-item").first.click()
         page.wait_for_timeout(300)
         page.locator(".run-list:not([hidden]) .run").first.click(button="right")
         page.wait_for_timeout(200)
 
-        assert not any(e.startswith("Compare with") for e in self.entries(page)), \
-            "this workspace has one run, so there is nothing to compare against"
+        assert not any(e.startswith("Compare with") for e in self.entries(page))
 
     def test_it_names_what_it_is_acting_on(self, page):
         """Menus opened by right-clicking a list are opened next to the row
@@ -330,3 +330,58 @@ class TestTheTagBox:
         page.wait_for_timeout(400)
         assert "FD03" in self.chips(page)
         assert "CATIA" in self.chips(page)
+
+
+class TestComparingFromTheMenu:
+    """"Compare with…" is a question with as many answers as there are other
+    runs of that flow, so it asks instead of choosing one."""
+
+    @pytest.fixture
+    def two_runs(self, tmp_path):
+        """A second run of the same flow, so there is something to compare."""
+        second = tmp_path / "runs" / "2026-09-02"
+        second.mkdir(parents=True)
+        (second / "flow.yaml").write_text(FLOW)
+        (second / "results.jsonl").write_text(json.dumps({
+            "prompt_id": "baseline", "repeat_index": 0, "prompt": "hello",
+            "variables": {}, "response": "hi", "reads": {"response": "hi"},
+            "read_images": {}, "status": "ok", "duration_ms": 10,
+            "screenshots": [], "step_statuses": [], "backend": "web",
+            "flow": "page-test",
+            "subject": {"app": "CATIA", "app_version": "R2026x",
+                        "model": "LEO", "model_version": "FD04"},
+            "timestamp": "2026-09-02T10:00:00Z",
+        }) + "\n")
+        return tmp_path
+
+    def open_run_menu(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(300)
+        page.locator(".run-list:not([hidden]) .run").first.click(button="right")
+        page.wait_for_timeout(200)
+
+    def test_it_lists_the_other_runs_of_that_flow(self, two_runs, page):
+        self.open_run_menu(page)
+        page.locator("#menu .has-submenu button").hover()
+        page.wait_for_timeout(300)
+
+        offered = [b.inner_text() for b in page.locator(".flyout button").all()]
+        assert len(offered) == 1, offered
+        assert "FD03" in offered[0], "the other run, not this one"
+
+    def test_the_run_itself_is_not_in_its_own_list(self, two_runs, page):
+        self.open_run_menu(page)
+        page.locator("#menu .has-submenu button").hover()
+        page.wait_for_timeout(300)
+
+        offered = " ".join(b.inner_text() for b in page.locator(".flyout button").all())
+        assert "FD04" not in offered, "comparing a run with itself compares nothing"
+
+    def test_the_list_stays_on_screen(self, two_runs, page):
+        self.open_run_menu(page)
+        page.locator("#menu .has-submenu button").hover()
+        page.wait_for_timeout(300)
+
+        box = page.locator(".flyout").bounding_box()
+        assert box["x"] + box["width"] <= page.evaluate("() => window.innerWidth")
+        assert box["y"] + box["height"] <= page.evaluate("() => window.innerHeight")
