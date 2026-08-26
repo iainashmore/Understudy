@@ -517,7 +517,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except (FlowError, PromptsError, SuiteError, AuthoringError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        problems = getattr(exc, "problems", [])
+        if len(problems) > 1:
+            # All of them. Fixing a batch of schema failures one run at a time
+            # is four rounds of edit-and-retry.
+            print("error: the flow has "
+                  f"{len(problems)} problems:", file=sys.stderr)
+            for problem in problems:
+                print(f"  - {problem}", file=sys.stderr)
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return 2
 
 

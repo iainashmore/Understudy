@@ -349,3 +349,54 @@ class TestTheWindowsPathTrap:
         with pytest.raises(FlowError) as caught:
             load_flow(flow)
         assert "backslashes" not in str(caught.value)
+
+
+def test_a_native_target_can_name_the_process_that_owns_the_window(tmp_path):
+    """3DEXPERIENCE runs as several processes owning windows of the same name,
+    so the title alone cannot say which one the flow means."""
+    from understudy.flow import load_flow
+
+    path = tmp_path / "flow.yaml"
+    path.write_text("""version: 1
+name: picky
+target_app:
+  native:
+    window_title_pattern: "*3DEXPERIENCE*"
+    process: "CATIA.exe"
+targets:
+  box:
+    native:
+      - control_type: Edit
+prompts:
+  - id: one
+    prompt: hello
+steps:
+  - {action: type, target: box, text: "{{prompt}}"}
+""")
+    flow = load_flow(path)
+    assert flow.app_config("native")["process"] == "CATIA.exe"
+
+
+def test_a_schema_failure_carries_every_problem_not_only_the_first(tmp_path):
+    """One missing key usually means the block it belonged to is missing too.
+    Being told about them one run at a time is four rounds of edit-and-retry."""
+    from understudy.flow import FlowError, load_flow
+
+    path = tmp_path / "flow.yaml"
+    path.write_text("version: 1\nname: x\nsteps: []\n")
+    with pytest.raises(FlowError) as raised:
+        load_flow(path)
+
+    assert len(raised.value.problems) > 1
+    assert any("prompts" in problem for problem in raised.value.problems)
+    assert any("steps" in problem for problem in raised.value.problems)
+    # The message itself stays short; the list is for whoever wants it.
+    assert "more problem(s)" in str(raised.value)
+
+
+def test_an_ordinary_flow_error_still_reads_as_one_problem(tmp_path):
+    from understudy.flow import FlowError, load_flow
+
+    with pytest.raises(FlowError) as raised:
+        load_flow(tmp_path / "missing.yaml")
+    assert raised.value.problems == [str(raised.value)]

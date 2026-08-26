@@ -178,6 +178,10 @@
             "window_title_pattern": {
               "type": "string"
             },
+            "process": {
+              "description": "Image name of the process that must own the window, e.g. CATIA.exe. For applications that run as several processes owning windows of the same name, where the title cannot tell them apart on its own. Case-insensitive; the .exe is optional.",
+              "type": "string"
+            },
             "monitor": {
               "description": "Device name of the monitor the window must be on, e.g. \\\\\\\\.\\\\DISPLAY2. Anchors and regions are captured per monitor and do not survive a DPI change, so the run refuses to start on the wrong one.",
               "type": "string"

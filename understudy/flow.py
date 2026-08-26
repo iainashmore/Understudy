@@ -48,7 +48,17 @@ DEFAULT_STABLE_FOR_MS = 1_500
 
 
 class FlowError(ValueError):
-    """The flow file is wrong. Always a human-fixable authoring problem."""
+    """The flow file is wrong. Always a human-fixable authoring problem.
+
+    Carries every problem it found, not just the first. A schema failure
+    usually comes in a batch -- one missing key often means the block it
+    belonged to is missing too -- and being told about them one run at a time
+    is four rounds of edit-and-retry instead of one.
+    """
+
+    def __init__(self, message: str, problems: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.problems = list(problems) if problems else [message]
 
 
 @dataclass(frozen=True)
@@ -293,11 +303,15 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
         key=lambda error: list(error.absolute_path),
     )
     if errors:
-        first = errors[0]
-        location = "/".join(str(part) for part in first.absolute_path) or "(root)"
+        problems = [
+            f"{'/'.join(str(part) for part in error.absolute_path) or '(root)'}: "
+            f"{error.message}"
+            for error in errors
+        ]
         raise FlowError(
-            f"{location}: {first.message}"
-            + (f" (and {len(errors) - 1} more problem(s))" if len(errors) > 1 else "")
+            problems[0]
+            + (f" (and {len(problems) - 1} more problem(s))" if len(problems) > 1 else ""),
+            problems,
         )
 
     base_dir = source_path.parent if source_path else None

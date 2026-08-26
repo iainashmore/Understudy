@@ -464,3 +464,61 @@ class TestThePickWindowButton:
                                   visible: true})"""
         )
         assert "CATIA.exe" in label and "1920" in label
+
+
+class TestAFlowThatWillNotLoad:
+    """A typo used to be silent: the tree greyed the title, the header claimed
+    the flow drove a web page, and the first real sign was a replay dying at
+    the first step."""
+
+    @pytest.fixture
+    def broken(self, served, browser, tmp_path):
+        (tmp_path / "broken.yaml").write_text("version: 1\nname: x\nsteps: []\n")
+        page = browser.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(served, wait_until="networkidle")
+        page.wait_for_timeout(300)
+        page.errors = errors
+        page.locator(".tree-item", has_text="broken.yaml").click()
+        page.wait_for_timeout(300)
+        yield page
+        page.close()
+
+    def test_the_problems_are_shown_without_pressing_validate(self, broken):
+        shown = broken.locator("#validation").inner_text()
+        assert "will not load" in shown
+        assert "'prompts' is a required property" in shown
+        assert broken.errors == []
+
+    def test_every_problem_is_listed_not_only_the_first(self, broken):
+        shown = broken.locator("#validation").inner_text()
+        assert "steps" in shown, "the second schema failure is listed too"
+        assert "more problem(s)" not in shown, "counted, rather than named"
+
+    def test_it_does_not_claim_to_drive_anything(self, broken):
+        assert "Will not load" in broken.locator("#drivesLabel").inner_text()
+        assert broken.locator("#backend").is_hidden()
+
+    def test_replay_is_refused_with_a_reason(self, broken):
+        assert broken.locator("#run").is_disabled()
+        assert "does not load" in broken.locator("#run").get_attribute("title")
+
+    def test_the_tree_says_which_flow_it_is(self, broken):
+        row = broken.locator(".tree-item", has_text="broken.yaml")
+        # The label is kept on one line with non-breaking spaces.
+        assert "will not load" in row.inner_text().replace("\u00a0", " ")
+
+    def test_a_flow_that_loads_says_none_of_this(self, broken):
+        broken.locator(".tree-item", has_text="Page test").click()
+        broken.wait_for_timeout(300)
+        assert broken.locator("#validation").inner_text().strip() == ""
+        assert broken.locator("#run").is_enabled()
+
+    def test_fixing_it_and_saving_clears_the_verdict(self, broken):
+        broken.fill("#flowText", FLOW)
+        broken.click("[data-save]")
+        broken.wait_for_timeout(500)
+        assert broken.locator("#validation").inner_text().strip() == ""
+        assert broken.locator("#run").is_enabled()
+        assert "Drives" in broken.locator("#drivesLabel").inner_text()

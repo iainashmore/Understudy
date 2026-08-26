@@ -133,7 +133,11 @@ class Workspace:
             for line in text.splitlines()
             if line[:1].isalpha() and ":" in line
         }
-        return "steps" in keys and bool({"targets", "prompts"} & keys)
+        # `steps` alone, because a flow being edited is a flow: deleting the
+        # prompts block for a moment used to drop the file out of the sidebar
+        # entirely, which reads as "my flow is gone" rather than "this does not
+        # load yet". Suites are told apart before this is asked.
+        return "steps" in keys
 
 
 class Api:
@@ -176,6 +180,7 @@ class Api:
                 )
             except Exception as exc:
                 entry["error"] = str(exc)
+                entry["problems"] = list(getattr(exc, "problems", [str(exc)]))
             described.append(entry)
         return described
 
@@ -341,7 +346,9 @@ flows: []
                 "variables": sorted(flow.variables()),
             }
         except FlowError as exc:
-            problems.append(f"flow: {exc}")
+            # Every problem, not the first with a count of the rest: fixing
+            # them one per run is four rounds of edit-and-retry.
+            problems.extend(f"flow: {problem}" for problem in exc.problems)
             flow = None
         except Exception as exc:
             problems.append(f"flow: {type(exc).__name__}: {exc}")

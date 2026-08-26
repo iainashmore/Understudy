@@ -506,6 +506,9 @@ function showHeading() {
   // Replaying is a thing you do to a flow, not to a run you are reading.
   $("run").hidden = !state.flow;
   $("validate").hidden = !state.flow;
+  const broken = Boolean(flow && flow.error);
+  $("run").disabled = broken;
+  $("run").title = broken ? "This flow does not load yet — see the problems below" : "";
 }
 
 function runLabel(run) {
@@ -603,8 +606,12 @@ function item(flow) {
   row.dataset.path = flow.path;
   row.innerHTML = `<span class="label" title="${escapeHtml(flow.path)}">${
     escapeHtml(flow.error ? flow.path : flow.title)}</span>
-    <span class="count" title="${flow.variants} prompt(s) in this flow"
-      >${flow.variants ? flow.variants + "&nbsp;prompts" : ""}</span>`;
+    <span class="count" title="${escapeHtml(flow.error
+        || flow.variants + " prompt(s) in this flow")}"
+      >${flow.error ? "will&nbsp;not&nbsp;load"
+        : (flow.variants
+            ? flow.variants + (flow.variants === 1 ? "&nbsp;prompt" : "&nbsp;prompts")
+            : "")}</span>`;
   if (flow.error) row.querySelector(".label").classList.add("bad");
   row.onclick = () => openFlow(flow.path);
   row.oncontextmenu = (event) => openMenu(event, flow.title || flow.path, [
@@ -975,7 +982,22 @@ async function openFlow(path) {
   showHeading();
   loadSubject(path);
   showWhatItDrives(flow);
+  showProblems(flow);
   showTab("flow");
+}
+
+// A flow that will not load says so the moment it is opened. It used to say
+// nothing until Validate was pressed, while the header quietly claimed it
+// drove a web page -- so the first sign of a typo was a replay dying at the
+// first step.
+function showProblems(flow) {
+  const box = $("validation");
+  box.innerHTML = "";
+  if (!flow || !flow.error) return;
+  const problems = flow.problems && flow.problems.length
+    ? flow.problems : [flow.error];
+  box.innerHTML = `<div class="card"><span class="pill bad">will not load</span>
+    <pre>${problems.map(escapeHtml).join("\n")}</pre></div>`;
 }
 
 async function saveFlow(path) {
@@ -983,6 +1005,12 @@ async function saveFlow(path) {
   state.flow = path;
   $("flowPath").textContent = path + "  (saved)";
   await loadTree();
+  // Saving is how a broken flow gets fixed, so the verdict is re-read here:
+  // otherwise the problems stay on screen after the fix that cleared them.
+  const flow = currentFlow();
+  showHeading();
+  showWhatItDrives(flow);
+  showProblems(flow);
 }
 
 $("pickWindow").onclick = (event) => pickWindow(event);
@@ -1083,6 +1111,14 @@ function showWhatItDrives(flow) {
   // "flow has no target_app.web section".
   const backends = (flow && flow.backends) || [];
   const picker = $("backend"), label = $("drivesLabel");
+  if (flow && flow.error) {
+    // Nothing can be said about what a flow drives when it does not load,
+    // and "a web page" -- the picker's first option -- is a guess that reads
+    // as a fact.
+    picker.hidden = true;
+    label.textContent = "Will not load — see below";
+    return;
+  }
   if (backends.length === 1) {
     picker.value = backends[0];
     picker.hidden = true;

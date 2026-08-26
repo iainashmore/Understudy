@@ -98,6 +98,17 @@ class TestFiles:
         assert "commented.yaml" in api.list_files()["flows"]
         assert any(f["path"] == "commented.yaml" for f in api.describe_flows())
 
+    def test_a_flow_being_edited_does_not_vanish_from_the_sidebar(self, api):
+        """Deleting the prompts block for a moment used to drop the file out
+        of every listing: present on disk, gone from the UI, which reads as
+        "my flow is gone" rather than "this does not load yet"."""
+        api.write_file("half-written.yaml",
+                       "version: 1\nname: x\nsteps:\n  - action: capture\n")
+        assert "half-written.yaml" in api.list_files()["flows"]
+        described = next(f for f in api.describe_flows()
+                         if f["path"] == "half-written.yaml")
+        assert described["error"], "and it says why, rather than looking fine"
+
     def test_a_suite_is_not_mistaken_for_a_flow(self, api):
         listing = api.list_files()
         assert "suite.yaml" in listing["suites"]
@@ -219,7 +230,16 @@ class TestValidation:
     def test_a_flow_that_will_not_parse_reports_both_halves(self, api):
         api.write_file("flow.yaml", "nonsense: true\n")
         result = api.validate("flow.yaml")
-        assert len(result["problems"]) == 2
+        assert any(problem.startswith("flow:") for problem in result["problems"])
+        assert any(problem.startswith("prompts:") for problem in result["problems"])
+
+    def test_every_schema_problem_is_listed_not_only_the_first(self, api):
+        api.write_file("flow.yaml", "version: 1\nname: x\nsteps: []\n")
+        result = api.validate("flow.yaml")
+        flow_problems = [p for p in result["problems"] if p.startswith("flow:")]
+        assert len(flow_problems) > 1, flow_problems
+        assert any("prompts" in p for p in flow_problems)
+        assert any("steps" in p for p in flow_problems)
 
 
 class TestRunning:
