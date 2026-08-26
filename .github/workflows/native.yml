@@ -60,6 +60,44 @@ jobs:
       - name: Drive Notepad
         run: pytest tests/understudy/test_native_live.py -v -m native_live
 
+      - name: Probe a live window, the way Monday morning starts
+        shell: bash
+        run: |
+          # The first thing anyone does on a new application is run this, and
+          # until now it had only ever run against fakes: probe_uia,
+          # probe_display and the report have no coverage that touches a real
+          # desktop. That is exactly the gap that produced five real bugs in
+          # the driver, and this one fails in front of the CAD machine rather
+          # than here.
+          python - <<'LAUNCH'
+          import subprocess, time
+          subprocess.Popen(["notepad.exe"])
+          time.sleep(2.5)
+          LAUNCH
+          python tools/probe_native.py --title "*Notepad*" --out runs/probe
+          taskkill //im notepad.exe //f || true
+
+      - name: Check the probe reported something usable
+        shell: bash
+        run: |
+          # A probe that runs and reports nothing is worse than one that
+          # crashes: it looks like an answer.
+          python -c "
+          import json, pathlib, sys
+          out = pathlib.Path('runs/probe')
+          missing = [n for n in ('uia-tree.txt', 'uia-tree.json', 'probe.json')
+                     if not (out / n).exists()]
+          if missing:
+              print('the probe wrote no', ', '.join(missing)); sys.exit(1)
+          report = json.loads((out / 'probe.json').read_text())
+          nodes = len(json.loads((out / 'uia-tree.json').read_text()))
+          print(f'{nodes} UIA node(s), display: {report.get(\"display\", {}).get(\"dpi_awareness\")}')
+          # Notepad has a menu bar, an edit surface and a status bar. One node
+          # means it found the window and nothing in it, which is the CATIA
+          # case and not the Notepad one -- so here it means the walk broke.
+          sys.exit(0 if nodes > 3 else 1)
+          "
+
       - name: Fetch ffmpeg, so the recorder can be proven too
         shell: bash
         run: |
