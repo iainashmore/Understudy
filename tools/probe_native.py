@@ -21,6 +21,13 @@ flow means.
 
 Nothing here modifies the application. It only reads.
 
+It does not launch anything and does not know where the application is
+installed. It attaches to what is already running: a debugging port on
+localhost, and a top-level window matched by title. If you do not know the
+title, ask it:
+
+    python probe_native.py --list
+
     python probe_native.py --title "*CATIA*"
     python probe_native.py --title "*3DEXPERIENCE*" --ports 9222,9223 --watch 20
 
@@ -185,6 +192,30 @@ def probe_display() -> dict[str, Any]:
     }
 
 
+def top_level_titles(pattern: str = "*") -> list[str]:
+    """Every top-level window title the pattern matches.
+
+    The probe attaches to a window that is already open; it never launches
+    anything and knows nothing about where the application is installed. So
+    when the title glob finds nothing, the only useful answer is "here is what
+    *is* open" -- and pywinauto's own error does not say. On a CAD workstation
+    a glob matching two windows is routine: CATIA and 3DX side by side, two
+    documents, a splash screen that has not gone away yet.
+    """
+    try:
+        from pywinauto import Desktop
+
+        titles = [
+            window.window_text()
+            for window in Desktop(backend="uia").windows(
+                title_re=_glob_to_regex(pattern), top_level_only=True
+            )
+        ]
+    except Exception:
+        return []
+    return [title for title in titles if title.strip()]
+
+
 def probe_uia(title_pattern: str, out_dir: Path) -> dict[str, Any]:
     try:
         from pywinauto import Desktop
@@ -196,7 +227,13 @@ def probe_uia(title_pattern: str, out_dir: Path) -> dict[str, Any]:
         window = Desktop(backend="uia").window(title_re=_glob_to_regex(title_pattern))
         window.wait("exists", timeout=10)
     except Exception as exc:
-        return {"available": True, "error": f"no window matching {title_pattern!r}: {exc}"}
+        matched = top_level_titles(title_pattern)
+        return {
+            "available": True,
+            "error": f"no single window matching {title_pattern!r}: {exc}",
+            "matched": matched,
+            "open_windows": [] if matched else top_level_titles("*"),
+        }
 
     started = time.time()
     nodes = walk(window)
@@ -279,7 +316,17 @@ def verdict(cdp: list[dict[str, Any]], uia: dict[str, Any]) -> list[str]:
     if not uia.get("available"):
         lines.append(f"UIA not checked: {uia.get('error')}")
     elif uia.get("error"):
-        lines.append(f"UIA failed: {uia['error']}")
+        matched = uia.get("matched") or []
+        if len(matched) > 1:
+            lines.append(f"UIA found {len(matched)} windows matching that title, so "
+                         f"it cannot tell which one you mean. Re-run with one of:")
+            lines.extend(f"    --title {title!r}" for title in matched)
+        elif uia.get("open_windows"):
+            lines.append("UIA found no window with that title. What is open:")
+            lines.extend(f"    --title {title!r}" for title in uia["open_windows"])
+            lines.append("  Pick one and re-run. Globs are fine: '*3DEXPERIENCE*'.")
+        else:
+            lines.append(f"UIA failed: {uia['error']}")
     else:
         named = uia.get("with_name", 0)
         identified = uia.get("with_automation_id", 0)
@@ -304,7 +351,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--watch", type=int, default=0,
                         help="seconds to report the focused element, once a second")
     parser.add_argument("--out", default=None)
+    parser.add_argument("--list", action="store_true",
+                        help="just list the open top-level windows and stop, to "
+                             "find the title to pass to --title")
     args = parser.parse_args(argv)
+
+    if args.list:
+        titles = top_level_titles(args.title)
+        if not titles:
+            print(f"no top-level window matching {args.title!r}")
+            return 1
+        print(f"{len(titles)} top-level window(s) matching {args.title!r}:")
+        for title in titles:
+            print(f"  --title {title!r}")
+        return 0
 
     stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     out_dir = Path(args.out or f"probe-{stamp}")
@@ -340,7 +400,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"walking the UIA tree for windows matching {args.title!r} ...")
     uia = probe_uia(args.title, out_dir)
-    print(f"  {uia}")
+    if uia.get("error"):
+        print(f"  {uia['error']}")
+        for title in uia.get("matched") or uia.get("open_windows") or []:
+            print(f"    open: {title!r}")
+    else:
+        print(f"  {uia}")
 
     if args.watch:
         print(f"watching the focused element for {args.watch}s -- click around the panel now")
