@@ -1,1228 +1,266 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Understudy</title>
+<!--
+  One window, one flow, one run.
+
+  This page was a file tree, collections, tabs, comparisons, tags and a
+  repository panel, built around a shape the tool turned out not to have. What
+  it actually does is record a click path against a Windows application, replay
+  it with different prompts, and show what came back. Everything else was in
+  the way of finding out whether that worked.
+-->
 <style>
   :root {
-    --bg:#1c2025; --panel:#252a31; --side:#20242a; --line:#39414b; --text:#e6eaef;
-    --dim:#9aa5b1; --accent:#4f9dd9; --ok:#4fd98a; --bad:#e05c5c; --warn:#e0a94f;
+    --bg:#1c2025; --panel:#252a31; --line:#39414b; --text:#e6eaef;
+    --dim:#9aa5b1; --accent:#4f9dd9; --ok:#4fd98a; --bad:#e05c5c;
   }
   * { box-sizing: border-box; }
-  /* A class that sets display beats the browser's own rule for [hidden], so
-     `class="row" hidden` stays visible. Every hidden thing in this page is a
-     row or a flex container, so this is not an edge case. */
   [hidden] { display: none !important; }
-  body { margin:0; height:100vh; display:grid; grid-template-rows:auto 1fr;
-         font:13px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; gap:12px; padding:8px 14px;
-           background:var(--panel); border-bottom:1px solid var(--line); }
+  body { margin:0; font:13px/1.55 system-ui, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:10px 18px;
+           background:var(--panel); border-bottom:1px solid var(--line);
+           position:sticky; top:0; z-index:5; }
   h1 { font-size:15px; margin:0; font-weight:650; letter-spacing:.02em; }
-  #current { font-weight:600; } #currentDesc { font-size:12px; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+       color:var(--dim); margin:0 0 10px; font-weight:600; }
+  main { max-width:1000px; margin:0 auto; padding:18px; display:grid; gap:14px; }
   label { color:var(--dim); font-size:12px; }
-  select, input, button, textarea {
+  input, button, textarea, select {
     background:#1a1e23; color:var(--text); border:1px solid var(--line);
-    border-radius:4px; padding:5px 8px; font:inherit; }
+    border-radius:4px; padding:6px 9px; font:inherit; }
   button { cursor:pointer; background:#2f3841; }
   button:hover { background:#3a4552; }
   button.primary { background:var(--accent); border-color:var(--accent);
                    color:#0d1319; font-weight:600; }
-  button.primary:disabled { opacity:.5; cursor:default; }
-  button.link { background:none; border:none; color:var(--dim); padding:2px 5px; }
-  #newRecord { display:inline-flex; align-items:center; gap:6px; }
+  button:disabled { opacity:.45; cursor:default; }
   .rec-dot { width:9px; height:9px; border-radius:50%; background:var(--bad);
-             box-shadow:0 0 0 2px rgba(224,92,92,.25); flex:none; }
-  button.link:hover { color:var(--text); background:#333c47; }
-
-  #body { display:grid; grid-template-columns:290px 1fr; min-height:0; }
-  #sidebar { background:var(--side); border-right:1px solid var(--line);
-             overflow:auto; padding:10px; }
-  #sidebar h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
-                color:var(--dim); margin:14px 0 6px; }
-  .tree-group { margin-bottom:6px; }
-  .tree-group > .head { display:flex; align-items:center; gap:6px; padding:4px 6px;
-                        border-radius:4px; font-weight:600; }
-  .tree-group > .head:hover { background:#2b323a; }
-  .tree-item { display:flex; align-items:center; gap:6px; padding:4px 6px 4px 20px;
-               border-radius:4px; cursor:pointer; }
-  .tree-item:hover { background:#2b323a; }
-  .tree-item.active { background:#31435a; }
-  /* A flow's runs, under the flow. Indented so the nesting is obvious at a
-     glance and the eye can skip the whole block. */
-  .run-list { margin:0 0 6px; }
-  .run { display:flex; align-items:center; gap:6px; padding:3px 6px 3px 34px;
-         font-size:12px; cursor:pointer; color:var(--dim, #9aa5b1); }
-  .run:hover { background:#2b323a; }
-  .run.active { background:#31435a; color:var(--text); }
-  .run .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .run .pick { cursor:pointer; margin:0; }
-  .run .count.bad { color:#e05c5c; }
-  .compare-bar { padding:2px 6px 6px 34px; }
-  .run-filter { width:calc(100% - 40px); margin:2px 6px 4px 34px; font-size:12px;
-                padding:2px 6px; }
-  .tree-item .label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .tree-item .count { color:var(--dim); font-size:11px; }
-  /* Right-click, not a row of link buttons that appear on hover. Hover
-     buttons in a narrow column crowd the name they belong to, and "del"
-     one pixel from "copy" is a bad place to be imprecise. */
-  #menu { position:fixed; z-index:50; min-width:170px; padding:4px;
-          background:var(--panel); border:1px solid var(--line);
-          border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,.4);
-          display:flex; flex-direction:column; }
-  #menu button { border:none; background:none; text-align:left; color:var(--text);
-                 padding:6px 10px; border-radius:4px; font:inherit; }
-  #menu button:hover { background:#333c47; }
-  #menu button.danger:hover { background:rgba(224,92,92,.2); color:#ffb3b3; }
-  #menu .sep { height:1px; margin:4px 6px; background:var(--line); }
-  #menu .heading { padding:4px 10px 6px; font-size:11px; color:var(--dim);
-                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #menu .has-submenu button { display:flex; width:100%; align-items:center;
-                              justify-content:space-between; gap:12px; }
-  #menu .chevron { color:var(--dim); }
-  .flyout { position:fixed; z-index:51; min-width:150px; max-height:60vh;
-            overflow:auto; padding:4px; background:var(--panel);
-            border:1px solid var(--line); border-radius:6px;
-            box-shadow:0 6px 20px rgba(0,0,0,.4);
-            display:flex; flex-direction:column; }
-  .flyout button { border:none; background:none; text-align:left;
-                   color:var(--text); padding:6px 10px; border-radius:4px;
-                   font:inherit; white-space:nowrap; }
-  .flyout button:hover { background:#333c47; }
-  .desc { color:var(--dim); font-size:11px; padding:0 6px 4px 20px; }
-
-  main { overflow:auto; min-height:0; }
-  .pane { padding:14px; overflow:auto; }
-  section { display:none; } section.active { display:block; }
-  textarea { width:100%; height:calc(100vh - 250px); min-height:280px;
-             font-family:ui-monospace,"DejaVu Sans Mono",monospace; font-size:12.5px;
-             white-space:pre; resize:vertical; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+             box-shadow:0 0 0 2px rgba(224,92,92,.25); display:inline-block;
+             margin-right:6px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:6px; padding:14px; }
+  .row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .row:last-child { margin-bottom:0; }
   .grow { flex:1; }
-  .muted { color:var(--dim); } .ok { color:var(--ok); } .bad { color:var(--bad); }
-  .warn { color:var(--warn); }
-  #log { background:#12161a; border:1px solid var(--line); border-radius:4px;
-         padding:10px; height:220px; overflow:auto;
-         font-family:ui-monospace,monospace; font-size:12px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:6px;
-          padding:12px; margin-bottom:12px; }
-  .card h3 { margin:0 0 6px; font-size:14px; }
-  pre { background:#12161a; border:1px solid var(--line); border-radius:4px;
-        padding:8px; overflow:auto; margin:6px 0; white-space:pre-wrap; }
-  .shots { display:flex; gap:8px; flex-wrap:wrap; }
-  .shots figure { margin:0; } .shots img { width:300px; border:1px solid var(--line);
-        border-radius:4px; display:block; }
-  figcaption { color:var(--dim); font-size:11px; padding-top:3px; }
-  table { border-collapse:collapse; width:100%; font-size:12px; }
-  th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); }
-  th { color:var(--dim); font-weight:600; }
-  .pill { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px;
-          font-weight:600; }
-  .pill.ok { background:rgba(79,217,138,.15); } .pill.bad { background:rgba(224,92,92,.15); }
-  .pill.warn { background:rgba(224,169,79,.15); }
-  .notice { border-left:3px solid var(--warn); padding:8px 12px;
-            background:rgba(224,169,79,.08); border-radius:0 4px 4px 0; }
-  button.toggle { opacity:.55; }
-  /* One control rather than five boxes. A tag is a word; a tag with a known
-     prefix in front of it fills a field the comparison can label a column
-     with, which is the only reason the fields still exist. */
-  .chips { display:flex; flex-wrap:wrap; align-items:center; gap:5px; flex:1;
-           min-height:31px; padding:3px 6px; border:1px solid var(--line);
-           border-radius:4px; background:#1a1e23; }
-  .chips .chip { display:inline-flex; align-items:center; gap:5px; padding:1px 4px 1px 9px;
-                 border:1px solid var(--line); border-radius:11px; font-size:12px;
-                 background:var(--panel); }
-  .chips .chip.free { border-style:dashed; }
-  .chips .chip button { border:none; background:none; color:var(--dim); padding:0 3px;
-                        font-size:13px; line-height:1; cursor:pointer; }
-  .chips .chip button:hover { color:var(--bad); background:none; }
-  .chips input { flex:1; min-width:170px; border:none; background:none; padding:2px; }
-  .chips input:focus { outline:none; }
-  .segmented { display:inline-flex; border:1px solid var(--line); border-radius:5px;
-               overflow:hidden; }
-  .segmented button { border:none; border-radius:0; background:#1a1e23;
-                      color:var(--dim); padding:5px 12px; }
-  .segmented button + button { border-left:1px solid var(--line); }
-  .segmented button.on { background:var(--accent); color:#0d1319; font-weight:600; }
-  .source-field { transition:opacity .12s ease; }
-  .source-field.off { opacity:.35; }
-  .source-field.off input { cursor:not-allowed; }
-  .badge { display:inline-block; min-width:8px; padding:0 5px; border-radius:8px;
-           font-size:11px; color:var(--dim); }
-  .badge.on { background:var(--accent); color:#0d1319; font-weight:700; }
-  #settings { font-size:15px; line-height:1; padding:5px 9px; }
-  #settingsMenu { position:absolute; right:14px; top:44px; z-index:10;
-                  background:var(--panel); border:1px solid var(--line);
-                  border-radius:6px; padding:4px; display:flex;
-                  flex-direction:column; min-width:150px; }
-  #settingsMenu button { border:none; background:none; text-align:left;
-                         padding:6px 10px; border-radius:4px; }
-  #settingsMenu button:hover { background:#333c47; }
-  button.toggle.on { opacity:1; border-color:var(--accent); color:var(--text); }
-  #cmpStatus { padding:4px 0 2px; }
-  #cmpStatus a { color:var(--accent); margin-left:4px; }
-  #cmpStatus .pill { margin-right:6px; }
-  #cmpFrame { width:100%; height:calc(100vh - 250px); min-height:380px;
-              border:1px solid var(--line); border-radius:6px;
-              background:var(--bg); }
-  #transcriptFrame { width:100%; height:calc(100vh - 190px); min-height:420px;
-                     border:1px solid var(--line); border-radius:6px;
-                     background:var(--bg); }
-  #transcriptStatus { min-height:18px; padding-bottom:6px; font-size:12px; }
+  .muted { color:var(--dim); }
+  .pill { font-size:11px; padding:1px 7px; border-radius:9px;
+          background:#333c47; color:var(--dim); }
+  .pill.ok { background:rgba(79,217,138,.16); color:var(--ok); }
+  .pill.bad { background:rgba(224,92,92,.16); color:var(--bad); }
+  textarea { width:100%; min-height:280px; font-family:ui-monospace, monospace;
+             font-size:12px; white-space:pre; margin-top:8px; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word;
+        font-family:ui-monospace, monospace; font-size:12px; }
+  pre.bad { color:var(--bad); }
+  #log { font-family:ui-monospace, monospace; font-size:12px;
+         max-height:180px; overflow:auto; }
+  #log .bad { color:var(--bad); }
+  .turn { border-top:1px solid var(--line); padding:12px 0; }
+  .turn:first-child { border-top:none; }
+  .said { color:var(--dim); font-size:12px; margin-bottom:2px; }
+  .shots { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .shots img { max-height:140px; border:1px solid var(--line); border-radius:4px;
+               cursor:zoom-in; }
+  .shots img.big { max-height:none; width:100%; cursor:zoom-out; }
+  details summary { cursor:pointer; color:var(--dim); font-size:12px; }
 </style>
 
 <header>
   <h1>Understudy</h1>
-  <div>
-    <div id="current" class="muted">no flow open</div>
-    <div id="currentDesc" class="muted"></div>
-  </div>
+  <span id="flowName" class="muted">no flow yet</span>
   <span class="grow"></span>
-  <button id="validate">Validate</button>
-  <button id="run" class="primary">Replay</button>
-  <button id="settings" title="Repository and credentials">⚙<span id="repoBadge"
-    class="badge"></span></button>
-  <div id="settingsMenu" hidden>
-    <button data-view="repo">Repository</button>
-    <button data-view="credentials">Credentials</button>
-  </div>
+  <button id="record"><span class="rec-dot"></span>Record</button>
+  <button id="replay" class="primary" disabled>Replay</button>
 </header>
 
-<div id="menu" hidden></div>
-
-<div id="body">
-  <aside id="sidebar">
+<main>
+  <section class="card">
+    <h2>The application</h2>
     <div class="row">
-      <button id="newFlow">+ Flow</button>
-      <button id="newCollection">+ Collection</button>
-      <button id="newRecord" title="Create a flow and start recording">
-        <span class="rec-dot"></span>Record</button>
+      <label style="width:70px">Window</label>
+      <input id="window" class="grow" placeholder="3DEXPERIENCE">
+      <input id="process" placeholder="3DEXPERIENCE.exe" style="width:210px">
+      <button id="pick">Pick…</button>
     </div>
-    <div id="tree"></div>
-  </aside>
-
-  <main>
-    <div class="pane">
-      <!-- No tabs. What is on the right is whatever is selected on the left:
-           a flow, one of its runs, or two of them. Settings are behind the
-           gear because they are configuration, not content. -->
-      <section id="tab-flow" class="active">
-        <div class="row">
-          <label id="drivesLabel" title="The window this flow drives">Drives a Windows application</label>
-          <label title="Capture a screenshot after every step, not only where the flow asks for one"><input id="captureSteps" type="checkbox"> screenshots</label>
-          <label title="Record the replay to video"><input id="record" type="checkbox"> record video</label>
-          <label title="When the flow's own strategies cannot find a control, let a model look at the screen and find it. Off means the step fails instead — which is what you want when you are testing whether the flow still works."><input id="agentFallback" type="checkbox"> use agent</label>
-        </div>
-        <div class="row">
-          <label style="width:74px" title="Recorded against every reply, so two runs can be compared later">Under test</label>
-          <div id="subjectTags" class="chips">
-            <input id="tagInput" list="known-tags" autocomplete="off"
-                   placeholder="R2026x, FD03, app:CATIA V5 …">
-          </div>
-        </div>
-        <datalist id="known-tags"></datalist>
-        <div id="validation"></div>
-        <div class="row">
-          <strong id="flowPath" class="muted">no flow open</strong>
-          <span class="grow"></span>
-          <button data-save="flow">Save</button>
-          <button data-saveas="flow">Save as…</button>
-          <button id="duplicate">Duplicate…</button>
-          <button id="pickWindow">Pick window…</button>
-          <button id="recordSteps"><span class="rec-dot"></span>Record steps</button>
-          <button id="deleteFlow">Delete…</button>
-        </div>
-        <textarea id="flowText" spellcheck="false"></textarea>
-        <div id="log"></div>
-      </section>
-
-      <section id="tab-transcript">
-        <div class="row">
-          <strong id="transcriptPath" class="muted">no transcript yet</strong>
-          <span class="grow"></span>
-          <button id="viewRendered" class="toggle on">Rendered</button>
-          <button id="viewSource" class="toggle">Markdown</button>
-          <button id="rebuildTranscript">Rebuild</button>
-          <label>Export</label>
-          <a id="exportMd" download><button>.md</button></a>
-          <button id="exportHtml">.html</button>
-          <button id="exportPdf">.pdf</button>
-        </div>
-        <div id="transcriptStatus" class="muted"></div>
-        <iframe id="transcriptFrame" title="transcript"></iframe>
-        <pre id="transcriptText" class="muted" hidden>Run a flow to produce a transcript.</pre>
-      </section>
-
-      <section id="tab-compare">
-        <div class="row">
-          <label style="width:52px">Before</label>
-          <select id="cmpLeft" class="grow"></select>
-        </div>
-        <div class="row">
-          <label style="width:52px">After</label>
-          <select id="cmpRight" class="grow"></select>
-          <button id="cmpGo" class="primary">Compare</button>
-        </div>
-        <div id="cmpStatus" class="muted"></div>
-        <div class="row" id="cmpExports" hidden>
-          <span class="grow"></span>
-          <label>Export</label>
-          <a id="cmpMd" download><button>.md</button></a>
-          <a id="cmpHtml" download><button>.html</button></a>
-        </div>
-        <iframe id="cmpFrame" title="comparison" hidden></iframe>
-        <p id="cmpEmpty" class="muted">Pick two runs of the same flow. The
-          columns are labelled with what each was run against, so the answer is
-          "R32 said this, R33 says that" rather than two timestamps.</p>
-      </section>
-
-      <section id="tab-record">
-        <div class="row"><button class="link back">‹ back</button></div>
-        <div class="card">
-          <div class="row">
-            <label style="width:110px">Window</label>
-            <input id="recWindow" class="grow" placeholder="3DEXPERIENCE">
-            <button id="recPick">Pick window…</button>
-          </div>
-          <div class="row">
-            <label style="width:110px">Process</label>
-            <input id="recProcess" class="grow" placeholder="3DEXPERIENCE.exe">
-          </div>
-          <div class="row">
-            <label style="width:110px">Call it</label>
-            <input id="recName" class="grow" placeholder="leo-basics">
-            <button id="recStart" class="primary"><span class="rec-dot"></span>Start recording</button>
-          </div>
-        </div>
-        <div class="notice">
-          <p><strong>While it records:</strong> do the thing once. Every click
-          becomes a picture of what you clicked on, and what you type becomes
-          the prompt. Your clicks go through to the application as normal.</p>
-          <p>Wait for the reply to finish arriving, then
-          <strong>ctrl+alt+s</strong> to stop. Whatever changed on screen while
-          you waited is the area the flow reads back, so nothing needs marking
-          by hand.</p>
-          <p>Nothing is read from the accessibility tree or from a web view:
-          pictures for the clicks, OCR for the reading. Every interaction also
-          keeps the whole window, so what you clicked on can be named
-          afterwards rather than guessed at.</p>
-        </div>
-        <div id="recStatus"></div>
-      </section>
-
-      <section id="tab-repo">
-        <div class="row"><button class="link back">‹ back</button></div>
-        <div class="card">
-          <div class="row">
-            <label style="width:78px">Workspace</label>
-            <code id="repoRoot" class="grow"></code>
-            <select id="repoRecent" style="max-width:280px"></select>
-            <button id="repoConnectToggle">Change…</button>
-          </div>
-
-          <div id="repoConnect" hidden>
-            <div class="row" style="margin-top:6px">
-              <label style="width:78px">Source</label>
-              <div class="segmented">
-                <button data-kind="local" class="on">Local folder</button>
-                <button data-kind="github">GitHub</button>
-                <button data-kind="gitlab">GitLab</button>
-              </div>
-            </div>
-            <div class="row source-field" data-for="github gitlab">
-              <label style="width:78px"><span id="projectLabel">Repository</span></label>
-              <input id="repoProject" class="grow" placeholder="owner/repo">
-            </div>
-            <div class="row source-field" data-for="gitlab">
-              <label style="width:78px">Host</label>
-              <input id="repoHost" class="grow"
-                     placeholder="gitlab.com — or your company's instance">
-            </div>
-            <div class="row">
-              <label style="width:78px"><span id="dirLabel">Folder</span></label>
-              <input id="repoDirectory" class="grow" placeholder="C:\Users\you\flows">
-              <button id="repoConnectGo" class="primary">Connect</button>
-            </div>
-            <p class="muted source-field" data-for="github gitlab">
-              Cloned with your saved token for that host, or your credential
-              helper or SSH key. An existing checkout is opened, not re-cloned.</p>
-            <p class="muted source-field" data-for="local">
-              A plain folder. Only committing and publishing need a repository.</p>
-          </div>
-          <div id="repoOpenOut"></div>
-        </div>
-
-        <div id="repoReadOnly" class="notice" hidden></div>
-
-        <div id="repoNotRepo" class="notice" hidden>
-          <strong>This workspace is not a git checkout.</strong>
-          <p>Understudy keeps flows and their evidence in a repository by
-          driving the <code>git</code> you already have, so it works the same
-          against GitHub, GitLab, a self-hosted GitLab, or anything else that
-          speaks git — and inherits your credential helper, proxy and SSH
-          setup.</p>
-          <p>Clone your flow repository and start Understudy with
-          <code>--workspace</code> pointing at it, or run
-          <code>git init</code> here and add a remote.</p>
-        </div>
-
-        <div id="repoPanel" hidden>
-          <div class="row">
-            <label>Branch</label>
-            <select id="repoBranch"></select>
-            <span id="repoTracking" class="muted"></span>
-            <span class="grow"></span>
-            <button id="repoPull">Pull</button>
-            <button id="repoPush" class="primary">Push</button>
-          </div>
-          <div class="row">
-            <span id="repoRemote" class="muted"></span>
-            <span class="grow"></span>
-            <a id="repoOpen" target="_blank" rel="noopener"><button class="link">Open on the web</button></a>
-          </div>
-          <div id="repoStatus"></div>
-
-          <div class="card">
-            <h3>Changes <span id="repoCount" class="muted"></span></h3>
-            <div id="repoChanges" class="muted">Nothing has changed.</div>
-            <div class="row" style="margin-top:10px">
-              <input id="repoMessage" class="grow" placeholder="Commit message">
-              <button id="repoCommit" class="primary">Commit selected</button>
-            </div>
-            <p class="muted">Only the files you tick are staged — never
-              <code>git add -A</code> in a repository you are also working in.</p>
-          </div>
-
-          <div class="card">
-            <h3>Publish a run</h3>
-            <p class="muted">Commits the transcript, results and screenshots.
-              Recordings are left out by default — they are the largest part of
-              a run and git keeps them forever.</p>
-            <div class="row">
-              <select id="repoRun" class="grow"></select>
-              <label><input id="repoWithVideo" type="checkbox"> include video</label>
-              <button id="repoPublish" class="primary">Publish</button>
-            </div>
-            <div id="repoPublishOut"></div>
-          </div>
-
-          <div class="card">
-            <h3>Recent commits</h3>
-            <div id="repoLog" class="muted">No history yet.</div>
-          </div>
-        </div>
-      </section>
-
-      <section id="tab-credentials">
-        <div class="row"><button class="link back">‹ back</button></div>
-        <div class="card" style="max-width:720px">
-          <h3>Claude API access</h3>
-          <p class="muted">Needed only for the agent fallback and for step
-            narration. Everything else runs without it.</p>
-          <div id="credState"></div>
-          <div class="row" style="margin-top:10px">
-            <label style="width:90px">API key</label>
-            <input id="apiKey" type="password" placeholder="sk-ant-api03-…" style="flex:1">
-          </div>
-          <div class="row"><label style="width:90px">Model</label>
-            <input id="apiModel" placeholder="claude-opus-5" style="flex:1"></div>
-          <div class="row"><label style="width:90px">Base URL</label>
-            <input id="apiBase" placeholder="(default)" style="flex:1"></div>
-          <div class="row">
-            <button id="saveCreds" class="primary">Save</button>
-            <button id="testCreds">Test connection</button>
-            <button id="clearCreds">Clear</button>
-          </div>
-          <div id="credResult"></div>
-          <p class="muted" style="margin-top:14px">
-            Saved to <code id="credPath"></code> with owner-only permissions —
-            outside the project, so it cannot be committed by accident. The key
-            is never sent back to this page; only the masked form above is. An
-            <code>ANTHROPIC_API_KEY</code> environment variable takes precedence
-            over the saved file.</p>
-          <details><summary class="muted">Example file</summary>
-            <pre>{
-  "api_key": "sk-ant-api03-REPLACE-ME",
-  "base_url": "",
-  "model": "claude-opus-5"
-}</pre>
-            <p class="muted">Committed as <code>credentials.example.json</code>.
-              A real one belongs at the path above, never in the repository.</p>
-          </details>
-        </div>
-
-        <div class="card" style="max-width:720px">
-          <h3>Git access tokens</h3>
-          <p class="muted">Only needed if pushing over HTTPS without a
-            credential helper. An SSH remote, or Git Credential Manager on
-            Windows, needs nothing here.</p>
-          <div id="gitTokens" class="muted">No tokens saved.</div>
-          <div class="row" style="margin-top:10px">
-            <label style="width:90px">Host</label>
-            <input id="gitHost" placeholder="github.com" style="flex:1" list="gitHostHints">
-            <datalist id="gitHostHints">
-              <option value="github.com"><option value="gitlab.com">
-            </datalist>
-          </div>
-          <div class="row">
-            <label style="width:90px">Token</label>
-            <input id="gitToken" type="password" placeholder="ghp_… or glpat-…" style="flex:1">
-          </div>
-          <div class="row">
-            <button id="saveGitToken" class="primary">Save token</button>
-            <span id="gitTokenHelp" class="muted"></span>
-          </div>
-          <div id="gitTokenResult"></div>
-          <p class="muted" style="margin-top:14px">
-            Stored per host in the same owner-only file, and never returned to
-            this page. A token saved for one host is never sent to another — a
-            GitHub token must not reach a self-hosted GitLab. When Understudy
-            uses one it passes it as a header for the length of a single
-            command; it is never written into <code>.git/config</code> or into
-            a remote URL, where it would sit in the checkout for anyone to
-            find.</p>
-          <p class="muted"><strong>GitHub:</strong> a fine-grained token with
-            <em>Contents: read and write</em> on the flow repository.
-            <strong>GitLab:</strong> a project or personal access token with
-            the <code>write_repository</code> scope.</p>
-        </div>
-      </section>
+    <div class="row">
+      <label style="width:70px">Call it</label>
+      <input id="name" class="grow" placeholder="leo-basics">
+      <span id="recordState" class="muted"></span>
     </div>
-  </main>
-</div>
+  </section>
+
+  <section class="card" id="recording" hidden>
+    <h2>Recording</h2>
+    <p>Do it once: click, type, and <strong>wait for the reply</strong>. Then
+    <strong>ctrl+alt+s</strong> to stop.</p>
+    <p class="muted">Every click becomes a picture of what you clicked on, and
+    the longest thing you type becomes the prompt. Whatever changed on screen
+    while you waited is the area read back with OCR. Your clicks go through to
+    the application as normal.</p>
+  </section>
+
+  <section class="card" id="flowCard" hidden>
+    <div class="row">
+      <h2 style="margin:0" class="grow">The flow</h2>
+      <span id="flowProblems"></span>
+      <button id="save">Save</button>
+    </div>
+    <details id="flowDetails">
+      <summary>Show what it recorded</summary>
+      <textarea id="flowText" spellcheck="false"></textarea>
+    </details>
+  </section>
+
+  <section class="card" id="runCard" hidden>
+    <div class="row">
+      <h2 style="margin:0" class="grow">The run</h2>
+      <span id="runState"></span>
+      <a id="transcriptLink" class="muted" hidden target="_blank">transcript</a>
+    </div>
+    <div id="log"></div>
+    <div id="turns"></div>
+  </section>
+</main>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { flow: null, flows: [], suites: [], runId: null, results: [],
-                transcript: null, transcriptHtml: null, outDir: null,
-                runFilter: "", run: null,
-                subject: { fields: {}, tags: [] } };
+const state = { flow: null };
 
-$("settings").onclick = () => {
-  $("settingsMenu").hidden = !$("settingsMenu").hidden;
-};
-document.querySelectorAll("#settingsMenu button").forEach((button) => {
-  button.onclick = () => showTab(button.dataset.view);
-});
-document.addEventListener("click", (event) => {
-  if (!event.target.closest("#settings") && !event.target.closest("#settingsMenu")) {
-    $("settingsMenu").hidden = true;
-  }
-});
-
-function showHeading() {
-  // The header says what the pane is about, because nothing else does now.
-  const flow = state.flow ? currentFlow() : null;
-  $("current").textContent = flow ? (flow.title || state.flow) : "no flow open";
-  $("current").classList.toggle("muted", !flow);
-  $("currentDesc").textContent = state.run
-    ? runLabel(state.run) + " · " + (state.run.name || "")
-    : (flow ? flow.description || "" : "");
-  // Replaying is a thing you do to a flow, not to a run you are reading.
-  $("run").hidden = !state.flow;
-  $("validate").hidden = !state.flow;
-  const broken = Boolean(flow && flow.error);
-  $("run").disabled = broken;
-  $("run").title = broken ? "This flow does not load yet — see the problems below" : "";
+async function api(path) {
+  const response = await fetch(path);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || response.statusText);
+  return body;
 }
 
-function runLabel(run) {
-  return run.short || run.subject || run.name || "run";
-}
-// The right-hand pane is whatever is selected on the left. There is no tab to
-// press: pressing one was always a second way of saying what the selection
-// already said, and the two could disagree.
-function showTab(name) {
-  document.querySelectorAll("section").forEach((s) =>
-    s.classList.toggle("active", s.id === "tab-" + name));
-  $("settingsMenu").hidden = true;
-}
-
-async function api(path, options) {
-  const response = await fetch(path, options);
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || response.statusText);
-  return payload;
-}
-const post = (path, body) => api(path, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body || {}),
-});
-function escapeHtml(text) {
-  return String(text).replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
-const currentFlow = () => state.flows.find((f) => f.path === state.flow) || {};
-
-/* ---------- sidebar ---------- */
-
-async function loadTree() {
-  const [{ flows }, { suites }] = await Promise.all([
-    api("/api/flows"), api("/api/suites"),
-  ]);
-  state.flows = flows; state.suites = suites;
-
-  const tree = $("tree");
-  tree.innerHTML = "";
-  const inSuite = new Set();
-
-  suites.forEach((suite) => {
-    (suite.flows || []).forEach((entry) => inSuite.add(entry.path));
-    tree.appendChild(group(suite.name, suite.path, suite.description,
-      (suite.flows || []).map((entry) => entry.path), suite.error));
+async function post(path, payload) {
+  const response = await fetch(path, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
-
-  const loose = flows.filter((flow) => !inSuite.has(flow.path));
-  if (loose.length) {
-    const heading = document.createElement("h2");
-    heading.textContent = suites.length ? "Not in a collection" : "Flows";
-    tree.appendChild(heading);
-    loose.forEach((flow) => tree.appendChild(item(flow)));
-  }
-  markActive();
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || response.statusText);
+  return body;
 }
 
-function group(name, path, description, flowPaths, error) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "tree-group";
-  const head = document.createElement("div");
-  head.className = "head";
-  head.innerHTML = `<span>${escapeHtml(name)}</span>
-    <span class="count" title="${flowPaths.length} flow(s) in this collection"
-      >${flowPaths.length}</span>`;
-  head.oncontextmenu = (event) => openMenu(event, name, [
-    ["Open", () => openFlow(path)],
-    "-",
-    ["Delete collection…", () => removeCollection(path, name), true],
-  ]);
-  wrapper.appendChild(head);
-  if (description) {
-    const line = document.createElement("div");
-    line.className = "desc"; line.textContent = description;
-    wrapper.appendChild(line);
-  }
-  if (error) {
-    const line = document.createElement("div");
-    line.className = "desc bad"; line.textContent = error;
-    wrapper.appendChild(line);
-  }
-  flowPaths.forEach((flowPath) => {
-    const flow = state.flows.find((f) => f.path === flowPath)
-      || { path: flowPath, title: flowPath, variants: 0 };
-    wrapper.appendChild(item(flow));
-  });
-  return wrapper;
-}
+const escapeHtml = (text) => String(text ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function item(flow) {
-  const wrapper = document.createElement("div");
-  const row = document.createElement("div");
-  row.className = "tree-item";
-  row.dataset.path = flow.path;
-  row.innerHTML = `<span class="label" title="${escapeHtml(flow.path)}">${
-    escapeHtml(flow.error ? flow.path : flow.title)}</span>
-    <span class="count" title="${escapeHtml(flow.error
-        || flow.variants + " prompt(s) in this flow")}"
-      >${flow.error ? "will&nbsp;not&nbsp;load"
-        : (flow.variants
-            ? flow.variants + (flow.variants === 1 ? "&nbsp;prompt" : "&nbsp;prompts")
-            : "")}</span>`;
-  if (flow.error) row.querySelector(".label").classList.add("bad");
-  row.onclick = () => openFlow(flow.path);
-  row.oncontextmenu = (event) => openMenu(event, flow.title || flow.path, [
-    ["Open", () => openFlow(flow.path)],
-    ["Replay", () => openFlow(flow.path).then(() => $("run").click())],
-    ["Validate", () => openFlow(flow.path).then(() => $("validate").click())],
-    "-",
-    ["Record steps", () => openFlow(flow.path).then(() => showTab("record"))],
-    "-",
-    ["Duplicate…", () => duplicateFlow(flow.path)],
-    ["Save as…", () => openFlow(flow.path).then(() => {
-      const to = prompt("Save as (path in the workspace)", flow.path);
-      if (to) saveFlow(to).catch((error) => alert(error.message));
-    })],
-    ["Delete…", () => removeFlow(flow.path, flow.title), true],
-  ]);
-  wrapper.appendChild(row);
-  wrapper.appendChild(runList(flow));
-  return wrapper;
-}
+/* ---------- the flow ---------- */
 
-// One flow is replayed many times -- against this release, then the next, then
-// again after a fix. Its runs belong under it, where you look for them.
-function runList(flow) {
-  const list = document.createElement("div");
-  list.className = "run-list";
-  list.dataset.for = flow.path;
-  list.hidden = state.flow !== flow.path;
-
-  const all = knownRuns.filter((r) => r.flow && r.flow === flow.name);
-  if (!all.length) {
-    list.innerHTML = `<div class="run muted">no runs yet</div>`;
-    return list;
-  }
-  // Filtering by what was under test, because after a month of runs the
-  // question is "FD03 against FD04", not "the ninth one against the fourth".
-  const needle = (state.runFilter || "").toLowerCase();
-  const runs = !needle ? all : all.filter((r) =>
-    (r.tags || []).concat(r.name).join(" ").toLowerCase().includes(needle));
-  if (all.length > 3) {
-    const box = document.createElement("input");
-    box.className = "run-filter";
-    box.placeholder = "filter by version…";
-    box.value = state.runFilter || "";
-    box.oninput = () => { state.runFilter = box.value; loadTree(); };
-    list.appendChild(box);
-  }
-  if (!runs.length) {
-    const none = document.createElement("div");
-    none.className = "run muted";
-    none.textContent = `no run matches "${state.runFilter}"`;
-    list.appendChild(none);
-    return list;
-  }
-  runs.forEach((run, index) => {
-    const failed = run.total && run.ok < run.total;
-    const line = document.createElement("div");
-    line.className = "run";
-    // The tick is how two runs get chosen for a comparison; the rest of the
-    // row opens one. The same list, both jobs, no second place to look.
-    line.innerHTML = `<input type="checkbox" class="pick" title="compare">
-      <span class="label">${escapeHtml(run.short || run.subject || run.name)}</span>
-      <span class="count ${failed ? "bad" : ""}"
-        title="${run.ok} of ${run.total} prompt run(s) passed"
-        >${run.ok}/${run.total}</span>`;
-    // The whole subject on hover: the row shows only what distinguishes this
-    // run from the others, because the list is narrow and the shared half is
-    // the half that gets truncated over the top of the useful one.
-    line.title = [run.subject, run.name, run.when].filter(Boolean).join(" · ");
-    line.dataset.dir = run.dir;
-    if (state.run && state.run.dir === run.dir) line.classList.add("active");
-    const tick = line.querySelector(".pick");
-    tick.dataset.dir = run.dir;
-    tick.onclick = (event) => { event.stopPropagation(); refreshCompareBar(); };
-    line.onclick = () => openRun(run);
-    // Every other run of this flow, newest first -- the only set a comparison
-    // makes sense across. The one directly below is the one before it in time,
-    // and comes first because "did this change?" usually means "since when I
-    // last looked".
-    const others = runs.filter((other) => other.dir !== run.dir);
-    line.oncontextmenu = (event) => openMenu(event, run.subject || run.name, [
-      ["Open transcript", () => openRun(run)],
-      ...(others.length ? [{
-        submenu: "Compare with…",
-        items: others.map((other) => [
-          runLabel(other) + (other.when ? "  " + other.when.slice(0, 10) : ""),
-          () => compareRuns(other, run),
-        ]),
-      }] : []),
-      "-",
-      ["Rebuild transcript", () => rebuildRun(run)],
-      "-",
-      ["Export PDF", () => exportRun(run, "pdf")],
-      ["Export a standalone page", () => exportRun(run, "standalone")],
-      ["Download the markdown", () => download(run.dir + "/transcript.md")],
-      "-",
-      ["Publish to the repository…", () => publishRun(run)],
-    ]);
-    list.appendChild(line);
-  });
-  const bar = document.createElement("div");
-  bar.className = "compare-bar";
-  bar.hidden = true;
-  bar.innerHTML = `<button class="link">compare the two ticked</button>`;
-  bar.querySelector("button").onclick = () => compareTicked();
-  list.appendChild(bar);
-  return list;
-}
-
-function ticked() {
-  return [...document.querySelectorAll(".run-list:not([hidden]) .pick:checked")];
-}
-
-function refreshCompareBar() {
-  const chosen = ticked();
-  document.querySelectorAll(".compare-bar").forEach((bar) => {
-    bar.hidden = chosen.length !== 2;
-  });
-  // More than two is not a side-by-side, and silently ignoring the extras
-  // would compare a pair the reader did not choose.
-  if (chosen.length > 2) chosen[0].checked = false;
-}
-
-async function compareTicked() {
-  const [before, after] = ticked().map((box) => box.dataset.dir);
-  if (before && after) await compare(before, after);
-}
-
-async function compareRuns(before, after) {
-  await compare(before.dir, after.dir);
-}
-
-async function compare(before, after) {
-  await loadRuns().catch(() => {});
-  showTab("compare");
-  $("cmpLeft").value = before;
-  $("cmpRight").value = after;
-  $("cmpGo").click();
-}
-
-async function openRun(run) {
-  state.run = run;
-  document.querySelectorAll(".run-list .run").forEach((r) =>
-    r.classList.toggle("active", r.dataset.dir === run.dir));
-  showHeading();
-  showTab("transcript");
-  await loadTranscript(run.dir + "/transcript.md");
-}
-
-/* ---------- what the context menu does ---------- */
-
-async function rebuildRun(run) {
-  const rebuilt = await post("/api/transcript", { run_dir: run.dir });
-  await openRun(run);
-  await loadTranscript(rebuilt.transcript, rebuilt.transcript_html);
-  transcriptStatus("rebuilt", "ok");
-}
-
-async function exportRun(run, kind) {
-  await openRun(run);
-  transcriptStatus(kind === "pdf" ? "printing… this takes a few seconds"
-                                  : "writing a standalone page…");
-  const route = kind === "pdf" ? "/api/transcript/pdf"
-                               : "/api/transcript/standalone";
-  const done = await post(route, { run_dir: run.dir });
-  if (done.error) return transcriptStatus(done.error, "bad");
-  transcriptStatus("");
-  download(done.pdf || done.html);
-}
-
-function publishRun(run) {
-  // The repository view already asks the questions publishing needs -- which
-  // run, whether the video goes too, what the message says -- so this puts
-  // the run into it rather than committing behind a menu item.
-  showTab("repo");
-  const picker = $("repoRun");
-  if (picker) {
-    picker.value = run.dir;
-    showPublishPreview();
-  }
-}
-
-/* ---------- the context menu ---------- */
-
-function closeMenu() {
-  $("menu").hidden = true;
-  closeFlyouts();
-}
-
-function closeFlyouts() {
-  document.querySelectorAll(".flyout").forEach((node) => node.remove());
-}
-
-// "Compare with…" is a question with as many answers as there are other runs,
-// so it asks rather than guessing one. The list is the flow's own runs, which
-// is the only set a comparison makes sense across.
-function submenuItem(entry) {
-  const holder = document.createElement("div");
-  holder.className = "has-submenu";
-  const button = document.createElement("button");
-  button.innerHTML = `<span>${escapeHtml(entry.submenu)}</span><span
-    class="chevron">›</span>`;
-  holder.appendChild(button);
-
-  const open = () => {
-    closeFlyouts();
-    if (!entry.items.length) return;
-    const flyout = document.createElement("div");
-    flyout.className = "flyout";
-    for (const [text, handler] of entry.items) {
-      const child = document.createElement("button");
-      child.textContent = text;
-      child.onclick = () => { closeMenu(); handler(); };
-      flyout.appendChild(child);
-    }
-    document.body.appendChild(flyout);
-
-    // Beside the item it belongs to, and flipped or clamped rather than
-    // hanging off the edge -- the same rule as the menu itself.
-    const anchor = button.getBoundingClientRect();
-    const box = flyout.getBoundingClientRect();
-    const right = anchor.right + box.width + 4 <= window.innerWidth;
-    flyout.style.left = (right ? anchor.right + 2
-                               : Math.max(6, anchor.left - box.width - 2)) + "px";
-    flyout.style.top =
-      Math.max(6, Math.min(anchor.top, window.innerHeight - box.height - 6)) + "px";
-  };
-  button.onmouseenter = open;
-  button.onclick = (event) => { event.stopPropagation(); open(); };
-  return holder;
-}
-document.addEventListener("click", closeMenu);
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeMenu();
-});
-window.addEventListener("blur", closeMenu);
-
-function openMenu(event, heading, items) {
-  event.preventDefault();
-  event.stopPropagation();
-  const menu = $("menu");
-  menu.innerHTML = "";
-  if (heading) {
-    const label = document.createElement("div");
-    label.className = "heading";
-    label.textContent = heading;
-    menu.appendChild(label);
-  }
-  for (const entry of items) {
-    if (entry === "-") {
-      const rule = document.createElement("div");
-      rule.className = "sep";
-      menu.appendChild(rule);
-      continue;
-    }
-    if (entry.submenu) {
-      menu.appendChild(submenuItem(entry));
-      continue;
-    }
-    const [text, handler, danger] = entry;
-    const button = document.createElement("button");
-    button.textContent = text;
-    if (danger) button.className = "danger";
-    button.onmouseenter = closeFlyouts;
-    button.onclick = () => { closeMenu(); handler(); };
-    menu.appendChild(button);
-  }
-  menu.hidden = false;
-  // Placed after it is measurable, and kept on screen: a menu opened near the
-  // bottom of a long list otherwise puts Delete off the edge.
-  const box = menu.getBoundingClientRect();
-  const x = Math.min(event.clientX, window.innerWidth - box.width - 6);
-  const y = Math.min(event.clientY, window.innerHeight - box.height - 6);
-  menu.style.left = Math.max(6, x) + "px";
-  menu.style.top = Math.max(6, y) + "px";
-}
-
-function markActive() {
-  document.querySelectorAll(".tree-item").forEach((row) =>
-    row.classList.toggle("active", row.dataset.path === state.flow));
-  document.querySelectorAll(".run-list").forEach((list) =>
-    list.hidden = list.dataset.for !== state.flow);
-}
-
-/* ---------- which window the flow drives ---------- */
-
-// A native flow attaches by window title, and on a CAD workstation the title
-// is not enough on its own: 3DEXPERIENCE runs as several processes and more
-// than one owns a window of the same name. So this writes the process in too,
-// and the driver uses it to tell them apart.
-function withNativeTarget(text, title, process) {
-  const q = (value) => JSON.stringify(value);
-  const lines = [`window_title_pattern: ${q(title)}`];
-  if (process) lines.push(`process: ${q(process)}`);
-
-  const existing = text.match(/^([ \t]*)window_title_pattern:.*$/m);
-  if (existing) {
-    const indent = existing[1];
-    let out = text.replace(existing[0], `${indent}window_title_pattern: ${q(title)}`);
-    const owner = out.match(/^([ \t]*)process:.*$/m);
-    if (process && owner) return out.replace(owner[0], `${owner[1]}process: ${q(process)}`);
-    if (process) {
-      return out.replace(`${indent}window_title_pattern: ${q(title)}`,
-        `${indent}window_title_pattern: ${q(title)}\n${indent}process: ${q(process)}`);
-    }
-    return owner ? out.replace(owner[0] + "\n", "") : out;
-  }
-
-  const native = text.match(/^([ \t]*)native:[ \t]*$/m);
-  if (native) {
-    const indent = native[1] + "  ";
-    return text.replace(native[0],
-      native[0] + "\n" + lines.map((line) => indent + line).join("\n"));
-  }
-  const target = text.match(/^([ \t]*)target_app:[ \t]*$/m);
-  if (target) {
-    const indent = target[1] + "  ";
-    return text.replace(target[0],
-      `${target[0]}\n${indent}native:\n` +
-      lines.map((line) => indent + "  " + line).join("\n"));
-  }
-  return text.replace(/\s*$/, "") + "\n\ntarget_app:\n  native:\n" +
-    lines.map((line) => "    " + line).join("\n") + "\n";
-}
-
-function windowLabel(window) {
-  const size = `${window.width}\u00d7${window.height}`;
-  const owner = window.process || `pid ${window.pid}`;
-  return `${window.title || "(untitled)"} — ${owner} ${size}` +
-    (window.visible ? "" : " (hidden)");
-}
-
-async function pickWindow(event) {
-  let listed;
-  try {
-    listed = await api("/api/windows");
-  } catch (error) {
-    alert(error.message);
+// One flow at a time. Recording writes one and it becomes the current one:
+// that is the whole of the session model.
+async function loadFlow(preferred) {
+  const { flows } = await api("/api/flows");
+  const chosen = flows.find((f) => f.path === preferred) || flows[0];
+  if (!chosen) {
+    $("flowName").textContent = "no flow yet — record one";
+    $("replay").disabled = true;
     return;
   }
-  if (!listed.windows.length) {
-    openMenu(event, "Pick a window", [[
-      listed.supported ? "Nothing is open to pick"
-                       : "Only on Windows — this machine cannot look",
-      () => {},
-    ]]);
-    return;
-  }
-  openMenu(event, "Pick the window this flow drives",
-    listed.windows.map((window) => [windowLabel(window), () => {
-      $("flowText").value = withNativeTarget($("flowText").value,
-        window.title, window.process);
-    }]));
-}
-
-/* ---------- open / save / new / duplicate / delete ---------- */
-
-async function openFlow(path) {
-  const file = await api("/api/file?path=" + encodeURIComponent(path));
-  state.flow = path;
+  state.flow = chosen;
+  const file = await api("/api/file?path=" + encodeURIComponent(chosen.path));
   $("flowText").value = file.text;
-  $("flowPath").textContent = path;
-  $("flowPath").classList.remove("muted");
-  const flow = currentFlow();
-  // A different flow, so the run that was open is not this flow's run.
-  state.run = null;
-  markActive();
-  showHeading();
-  loadSubject(path);
-  showWhatItDrives(flow);
-  showProblems(flow);
-  showTab("flow");
+  $("flowName").textContent = chosen.title || chosen.path;
+  $("flowName").classList.remove("muted");
+  $("flowCard").hidden = false;
+  $("replay").disabled = Boolean(chosen.error);
+  showProblems(chosen);
+  fillFromFlow(file.text, chosen);
 }
 
-// A flow that will not load says so the moment it is opened. It used to say
-// nothing until Validate was pressed, while the header quietly claimed it
-// drove a web page -- so the first sign of a typo was a replay dying at the
-// first step.
+// The window a recorded flow drives is in the flow. Making somebody type it
+// again to replay it is asking a question the file already answered.
+function fillFromFlow(text, flow) {
+  if (!$("window").value && !flow.error) {
+    const title = (text.match(/window_title_pattern:\s*"?([^"\n]+)"?/) || [])[1];
+    if (title) $("window").value = title.trim();
+    const process = (text.match(/process:\s*"?([^"\n]+)"?/) || [])[1];
+    if (process) $("process").value = process.trim();
+  }
+  if (!$("name").value) $("name").value = flow.path.replace(/\.ya?ml$/, "");
+}
+
+// A flow that will not load says so here, rather than at the first step of a
+// replay.
 function showProblems(flow) {
-  const box = $("validation");
-  box.innerHTML = "";
-  if (!flow || !flow.error) return;
-  const problems = flow.problems && flow.problems.length
+  const box = $("flowProblems");
+  $("turns").innerHTML = "";
+  if (!flow.error) { box.innerHTML = ""; return; }
+  const problems = (flow.problems && flow.problems.length)
     ? flow.problems : [flow.error];
-  box.innerHTML = `<div class="card"><span class="pill bad">will not load</span>
-    <pre>${problems.map(escapeHtml).join("\n")}</pre></div>`;
+  box.innerHTML = '<span class="pill bad">will not load</span>';
+  $("flowDetails").open = true;
+  $("log").innerHTML = "";
+  $("runCard").hidden = false;
+  $("turns").innerHTML =
+    '<pre class="bad">' + problems.map(escapeHtml).join("\n") + '</pre>';
 }
 
-async function saveFlow(path) {
-  await post("/api/file", { path, text: $("flowText").value });
-  state.flow = path;
-  $("flowPath").textContent = path + "  (saved)";
-  await loadTree();
-  // Saving is how a broken flow gets fixed, so the verdict is re-read here:
-  // otherwise the problems stay on screen after the fix that cleared them.
-  const flow = currentFlow();
-  showHeading();
-  showWhatItDrives(flow);
-  showProblems(flow);
-}
-
-$("pickWindow").onclick = (event) => pickWindow(event);
-
-document.querySelectorAll("[data-save]").forEach((button) => {
-  button.onclick = () => saveFlow(state.flow).catch((e) => alert(e.message));
-});
-document.querySelectorAll("[data-saveas]").forEach((button) => {
-  button.onclick = () => {
-    const path = prompt("Save as (path in the workspace)", state.flow || "flow.yaml");
-    if (path) saveFlow(path).catch((e) => alert(e.message));
-  };
-});
-
-async function createFlow(thenRecord) {
-  const title = prompt("Title for the new flow", "New flow");
-  if (!title) return;
-  const suggested = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const path = prompt("File (path in the workspace)", `${suggested || "flow"}.yaml`);
-  if (!path) return;
-  const description = prompt("Description", "") || "";
+$("save").onclick = async () => {
+  if (!state.flow) return;
   try {
-    const made = await post("/api/new", { kind: "flow", path, title, description });
-    await loadTree();
-    await openFlow(made.path);
-    if (thenRecord) showTab("record");
+    await post("/api/file", { path: state.flow.path, text: $("flowText").value });
+    await loadFlow(state.flow.path);
   } catch (error) { alert(error.message); }
-}
+};
 
-$("newFlow").onclick = () => createFlow(false);
-// Recording writes the flow, so there is nothing to create first. Pressing
-// Record used to make an empty flow from a template and then explain that
-// recording did not exist.
-$("newRecord").onclick = () => openRecording("");
-function openRecording(suggested) {
-  if (suggested) $("recName").value = suggested;
-  showTab("record");
-  // Asked every time the panel opens: whether this machine can record at all
-  // is a property of the machine, and a button that looks live and does
-  // nothing is worse than one that says why it is disabled.
-  recordingState().then(showRecording);
-}
+/* ---------- which window ---------- */
 
-$("recordSteps").onclick = () => state.flow && openRecording(
-  (state.flow.split("/").pop() || "").replace(/\.ya?ml$/, ""));
+$("pick").onclick = async () => {
+  let listed;
+  try { listed = await api("/api/windows"); }
+  catch (error) { return alert(error.message); }
+  if (!listed.windows.length) {
+    return alert(listed.supported
+      ? "Nothing is open to pick."
+      : "Only on Windows — this machine cannot look.");
+  }
+  const lines = listed.windows.map((w, index) =>
+    `${index + 1}. ${w.title} — ${w.process || "pid " + w.pid} ${w.width}x${w.height}`);
+  const answer = prompt("Which window?\n\n" + lines.join("\n"), "1");
+  const chosen = listed.windows[Number(answer) - 1];
+  if (!chosen) return;
+  $("window").value = chosen.title;
+  $("process").value = chosen.process || "";
+};
 
 /* ---------- recording ---------- */
 
 async function recordingState() {
-  try {
-    return await api("/api/record");
-  } catch (error) {
-    return { available: false, reason: error.message };
-  }
+  try { return await api("/api/record"); }
+  catch (error) { return { available: false, reason: error.message }; }
 }
 
-function showRecording(state) {
-  const box = $("recStatus");
-  if (!state.available) {
-    box.innerHTML = `<div class="card"><span class="pill bad">not here</span>
-      <p>${escapeHtml(state.reason || "recording is unavailable")}</p></div>`;
-    $("recStart").disabled = true;
-    return;
-  }
-  $("recStart").disabled = state.running;
-  if (state.running) {
-    box.innerHTML = `<div class="card"><span class="pill">recording</span>
-      <p>Go and do it. <strong>ctrl+alt+r</strong> to mark the reply region,
-      <strong>ctrl+alt+s</strong> to stop.</p></div>`;
-  } else if (state.error) {
-    box.innerHTML = `<div class="card"><span class="pill bad">failed</span>
-      <pre>${escapeHtml(state.error)}</pre></div>`;
-  } else if (state.flow) {
-    box.innerHTML = `<div class="card"><span class="pill ok">recorded</span>
-      <p>${escapeHtml(state.flow)} — opening it.</p></div>`;
-  } else {
-    box.innerHTML = "";
-  }
+function showRecording(recording) {
+  $("recording").hidden = !recording.running;
+  $("record").disabled = recording.running || !recording.available;
+  $("recordState").textContent = recording.available
+    ? (recording.running ? "recording — ctrl+alt+s to stop" : "")
+    : (recording.reason || "recording is unavailable here");
 }
 
 async function watchRecording() {
-  const state = await recordingState();
-  showRecording(state);
-  if (state.running) return setTimeout(watchRecording, 1000);
-  if (state.flow) {
-    await loadTree();
-    await openFlow(state.flow);
-  }
+  const recording = await recordingState();
+  showRecording(recording);
+  if (recording.running) return setTimeout(watchRecording, 1000);
+  if (recording.error) return alert(recording.error);
+  if (recording.flow) await loadFlow(recording.flow);
 }
 
-$("recPick").onclick = async (event) => {
-  const listed = await api("/api/windows").catch(() => ({ windows: [] }));
-  if (!listed.windows.length) {
-    return openMenu(event, "Pick a window", [["Nothing to pick", () => {}]]);
-  }
-  openMenu(event, "Which window are you recording against?",
-    listed.windows.map((window) => [windowLabel(window), () => {
-      $("recWindow").value = window.title;
-      $("recProcess").value = window.process || "";
-    }]));
-};
-
-$("recStart").onclick = async () => {
+$("record").onclick = async () => {
   try {
     showRecording(await post("/api/record/start", {
-      title: $("recWindow").value.trim() || "*",
-      process: $("recProcess").value.trim(),
-      name: $("recName").value.trim() || "recorded",
+      title: $("window").value.trim() || "*",
+      process: $("process").value.trim(),
+      name: $("name").value.trim() || "recorded",
     }));
     watchRecording();
-  } catch (error) {
-    alert(error.message);
-  }
-};
-document.querySelectorAll("button.back").forEach((button) => {
-  // Every view but the main one needs a way out, since no tab bar offers one.
-  button.onclick = () => showTab(state.run ? "transcript" : "flow");
-});
-
-$("newCollection").onclick = async () => {
-  const name = prompt("Name for the collection", "New collection");
-  if (!name) return;
-  const suggested = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const path = prompt("File (path in the workspace)", `${suggested || "suite"}.yaml`);
-  if (!path) return;
-  try {
-    await post("/api/new", { kind: "suite", path, title: name,
-                             description: prompt("Description", "") || "" });
-    await loadTree();
   } catch (error) { alert(error.message); }
 };
 
-async function duplicateFlow(source) {
-  const flow = state.flows.find((f) => f.path === source) || {};
-  const destination = prompt("Duplicate to (path in the workspace)",
-    source.replace(/\.ya?ml$/, "-copy.yaml"));
-  if (!destination) return;
-  const title = prompt("Title for the copy", (flow.title || "") + " (copy)");
-  const description = prompt("Description for the copy", flow.description || "");
-  try {
-    const made = await post("/api/duplicate", { source, destination, title, description });
-    await loadTree();
-    await openFlow(made.path);
-  } catch (error) { alert(error.message); }
-}
-$("duplicate").onclick = () => state.flow && duplicateFlow(state.flow);
-
-async function removeFlow(path, title) {
-  if (!confirm(`Delete "${title || path}"?\n\nThis removes the file.`)) return;
-  try {
-    await post("/api/delete", { path });
-    if (state.flow === path) {
-      state.flow = null; $("flowText").value = "";
-      $("flowPath").textContent = "no flow open";
-      $("current").textContent = "no flow open";
-      $("currentDesc").textContent = "";
-    }
-    await loadTree();
-  } catch (error) { alert(error.message); }
-}
-$("deleteFlow").onclick = () => state.flow && removeFlow(state.flow, currentFlow().title);
-
-async function removeCollection(path, name) {
-  if (!confirm(`Delete the collection "${name}"?\n\nThe flows it lists are kept.`)) return;
-  const alsoFlows = confirm(
-    "Also delete the flows it lists?\n\nOK = delete the flows too.\n" +
-    "Cancel = keep them and remove only the collection.");
-  try {
-    const result = await post("/api/delete", { path, with_contents: alsoFlows });
-    if (result.deleted.includes(state.flow)) { state.flow = null; $("flowText").value = ""; }
-    await loadTree();
-  } catch (error) { alert(error.message); }
-}
-
-/* ---------- validate / run ---------- */
-
-function showWhatItDrives(flow) {
-  // One backend now, so nothing to choose. What is still worth saying is when
-  // there is nothing to drive at all.
-  $("drivesLabel").textContent = flow && flow.error
-    ? "Will not load — see below"
-    : "Drives a Windows application";
-}
-
-$("validate").onclick = async () => {
-  if (!state.flow) return alert("Open a flow first.");
-  const result = await post("/api/validate", { flow: state.flow });
-  const box = $("validation");
-  if (result.ok) {
-    const f = result.summary.flow, p = result.summary.prompts;
-    box.innerHTML = `<div class="card"><span class="pill ok">valid</span>
-      <p><strong>${escapeHtml(f.name)}</strong> — ${f.steps} steps, ${f.reset_steps} reset,
-      ${f.targets.length} targets. Variables: ${f.variables.join(", ") || "none"}.<br>
-      <strong>${p.count} prompt runs</strong>: ${p.ids.join(", ")}</p></div>`;
-  } else {
-    box.innerHTML = `<div class="card"><span class="pill bad">invalid</span><pre>` +
-      result.problems.map(escapeHtml).join("\n") + `</pre></div>`;
-  }
-  showTab("run");
-};
+/* ---------- replay ---------- */
 
 function logLine(text, cls) {
   const line = document.createElement("div");
@@ -1232,706 +270,79 @@ function logLine(text, cls) {
   $("log").scrollTop = $("log").scrollHeight;
 }
 
-$("run").onclick = async () => {
-  if (!state.flow) return alert("Open a flow first.");
-  $("run").disabled = true;
-  $("log").innerHTML = "";
-  state.results = [];
-  showTab("run");
-  try {
-    const started = await post("/api/run", {
-      flow: state.flow,
-      // Every prompt, every time. A run of some of them is not a run of the
-      // flow, and two runs to compare have to have asked the same questions.
-      agent: $("agentFallback").checked ? "fallback" : "off",
-      capture_steps: $("captureSteps").checked,
-      record: $("record").checked,
-      subject: readSubject(),
-    });
-    state.runId = started.run_id;
-    logLine(`run ${started.run_id} -> ${started.out_dir}`);
-    listen(started.run_id);
-  } catch (error) {
-    logLine("error: " + error.message, "bad");
-    $("run").disabled = false;
-  }
+function showTurn(result, runDir) {
+  const shots = (result.screenshots || []).map((path) =>
+    '<img loading="lazy" src="/files/' + encodeURI(runDir + "/" + path) + '" alt="">'
+  ).join("");
+  const turn = document.createElement("div");
+  turn.className = "turn";
+  turn.dataset.prompt = result.prompt_id;
+  turn.innerHTML =
+    '<div class="row"><strong>' + escapeHtml(result.prompt_id) + '</strong>' +
+    '<span class="pill ' + (result.status === "ok" ? "ok" : "bad") + '">' +
+    escapeHtml(result.status) + '</span>' +
+    '<span class="muted">' + Math.round((result.duration_ms || 0) / 100) / 10 +
+    's</span></div>' +
+    '<div class="said">asked</div><pre>' + escapeHtml(result.prompt || "") + '</pre>' +
+    '<div class="said" style="margin-top:8px">answered</div><pre>' +
+    escapeHtml(result.response || "(nothing was read back)") + '</pre>' +
+    (result.error ? '<pre class="bad" style="margin-top:8px">' +
+      escapeHtml(result.error) + '</pre>' : "") +
+    '<div class="shots">' + shots + '</div>';
+  $("turns").appendChild(turn);
+}
+
+$("turns").onclick = (event) => {
+  if (event.target.tagName === "IMG") event.target.classList.toggle("big");
 };
 
-function listen(runId) {
-  const events = new EventSource(`/api/run/${runId}/events`);
+$("replay").onclick = async () => {
+  if (!state.flow) return;
+  $("log").innerHTML = "";
+  $("turns").innerHTML = "";
+  $("runCard").hidden = false;
+  $("transcriptLink").hidden = true;
+  $("replay").disabled = true;
+  $("runState").innerHTML = '<span class="pill">running</span>';
+
+  let started;
+  try {
+    started = await post("/api/run", {
+      flow: state.flow.path, capture_steps: true, record: true,
+    });
+  } catch (error) {
+    $("replay").disabled = false;
+    $("runState").innerHTML = '<span class="pill bad">failed</span>';
+    return alert(error.message);
+  }
+
+  const events = new EventSource("/api/run/" + started.run_id + "/events");
   events.onmessage = (message) => {
     const event = JSON.parse(message.data);
-    if (event.type === "started") {
-      state.outDir = event.out_dir;
-      logLine(`running ${event.variants} prompt run(s)`);
-    }
+    if (event.type === "started") logLine(event.variants + " prompt run(s)");
     if (event.type === "note") logLine("  note: " + event.text);
-    if (event.type === "variant_started") logLine(`  ${event.prompt_id} ...`);
-    if (event.type === "variant_finished") {
-      const r = event.result;
-      state.results.push(r);
-      logLine(`  ${r.prompt_id}: ${r.status} (${r.duration_ms} ms, ` +
-              `${(r.response || "").length} chars)`, r.status === "ok" ? "ok" : "bad");
-    }
+    if (event.type === "variant_started") logLine("  " + event.prompt_id + " ...");
+    if (event.type === "variant_finished") showTurn(event.result, started.out_dir);
     if (event.type === "finished") {
-      logLine(`done: ${event.ok}/${event.total} ok`,
-              event.ok === event.total ? "ok" : "warn");
-      loadTranscript(event.transcript, event.transcript_html);
-      loadRuns().then(loadTree).catch(() => {});
-    }
-    if (event.type === "failed") logLine("failed: " + event.error, "bad");
-    if (event.type === "end") { events.close(); $("run").disabled = false; }
-  };
-  events.onerror = () => { events.close(); $("run").disabled = false; };
-}
-
-function runDirOf(path) {
-  return path.replace(/\/transcript\.md$/, "");
-}
-
-async function loadTranscript(path, htmlPath) {
-  if (!path) return;
-  state.transcript = path;
-  state.transcriptHtml = htmlPath || runDirOf(path) + "/transcript.html";
-  $("transcriptPath").textContent = path;
-  $("transcriptPath").classList.remove("muted");
-  $("exportMd").href = "/files/" + encodeURI(path);
-  // Cache-busted: the frame is reloaded after every rebuild, and a browser
-  // that serves the previous transcript from cache looks like a rebuild that
-  // silently did nothing.
-  $("transcriptFrame").src =
-    "/files/" + encodeURI(state.transcriptHtml) + "?theme=dark&t=" + Date.now();
-  const response = await fetch("/files/" + encodeURI(path));
-  $("transcriptText").textContent = await response.text();
-  $("transcriptText").classList.remove("muted");
-}
-
-function showTranscriptView(rendered) {
-  $("transcriptFrame").hidden = !rendered;
-  $("transcriptText").hidden = rendered;
-  $("viewRendered").classList.toggle("on", rendered);
-  $("viewSource").classList.toggle("on", !rendered);
-}
-$("viewRendered").onclick = () => showTranscriptView(true);
-$("viewSource").onclick = () => showTranscriptView(false);
-
-function transcriptStatus(message, kind) {
-  const node = $("transcriptStatus");
-  node.textContent = message || "";
-  node.className = kind || "muted";
-}
-
-$("rebuildTranscript").onclick = async () => {
-  if (!state.transcript) return;
-  transcriptStatus("rebuilding…");
-  const rebuilt = await post("/api/transcript", { run_dir: runDirOf(state.transcript) });
-  await loadTranscript(rebuilt.transcript, rebuilt.transcript_html);
-  transcriptStatus("rebuilt", "ok");
-};
-
-$("exportHtml").onclick = async () => {
-  if (!state.transcript) return;
-  transcriptStatus("writing a standalone page…");
-  const done = await post("/api/transcript/standalone",
-    { run_dir: runDirOf(state.transcript) });
-  transcriptStatus("");
-  download(done.html);
-};
-
-$("exportPdf").onclick = async () => {
-  if (!state.transcript) return;
-  transcriptStatus("printing… this takes a few seconds");
-  const done = await post("/api/transcript/pdf", { run_dir: runDirOf(state.transcript) });
-  if (done.error) { transcriptStatus(done.error, "bad"); return; }
-  transcriptStatus("");
-  download(done.pdf);
-};
-
-function download(path) {
-  const link = document.createElement("a");
-  link.href = "/files/" + encodeURI(path);
-  link.download = path.split("/").pop();
-  link.click();
-}
-
-/* ---------- comparing runs ---------- */
-
-let knownRuns = [];
-
-async function loadKnownSubjects() {
-  // Typing "R2026x FD03" again to re-run last month's build is the retyping
-  // that produces "FD3" on the fortieth run, and a tag with a typo in it is a
-  // tag that does not group.
-  let values = {};
-  try {
-    values = (await api("/api/subjects")).values || {};
-  } catch (error) {
-    return;
-  }
-  const seen = [];
-  for (const [field, list] of Object.entries(values)) {
-    for (const value of list || []) {
-      // Suggested bare, because that is how it is usually typed. The prefixed
-      // form is offered too, for the day two fields hold the same word.
-      if (!seen.includes(value)) seen.push(value);
-      const prefix = PREFIX_OF[field];
-      if (prefix && !seen.includes(`${prefix}:${value}`)) {
-        seen.push(`${prefix}:${value}`);
+      $("runState").innerHTML = '<span class="pill ' +
+        (event.ok === event.total ? "ok" : "bad") + '">' +
+        event.ok + "/" + event.total + '</span>';
+      if (event.transcript_html) {
+        $("transcriptLink").href = "/files/" + encodeURI(event.transcript_html);
+        $("transcriptLink").hidden = false;
       }
     }
-  }
-  $("known-tags").innerHTML = seen
-    .map((v) => `<option value="${escapeHtml(v)}"></option>`).join("");
-}
-
-async function loadRuns() {
-  try {
-    knownRuns = (await api("/api/runs")).runs || [];
-  } catch (error) {
-    knownRuns = [];
-  }
-  loadKnownSubjects();
-  const options = knownRuns
-    .map((r) => `<option value="${escapeHtml(r.dir)}">${escapeHtml(r.label)}</option>`)
-    .join("");
-  const left = $("cmpLeft"), right = $("cmpRight");
-  const keep = [left.value, right.value];
-  left.innerHTML = options;
-  right.innerHTML = options;
-  if (keep[0]) left.value = keep[0];
-  if (keep[1]) right.value = keep[1];
-  // Newest is what you just ran, so it belongs on the right; the one before
-  // it is what you are comparing against.
-  if (!keep[1] && knownRuns[0]) right.value = knownRuns[0].dir;
-  if (!keep[0] && knownRuns[1]) left.value = knownRuns[1].dir;
-}
-
-$("cmpGo").onclick = async () => {
-  const before = $("cmpLeft").value, after = $("cmpRight").value;
-  if (!before || !after) {
-    return repoMessage($("cmpStatus"), "pick two runs", "bad");
-  }
-  if (before === after) {
-    return repoMessage($("cmpStatus"), "those are the same run", "bad");
-  }
-  repoMessage($("cmpStatus"), "comparing…");
-  const done = await post("/api/compare", { run_dirs: [before, after] });
-  if (done.error) return repoMessage($("cmpStatus"), done.error, "bad");
-
-  const counts = done.counts || {};
-  const moved = (counts.changed || 0) + (counts.failed || 0) + (counts.missing || 0);
-  $("cmpStatus").innerHTML =
-    `<span class="pill ${moved ? "bad" : "ok"}">${escapeHtml(done.headline)}</span>` +
-    (done.mixed_flows
-      ? ` <span class="bad">these runs are of different flows</span>` : "") +
-    " " + (done.columns || []).map((c) =>
-      `<a href="/files/${encodeURI(c.transcript)}?theme=dark" target="_blank"
-          rel="noopener">${escapeHtml(c.heading)} transcript</a>`).join(" · ");
-  $("cmpMd").href = "/files/" + encodeURI(done.markdown);
-  $("cmpHtml").href = "/files/" + encodeURI(done.html);
-  $("cmpExports").hidden = false;
-  $("cmpEmpty").hidden = true;
-  $("cmpFrame").hidden = false;
-  $("cmpFrame").src = "/files/" + encodeURI(done.html) + "?theme=dark&t=" + Date.now();
-};
-
-/* ---------- what was under test ---------- */
-
-// A tag is a word. A tag with one of these in front of it fills a field, and
-// the only reason the fields exist is that a comparison labels its columns
-// with them -- "CATIA V5 R2026x · LEO FD03" over a column of answers.
-const TAG_PREFIXES = {
-  app: "app", application: "app",
-  version: "app_version", "app-version": "app_version",
-  model: "model", assistant: "model",
-  "model-version": "model_version", "assistant-version": "model_version",
-  build: "release", release: "release",
-  note: "notes", notes: "notes",
-};
-const PREFIX_OF = {
-  app: "app", app_version: "version", model: "model",
-  model_version: "model-version", release: "build", notes: "note",
-};
-const FIELD_LABELS = {
-  app: "Application", app_version: "Application version",
-  model: "Assistant or model", model_version: "Assistant version",
-  release: "Release or build", notes: "Notes",
-};
-
-function readSubject() {
-  const subject = {};
-  for (const [field, value] of Object.entries(state.subject.fields || {})) {
-    if (value) subject[field] = value;
-  }
-  if ((state.subject.tags || []).length) subject.tags = state.subject.tags;
-  return subject;
-}
-
-function addTag(text) {
-  const raw = (text || "").trim().replace(/,+$/, "");
-  if (!raw) return;
-  const [head, ...rest] = raw.split(":");
-  const field = TAG_PREFIXES[head.trim().toLowerCase()];
-  if (field && rest.length && rest.join(":").trim()) {
-    state.subject.fields[field] = rest.join(":").trim();
-  } else if (!state.subject.tags.includes(raw)) {
-    state.subject.tags.push(raw);
-  }
-  renderSubject();
-}
-
-function removeTag(kind, key) {
-  if (kind === "field") delete state.subject.fields[key];
-  else state.subject.tags = state.subject.tags.filter((t) => t !== key);
-  renderSubject();
-}
-
-function renderSubject() {
-  const box = $("subjectTags");
-  const input = $("tagInput");
-  [...box.querySelectorAll(".chip")].forEach((chip) => chip.remove());
-
-  const chips = [];
-  for (const field of Object.keys(FIELD_LABELS)) {
-    const value = (state.subject.fields || {})[field];
-    if (value) chips.push(["field", field, value, FIELD_LABELS[field]]);
-  }
-  for (const tag of state.subject.tags || []) chips.push(["tag", tag, tag, "tag"]);
-
-  for (const [kind, key, value, title] of chips) {
-    const chip = document.createElement("span");
-    chip.className = "chip" + (kind === "tag" ? " free" : "");
-    chip.title = title;
-    chip.innerHTML = `<span>${escapeHtml(value)}</span><button type="button"
-      aria-label="remove">×</button>`;
-    chip.querySelector("button").onclick = () => removeTag(kind, key);
-    box.insertBefore(chip, input);
-  }
-}
-
-$("tagInput").addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === ",") {
-    event.preventDefault();
-    addTag(event.target.value);
-    event.target.value = "";
-  } else if (event.key === "Backspace" && !event.target.value) {
-    // The last thing typed is the thing most likely being corrected.
-    const tags = state.subject.tags || [];
-    const fields = Object.keys(state.subject.fields || {});
-    if (tags.length) removeTag("tag", tags[tags.length - 1]);
-    else if (fields.length) removeTag("field", fields[fields.length - 1]);
-  }
-});
-// Losing focus commits it too: a run started with a half-typed build in the
-// box and nothing recorded is a run that has to be done again.
-$("tagInput").addEventListener("blur", (event) => {
-  addTag(event.target.value);
-  event.target.value = "";
-});
-
-async function loadSubject(flowPath) {
-  if (!flowPath) return;
-  state.subject = { fields: {}, tags: [] };
-  try {
-    const known = await post("/api/subject", { flow: flowPath });
-    const subject = known.subject || {};
-    for (const field of Object.keys(FIELD_LABELS)) {
-      if (subject[field]) state.subject.fields[field] = subject[field];
+    if (event.type === "failed") {
+      logLine("failed: " + event.error, "bad");
+      $("runState").innerHTML = '<span class="pill bad">failed</span>';
     }
-    state.subject.tags = [...(subject.tags || [])];
-  } catch (error) { /* an empty box is a fine starting point */ }
-  renderSubject();
-}
-
-/* ---------- repository ---------- */
-
-function repoMessage(node, text, kind) {
-  node.innerHTML = text ? `<span class="${kind || "muted"}">${escapeHtml(text)}</span>` : "";
-}
-
-async function loadRepo() {
-  let state;
-  try {
-    state = await api("/api/repo");
-  } catch (error) {
-    return;
-  }
-  state_repo = state;
-  $("repoRoot").textContent = state.root || "";
-  try {
-    const known = await api("/api/workspace");
-    renderRecent(known.recent || [], known.workspace);
-  } catch (error) { /* the panel is still useful without it */ }
-  const blocked = !!state.read_only;
-  $("repoReadOnly").hidden = !blocked;
-  if (blocked) $("repoReadOnly").textContent = state.read_only_reason;
-  $("repoNotRepo").hidden = state.is_repo || blocked;
-  $("repoPanel").hidden = !state.is_repo || blocked;
-  if (blocked) { $("repoBadge").textContent = ""; return; }
-  const badge = $("repoBadge");
-  if (!state.is_repo) { badge.textContent = ""; badge.className = "badge"; return; }
-
-  const counts = [];
-  if (state.changes.length) counts.push(`${state.changes.length}`);
-  if (state.ahead) counts.push(`\u2191${state.ahead}`);
-  if (state.behind) counts.push(`\u2193${state.behind}`);
-  badge.textContent = counts.join(" ");
-  badge.className = "badge" + (state.changes.length || state.ahead ? " on" : "");
-
-  const select = $("repoBranch");
-  select.innerHTML = state.branches
-    .map((b) => `<option${b === state.branch ? " selected" : ""}>${escapeHtml(b)}</option>`)
-    .join("") || `<option>${escapeHtml(state.branch)}</option>`;
-  $("repoTracking").textContent = state.upstream
-    ? `tracking ${state.upstream}` + (state.ahead ? `, ${state.ahead} to push` : "")
-      + (state.behind ? `, ${state.behind} to pull` : "")
-    : "no upstream yet — the first push sets one";
-
-  const remote = state.remote;
-  $("repoRemote").textContent = remote.url
-    ? `${remote.provider === "unknown" ? "remote" : remote.provider}: ${remote.url}`
-      + (remote.provider === "unknown" || state.has_token ? "" : " — no token saved")
-    : "no remote configured";
-  $("repoOpen").href = remote.web_url || "#";
-  $("repoOpen").hidden = !remote.web_url;
-
-  renderChanges(state.changes);
-  $("repoLog").innerHTML = state.recent.length
-    ? state.recent.map((c) => `<div><code>${c.sha.slice(0, 8)}</code>
-        ${escapeHtml(c.subject)}
-        <span class="muted">${escapeHtml(c.author)} · ${c.date.slice(0, 10)}</span></div>`).join("")
-    : "No history yet.";
-
-  let runs = [];
-  try {
-    runs = (await api("/api/files")).runs || [];
-  } catch (error) {
-    runs = [];
-  }
-  const previous = $("repoRun").value;
-  $("repoRun").innerHTML = runs.length
-    ? runs.map((r) => `<option>${escapeHtml(r)}</option>`).join("")
-    : `<option value="">no runs yet</option>`;
-  if (runs.includes(previous)) $("repoRun").value = previous;
-  // onchange does not fire for a list the page filled in, and the preview is
-  // the thing that makes Publish safe to press.
-  showPublishPreview();
-}
-
-let state_repo = null;
-
-function renderChanges(changes) {
-  $("repoCount").textContent = changes.length ? `(${changes.length})` : "";
-  if (!changes.length) {
-    $("repoChanges").className = "muted";
-    $("repoChanges").textContent = "Nothing has changed.";
-    return;
-  }
-  $("repoChanges").className = "";
-  $("repoChanges").innerHTML = changes.map((change) => `
-    <label class="row" style="margin:1px 0; gap:6px">
-      <input type="checkbox" class="repo-file" value="${escapeHtml(change.path)}"
-             ${change.path.startsWith("runs/") ? "" : "checked"}>
-      <span class="pill ${change.state === "conflicted" ? "bad" : "warn"}"
-            style="min-width:74px; text-align:center">${change.state}</span>
-      <code>${escapeHtml(change.path)}</code>
-    </label>`).join("");
-  suggestCommitMessage();
-}
-
-function selectedFiles() {
-  return [...document.querySelectorAll(".repo-file:checked")].map((n) => n.value);
-}
-
-let sourceKind = "local";
-
-function showSourceKind(kind) {
-  sourceKind = kind;
-  document.querySelectorAll("#repoConnect .segmented button").forEach((b) =>
-    b.classList.toggle("on", b.dataset.kind === kind));
-  // Dimmed rather than hidden: the fields the other sources would ask for stay
-  // visible, so the choice is legible and the panel does not jump about as you
-  // click between them. Disabled too, so a dimmed box cannot be typed into or
-  // submitted by tabbing to it.
-  document.querySelectorAll("#repoConnect .source-field").forEach((node) => {
-    const applies = node.dataset.for.split(" ").includes(kind);
-    node.classList.toggle("off", !applies);
-    node.querySelectorAll("input, select, button").forEach((control) => {
-      control.disabled = !applies;
-    });
-  });
-  $("projectLabel").textContent = kind === "gitlab" ? "Project" : "Repository";
-  $("repoProject").placeholder =
-    kind === "gitlab" ? "group/project (groups may nest)" : "owner/repo";
-  $("dirLabel").textContent = kind === "local" ? "Folder" : "Clone into";
-}
-
-document.querySelectorAll("#repoConnect .segmented button").forEach((button) => {
-  button.onclick = () => showSourceKind(button.dataset.kind);
-});
-
-// Somebody will paste a full URL into the repository box. Take it apart rather
-// than rejecting it.
-$("repoProject").onblur = () => {
-  const value = $("repoProject").value.trim();
-  if (!value.includes("://")) return;
-  try {
-    const url = new URL(value);
-    const path = url.pathname.replace(/^\/|\.git$|\/$/g, "");
-    $("repoProject").value = path;
-    if (url.hostname === "github.com") showSourceKind("github");
-    else if (url.hostname === "gitlab.com") showSourceKind("gitlab");
-    else if (url.hostname.includes("gitlab")) {
-      showSourceKind("gitlab");
-      $("repoHost").value = url.hostname;
-    }
-    if (!$("repoDirectory").value.trim()) {
-      $("repoDirectory").placeholder = path.split("/").pop();
-    }
-  } catch (error) { /* not a URL after all */ }
+    if (event.type === "end") { events.close(); $("replay").disabled = false; }
+  };
+  events.onerror = () => { events.close(); $("replay").disabled = false; };
 };
 
-$("repoConnectToggle").onclick = () => {
-  $("repoConnect").hidden = !$("repoConnect").hidden;
-  if (!$("repoConnect").hidden) showSourceKind(sourceKind);
-};
+/* ---------- start ---------- */
 
-$("repoConnectGo").onclick = async () => {
-  repoMessage($("repoOpenOut"),
-    sourceKind === "local" ? "opening…" : "cloning… this can take a minute");
-  const done = await post("/api/workspace/connect", {
-    kind: sourceKind,
-    directory: $("repoDirectory").value.trim(),
-    project: $("repoProject").value.trim(),
-    host: $("repoHost").value.trim(),
-  });
-  if (done.error) return repoMessage($("repoOpenOut"), done.error, "bad");
-  repoMessage($("repoOpenOut"), `workspace is now ${done.workspace}`, "ok");
-  $("repoConnect").hidden = true;
-  renderRecent(done.recent || []);
-  await loadTree().catch(() => {});
-  loadRepo();
-};
-
-function renderRecent(entries, current) {
-  const select = $("repoRecent");
-  select.hidden = entries.length < 2;
-  select.innerHTML = `<option value="">recent workspaces…</option>` +
-    entries.map((entry) => {
-      const label = entry.project
-        ? `${entry.kind}: ${entry.project}`
-        : entry.directory;
-      return `<option value="${escapeHtml(entry.directory)}"
-        ${entry.directory === current ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    }).join("");
-}
-
-$("repoRecent").onchange = async () => {
-  const path = $("repoRecent").value;
-  if (!path) return;
-  const done = await post("/api/workspace/open", { path });
-  if (done.error) return repoMessage($("repoOpenOut"), done.error, "bad");
-  await loadTree().catch(() => {});
-  loadRepo();
-};
-
-// Write a subject from what is actually ticked, so leaving it alone still
-// produces something worth reading in a log six months from now.
-async function suggestCommitMessage() {
-  const box = $("repoMessage");
-  if (box.dataset.edited === "1") return;
-  const paths = selectedFiles();
-  if (!paths.length) { box.value = ""; return; }
-  const { message } = await post("/api/repo/suggest-message", { paths });
-  box.value = message || "";
-}
-$("repoMessage").oninput = () => {
-  $("repoMessage").dataset.edited = $("repoMessage").value ? "1" : "";
-};
-document.addEventListener("change", (event) => {
-  if (event.target.classList && event.target.classList.contains("repo-file")) {
-    suggestCommitMessage();
-  }
-});
-
-$("repoCommit").onclick = async () => {
-  const paths = selectedFiles();
-  const message = $("repoMessage").value.trim();
-  if (!paths.length) return repoMessage($("repoStatus"), "tick at least one file", "bad");
-  if (!message) return repoMessage($("repoStatus"), "a commit needs a message", "bad");
-
-  repoMessage($("repoStatus"), "committing…");
-  const done = await post("/api/repo/commit", { paths, message });
-  if (done.error) return repoMessage($("repoStatus"), done.error, "bad");
-  if (!done.committed) return repoMessage($("repoStatus"), done.reason || "nothing to commit");
-  $("repoMessage").value = "";
-  $("repoMessage").dataset.edited = "";
-  repoMessage($("repoStatus"), `committed ${done.sha.slice(0, 8)}`, "ok");
-  loadRepo();
-};
-
-$("repoPush").onclick = async () => {
-  repoMessage($("repoStatus"), "pushing…");
-  const done = await post("/api/repo/push", {});
-  repoMessage($("repoStatus"), done.error || "pushed", done.error ? "bad" : "ok");
-  loadRepo();
-};
-
-$("repoPull").onclick = async () => {
-  repoMessage($("repoStatus"), "pulling…");
-  const done = await post("/api/repo/pull", {});
-  repoMessage($("repoStatus"), done.error || "up to date", done.error ? "bad" : "ok");
-  loadRepo();
-};
-
-$("repoBranch").onchange = async () => {
-  const done = await post("/api/repo/checkout", { branch: $("repoBranch").value });
-  if (done.error) repoMessage($("repoStatus"), done.error, "bad");
-  loadRepo();
-};
-
-// Shown as soon as a run is picked rather than behind a button: committing is
-// not undoable in any way a person would call undoing, so what is about to go
-// in should already be on screen.
-async function showPublishPreview() {
-  const run_dir = $("repoRun").value;
-  if (!run_dir) { $("repoPublishOut").innerHTML = ""; return; }
-  const preview = await post("/api/repo/publish/preview",
-    { run_dir, include_video: $("repoWithVideo").checked });
-  if (preview.error) return repoMessage($("repoPublishOut"), preview.error, "bad");
-  const skipped = Object.entries(preview.excluded || {})
-    .map(([reason, paths]) => `${paths.length} skipped (${escapeHtml(reason)})`)
-    .join(", ");
-  $("repoPublishOut").innerHTML = `
-    <div style="margin-top:8px">${preview.include.length} file(s) ·
-      ${(preview.total_bytes / 1024).toFixed(0)} KB${skipped ? " · " + skipped : ""}</div>
-    <div class="muted">message: ${escapeHtml(preview.message)}</div>
-    <details><summary class="muted">${preview.include.length} file(s)</summary>
-      <pre>${preview.include.map(escapeHtml).join("\n")}</pre></details>`;
-}
-$("repoRun").onchange = showPublishPreview;
-$("repoWithVideo").onchange = showPublishPreview;
-
-$("repoPublish").onclick = async () => {
-  const run_dir = $("repoRun").value;
-  if (!run_dir) return;
-  repoMessage($("repoPublishOut"), "publishing…");
-  const done = await post("/api/repo/publish",
-    { run_dir, include_video: $("repoWithVideo").checked });
-  if (done.error) return repoMessage($("repoPublishOut"), done.error, "bad");
-  if (!done.committed) return repoMessage($("repoPublishOut"), done.reason || "nothing to publish");
-  const link = done.url
-    ? ` <a href="${done.url}" target="_blank" rel="noopener">${done.sha.slice(0, 8)}</a>`
-    : ` ${done.sha.slice(0, 8)}`;
-  $("repoPublishOut").innerHTML =
-    `<span class="ok">published</span>${link}` +
-    (done.pushed === false
-      ? ` <span class="bad">but the push failed: ${escapeHtml(done.push_error || "")}</span>`
-      : " and pushed");
-  loadRepo();
-};
-
-/* ---------- credentials ---------- */
-
-async function loadCredentials() {
-  const info = await api("/api/credentials");
-  $("credPath").textContent = info.path;
-  $("apiModel").value = info.model || "";
-  $("apiBase").value = info.base_url || "";
-  const parts = [];
-  if (info.env_override) {
-    parts.push(`<span class="pill warn">${info.env_override} is set</span>
-      <span class="muted">the environment wins; the saved key is not used</span>`);
-  }
-  parts.push(info.configured
-    ? `<span class="pill ok">key saved</span> <code>${escapeHtml(info.masked_key)}</code>`
-    : `<span class="pill bad">no key saved</span>`);
-  $("credState").innerHTML = parts.join(" &nbsp; ");
-  renderGitTokens(info.git_hosts || []);
-}
-
-function renderGitTokens(hosts) {
-  if (!hosts.length) {
-    $("gitTokens").className = "muted";
-    $("gitTokens").textContent = "No tokens saved.";
-    return;
-  }
-  $("gitTokens").className = "";
-  $("gitTokens").innerHTML = hosts.map((entry) => `
-    <div class="row" style="margin:2px 0">
-      <span class="pill ok">saved</span>
-      <code>${escapeHtml(entry.host)}</code>
-      <span class="muted">${escapeHtml(entry.masked)}</span>
-      <button class="link" data-forget="${escapeHtml(entry.host)}">Forget</button>
-    </div>`).join("");
-  $("gitTokens").querySelectorAll("[data-forget]").forEach((button) => {
-    button.onclick = async () => {
-      const info = await post("/api/credentials/git/delete",
-        { host: button.dataset.forget });
-      renderGitTokens(info.git_hosts || []);
-      loadRepo();
-    };
-  });
-}
-
-$("saveGitToken").onclick = async () => {
-  const host = $("gitHost").value.trim();
-  const token = $("gitToken").value;
-  const out = $("gitTokenResult");
-  if (!host || !token) {
-    out.innerHTML = `<span class="bad">a host and a token are both needed</span>`;
-    return;
-  }
-  const info = await post("/api/credentials/git", { host, token });
-  if (info.error) {
-    out.innerHTML = `<span class="bad">${escapeHtml(info.error)}</span>`;
-    return;
-  }
-  // Clear the field the moment it is saved: a token left in a text box is a
-  // token in the next screenshot.
-  $("gitToken").value = "";
-  out.innerHTML = `<span class="ok">saved for ${escapeHtml(host)}</span>`;
-  renderGitTokens(info.git_hosts || []);
-  loadRepo();
-};
-
-$("saveCreds").onclick = async () => {
-  await post("/api/credentials", { api_key: $("apiKey").value,
-    model: $("apiModel").value, base_url: $("apiBase").value });
-  $("apiKey").value = "";            // never keep it in the DOM
-  $("credResult").innerHTML = "";
-  await loadCredentials();
-};
-$("clearCreds").onclick = async () => {
-  if (!confirm("Delete the saved key?")) return;
-  await post("/api/credentials/clear");
-  $("apiKey").value = "";
-  await loadCredentials();
-};
-$("testCreds").onclick = async () => {
-  $("credResult").innerHTML = `<p class="muted">testing…</p>`;
-  const result = await post("/api/credentials/test");
-  $("credResult").innerHTML = result.ok
-    ? `<p class="ok">Connected via ${escapeHtml(result.source)} —
-       ${escapeHtml(result.display_name || result.model)}</p>`
-    : `<p class="bad">${escapeHtml(result.error)}</p>`;
-};
-
-// Runs first: the tree draws each flow's runs underneath it, and a tree drawn
-// before the runs arrive shows "no runs yet" over a workspace full of them
-// until something else happens to redraw it.
-loadRuns()
-  .catch(() => {})
-  .then(loadTree)
-  .then(() => {
-      if (!state.flow && state.flows.length) openFlow(state.flows[0].path);
-  })
-  .catch((error) => logLine("could not list flows: " + error.message, "bad"));
-loadCredentials().catch(() => {});
-showSourceKind("local");     // a plain folder is the default and needs nothing
-loadRepo().catch(() => {});
-// The panel is only right while nobody else is touching the checkout, and
-// somebody usually is -- an editor saving a flow, a run finishing, a git pull
-// in another window. Cheap enough to just re-read.
-setInterval(() => { if ($("tab-repo").classList.contains("active")) loadRepo(); }, 5000);
+loadFlow().catch((error) => alert(error.message));
+recordingState().then(showRecording);
 </script>

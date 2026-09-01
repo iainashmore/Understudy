@@ -40,14 +40,21 @@ understudy transcript runs/today --pdf
 
 ## The UI
 
-`understudy ui --workspace <folder>` serves a local page on 127.0.0.1. Tabs:
-**Flow** (edit, validate, duplicate, delete), **Run** (backend, repeats, agent
-mode, what was under test), **Output**, **Transcript** (rendered, with the video
-playing, exports to md/html/pdf), **Compare**, **Record**, **Repository**,
-**Credentials**.
+One window, one flow, one run.
 
-The workspace is a local folder, a GitHub repository or a GitLab one; the last
-few are remembered.
+```
+understudy ui --workspace ~/flows
+```
+
+**Record** hooks the desktop and writes a flow from what you do. **Replay**
+runs it and shows what came back: each prompt, each answer, the screenshots,
+and a link to the transcript. The flow itself is one fold away, for the times a
+recording needs correcting.
+
+It had a file tree, collections, tabs, comparisons, tags and a repository
+panel, and none of it survived contact with the question the tool is actually
+for. 1,937 lines of page became 348. Comparison and the rest are still in the
+CLI, and will come back to the app when the basic loop is boring.
 
 ## Recording a run
 
