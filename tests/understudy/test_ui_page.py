@@ -522,3 +522,40 @@ class TestAFlowThatWillNotLoad:
         assert broken.locator("#validation").inner_text().strip() == ""
         assert broken.locator("#run").is_enabled()
         assert "Drives" in broken.locator("#drivesLabel").inner_text()
+
+
+class TestTheRecordPanel:
+    """Record once, replay many times -- the thing the tool is for, and the
+    half that did not exist until now. The panel used to say so."""
+
+    @pytest.fixture
+    def record_tab(self, page):
+        page.locator(".tree-item").first.click()
+        page.wait_for_timeout(200)
+        page.click("#recordSteps")
+        page.wait_for_timeout(400)
+        return page
+
+    def test_it_no_longer_says_recording_is_not_wired_up(self, record_tab):
+        assert "not wired up" not in record_tab.locator("#tab-record").inner_text()
+
+    def test_it_says_why_it_cannot_record_here(self, record_tab):
+        """These tests run on Linux. A button that looks live and does nothing
+        is worse than one that says why it is disabled."""
+        assert record_tab.locator("#recStart").is_disabled()
+        assert "Windows" in record_tab.locator("#recStatus").inner_text()
+
+    def test_the_hotkeys_are_on_screen_not_in_a_manual(self, record_tab):
+        shown = record_tab.locator("#tab-record").inner_text()
+        assert "ctrl+alt+s" in shown and "ctrl+alt+r" in shown
+
+    def test_it_says_what_happens_without_a_marked_region(self, record_tab):
+        """Recording a path that reads nothing produces a demo, not a test,
+        and it is not obvious until the transcript comes back empty."""
+        assert "records nothing" in record_tab.locator("#tab-record").inner_text()
+
+    def test_the_window_can_be_picked_rather_than_typed(self, record_tab):
+        record_tab.click("#recPick")
+        record_tab.wait_for_timeout(200)
+        assert record_tab.locator("#menu").is_visible()
+        assert record_tab.errors == []

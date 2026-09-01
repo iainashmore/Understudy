@@ -109,10 +109,40 @@ PyInstaller cannot cross-compile, so Windows builds on Windows —
 It does not build on ordinary pushes. See
 [desktop/README.md](desktop/README.md) for building by hand.
 
-## Not built yet
+## Record a flow
 
-**The recorder** — flows are written by hand today. Which mechanism it needs
-depends on what `tools/probe_native.py` finds against the target application.
+Do the thing once; the flow is what comes out.
+
+```
+understudy record --title "3DEXPERIENCE" --process 3DEXPERIENCE.exe --name leo-basics
+```
+
+or press **Record** in the app. Then, in the application:
+
+| | |
+|---|---|
+| click and type | recorded |
+| **ctrl+alt+r**, then two clicks | marks the area a reply appears in |
+| **ctrl+alt+s** | stop, and write the flow |
+
+Every click becomes a picture of what was clicked on, matched again at replay
+time. The longest thing typed becomes the prompt, which is the point: the
+click path is fixed and the question is what varies. The reply is read back
+with OCR.
+
+Nothing is read from the accessibility tree or from an embedded web view.
+Against the 3DEXPERIENCE client both are dead ends -- 17 UIA nodes for the
+whole window, and WebViews reporting an empty document -- which is what the
+probe is for finding out.
+
+Then replay it:
+
+```
+understudy run examples/leo-basics.yaml --record --capture-steps
+```
+
+Anchors are cut on the machine that recorded them and are not committed: they
+belong to a window size, a theme and a DPI.
 
 ## Also here
 

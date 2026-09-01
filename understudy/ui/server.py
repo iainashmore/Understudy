@@ -39,6 +39,7 @@ from understudy.subject import FIELDS as SUBJECT_FIELDS
 from understudy.subject import Subject, remember, resolve_subject
 from understudy.vcs.backend import Repository
 from understudy.vcs.git import Git, GitError
+from understudy import record_native
 from understudy.windows import open_windows as list_windows
 from understudy.vcs.remote import parse_remote
 from understudy.vcs import recent as recent_workspaces
@@ -149,6 +150,9 @@ class Api:
         self.jobs: dict[str, RunJob] = {}
         self._counter = 0
         self._lock = threading.Lock()
+        #: The recording in progress, if any. One at a time: a global keyboard
+        #: hook is a machine-wide thing, not a per-tab one.
+        self.recording: dict[str, Any] | None = None
 
     # -- files ----------------------------------------------------------------
 
@@ -548,6 +552,52 @@ flows: []
             "supported": sys.platform == "win32",
         }
 
+    # -- recording ------------------------------------------------------------
+
+    def recording_state(self) -> dict[str, Any]:
+        job = self.recording
+        return {
+            "available": not record_native.available(),
+            "reason": record_native.available(),
+            "running": bool(job and job.get("running")),
+            "flow": (job or {}).get("flow"),
+            "error": (job or {}).get("error"),
+            "clicks": (job or {}).get("clicks", 0),
+        }
+
+    def start_recording(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Hook the desktop and block until the stop hotkey, on a worker.
+
+        A separate thread rather than a subprocess because the hook has to
+        live somewhere with a message loop for its whole life, and a thread
+        that owns one is simpler to stop than a process to signal.
+        """
+        unavailable = record_native.available()
+        if unavailable:
+            raise WorkspaceError(unavailable)
+        if self.recording and self.recording.get("running"):
+            raise WorkspaceError("a recording is already running")
+
+        name = slugify(request.get("name") or "recorded")
+        title = request.get("title") or "*"
+        process = request.get("process") or None
+        job: dict[str, Any] = {"running": True, "flow": None, "error": None,
+                               "clicks": 0}
+        self.recording = job
+
+        def work() -> None:
+            try:
+                path = record_native.record(title, process, name,
+                                            self.workspace.root)
+                job["flow"] = self.workspace.relative(path)
+            except Exception as exc:
+                job["error"] = f"{type(exc).__name__}: {exc}"
+            finally:
+                job["running"] = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return self.recording_state()
+
     def known_subject_values(self) -> dict[str, Any]:
         """Every value ever recorded for each field, so they can be reused.
 
@@ -870,6 +920,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.describe_runs())
             elif route == "/api/subjects":
                 self._json(self.api.known_subject_values())
+            elif route == "/api/record":
+                self._json(self.api.recording_state())
             elif route == "/api/windows":
                 self._json(self.api.open_windows(params.get("pattern", "*")))
             elif route == "/api/repo":
@@ -934,6 +986,8 @@ class Handler(BaseHTTPRequestHandler):
                     body.get("paths") or [])})
             elif route == "/api/compare":
                 self._json(self.api.compare(body["run_dirs"]))
+            elif route == "/api/record/start":
+                self._json(self.api.start_recording(payload))
             elif route == "/api/subject":
                 self._json(self.api.remembered_subject(body["flow"]))
             elif route == "/api/repo/commit":

@@ -324,6 +324,20 @@ def _subject_for(args, flow) -> Subject:
     return subject
 
 
+def command_record(args) -> int:
+    """Demonstrate the path once; the flow is what comes out."""
+    from understudy import record_native
+
+    unavailable = record_native.available()
+    if unavailable:
+        print(f"error: {unavailable}", file=sys.stderr)
+        return 2
+    path = record_native.record(args.title, args.process, args.name,
+                                Path(args.out))
+    print(f"replay it with:  understudy run {path}")
+    return 0
+
+
 def command_run(args) -> int:
     flow, prompts, backend = _load(args.flow, args.backend)
     only = args.only.split(",") if args.only else None
@@ -470,6 +484,14 @@ def main(argv: list[str] | None = None) -> int:
     suite.add_argument("--runs-root", default="runs")
     suite.add_argument("--headed", action="store_true")
     suite.set_defaults(handler=command_suite)
+
+    record = sub.add_parser("record", help="record a click path as a flow")
+    record.add_argument("--title", default="*", help="window title glob")
+    record.add_argument("--process", default=None,
+                        help="image name that owns the window, e.g. CATIA.exe")
+    record.add_argument("--name", default="recorded", help="flow file name")
+    record.add_argument("--out", default="examples")
+    record.set_defaults(handler=command_record)
 
     for name, handler in (("run", command_run), ("validate", command_validate)):
         child = sub.add_parser(name)

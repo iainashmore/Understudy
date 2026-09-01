@@ -280,19 +280,34 @@
 
       <section id="tab-record">
         <div class="row"><button class="link back">‹ back</button></div>
-        <div class="notice">
-          <strong>Recording is not wired up yet.</strong>
-          <p>For a web target, or an embedded web view with a debugging port,
-          recording means injecting a picker into the page and capturing several
-          candidate strategies per element. For a native window with no such
-          port, it means Win32 hooks plus a UIAutomation lookup at the click
-          point — and, where UIA sees nothing, cropping an anchor image from a
-          screenshot.</p>
-          <p>Which of those to build is decided by
-          <code>tools/probe_native.py</code>, which has not been run against the
-          target application yet. Until then, <strong>+ Record</strong> creates a
-          flow from a working template for you to edit here.</p>
+        <div class="card">
+          <div class="row">
+            <label style="width:110px">Window</label>
+            <input id="recWindow" class="grow" placeholder="3DEXPERIENCE">
+            <button id="recPick">Pick window…</button>
+          </div>
+          <div class="row">
+            <label style="width:110px">Process</label>
+            <input id="recProcess" class="grow" placeholder="3DEXPERIENCE.exe">
+          </div>
+          <div class="row">
+            <label style="width:110px">Call it</label>
+            <input id="recName" class="grow" placeholder="leo-basics">
+            <button id="recStart" class="primary"><span class="rec-dot"></span>Start recording</button>
+          </div>
         </div>
+        <div class="notice">
+          <p><strong>While it records:</strong> do the thing once. Every click
+          becomes a picture of what you clicked on, and what you type becomes
+          the prompt. Your clicks go through to the application as normal.</p>
+          <p><strong>ctrl+alt+r</strong> then click the top-left and
+          bottom-right of the area a reply appears in. Without that the flow
+          drives the application and records nothing.</p>
+          <p><strong>ctrl+alt+s</strong> to stop and write the flow.</p>
+          <p>Nothing is read from the accessibility tree or from a web view:
+          pictures for the clicks, OCR for the reading.</p>
+        </div>
+        <div id="recStatus"></div>
       </section>
 
       <section id="tab-repo">
@@ -1041,8 +1056,90 @@ async function createFlow(thenRecord) {
 }
 
 $("newFlow").onclick = () => createFlow(false);
-$("newRecord").onclick = () => createFlow(true);
-$("recordSteps").onclick = () => state.flow && showTab("record");
+// Recording writes the flow, so there is nothing to create first. Pressing
+// Record used to make an empty flow from a template and then explain that
+// recording did not exist.
+$("newRecord").onclick = () => openRecording("");
+function openRecording(suggested) {
+  if (suggested) $("recName").value = suggested;
+  showTab("record");
+  // Asked every time the panel opens: whether this machine can record at all
+  // is a property of the machine, and a button that looks live and does
+  // nothing is worse than one that says why it is disabled.
+  recordingState().then(showRecording);
+}
+
+$("recordSteps").onclick = () => state.flow && openRecording(
+  (state.flow.split("/").pop() || "").replace(/\.ya?ml$/, ""));
+
+/* ---------- recording ---------- */
+
+async function recordingState() {
+  try {
+    return await api("/api/record");
+  } catch (error) {
+    return { available: false, reason: error.message };
+  }
+}
+
+function showRecording(state) {
+  const box = $("recStatus");
+  if (!state.available) {
+    box.innerHTML = `<div class="card"><span class="pill bad">not here</span>
+      <p>${escapeHtml(state.reason || "recording is unavailable")}</p></div>`;
+    $("recStart").disabled = true;
+    return;
+  }
+  $("recStart").disabled = state.running;
+  if (state.running) {
+    box.innerHTML = `<div class="card"><span class="pill">recording</span>
+      <p>Go and do it. <strong>ctrl+alt+r</strong> to mark the reply region,
+      <strong>ctrl+alt+s</strong> to stop.</p></div>`;
+  } else if (state.error) {
+    box.innerHTML = `<div class="card"><span class="pill bad">failed</span>
+      <pre>${escapeHtml(state.error)}</pre></div>`;
+  } else if (state.flow) {
+    box.innerHTML = `<div class="card"><span class="pill ok">recorded</span>
+      <p>${escapeHtml(state.flow)} — opening it.</p></div>`;
+  } else {
+    box.innerHTML = "";
+  }
+}
+
+async function watchRecording() {
+  const state = await recordingState();
+  showRecording(state);
+  if (state.running) return setTimeout(watchRecording, 1000);
+  if (state.flow) {
+    await loadTree();
+    await openFlow(state.flow);
+  }
+}
+
+$("recPick").onclick = async (event) => {
+  const listed = await api("/api/windows").catch(() => ({ windows: [] }));
+  if (!listed.windows.length) {
+    return openMenu(event, "Pick a window", [["Nothing to pick", () => {}]]);
+  }
+  openMenu(event, "Which window are you recording against?",
+    listed.windows.map((window) => [windowLabel(window), () => {
+      $("recWindow").value = window.title;
+      $("recProcess").value = window.process || "";
+    }]));
+};
+
+$("recStart").onclick = async () => {
+  try {
+    showRecording(await post("/api/record/start", {
+      title: $("recWindow").value.trim() || "*",
+      process: $("recProcess").value.trim(),
+      name: $("recName").value.trim() || "recorded",
+    }));
+    watchRecording();
+  } catch (error) {
+    alert(error.message);
+  }
+};
 document.querySelectorAll("button.back").forEach((button) => {
   // Every view but the main one needs a way out, since no tab bar offers one.
   button.onclick = () => showTab(state.run ? "transcript" : "flow");
