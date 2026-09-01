@@ -987,7 +987,7 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/api/compare":
                 self._json(self.api.compare(body["run_dirs"]))
             elif route == "/api/record/start":
-                self._json(self.api.start_recording(payload))
+                self._json(self.api.start_recording(body))
             elif route == "/api/subject":
                 self._json(self.api.remembered_subject(body["flow"]))
             elif route == "/api/repo/commit":

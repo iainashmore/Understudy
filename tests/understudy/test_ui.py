@@ -378,6 +378,30 @@ class TestHttp:
             self.get(server + "/files/../../../etc/passwd")
         assert caught.value.code in (400, 404)
 
+    def post(self, url, payload):
+        request = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+
+    def test_starting_a_recording_answers_over_http(self, server):
+        """Off Windows it refuses, which is still an answer rather than a
+        NameError -- this route had no test and shipped with one."""
+        try:
+            status, body = self.post(server + "/api/record/start",
+                                     {"title": "*", "name": "x"})
+        except urllib.error.HTTPError as failed:
+            assert failed.code == 400, failed.code
+            assert b"Windows" in failed.read()
+        else:
+            assert status == 200 and "running" in body
+
+    def test_the_recording_state_is_served(self, server):
+        _, body = self.get(server + "/api/record")
+        state = json.loads(body)
+        assert set(state) >= {"available", "running", "reason"}
+
     def test_the_window_list_is_served_for_the_picker(self, server):
         _, body = self.get(server + "/api/windows")
         listed = json.loads(body)
