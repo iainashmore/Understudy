@@ -266,6 +266,39 @@ class TestRunning:
         assert kinds[-1] == "finished"
         assert job.status == "finished"
 
+    def test_what_the_driver_notices_while_driving_is_reported(self, workspace):
+        """Not everything is known at startup. Which window it attached to is;
+        that the interface is drawn at a different scale from the one the
+        anchors were captured at is only found on the first click, and a note
+        drained once before the run would never carry it."""
+        app = FakeApp()
+        app.warnings = ["attached to 'Fake' of two"]
+        clicking = app.click
+
+        def notice_on_the_way(target, timeout_ms):
+            app.warnings.append("anchors match at 125% of the size captured")
+            return clicking(target, timeout_ms)
+
+        app.click = notice_on_the_way
+        api = Api(Workspace(workspace),
+                  driver_factory=lambda backend, **options: app)
+        started = api.start_run({"flow": "flow.yaml"})
+        job = api.job(started["run_id"])
+        notes = [e["text"] for e in self.drain(job) if e["type"] == "note"]
+
+        assert notes == ["attached to 'Fake' of two",
+                         "anchors match at 125% of the size captured"], notes
+
+    def test_a_note_is_said_once_however_often_it_is_drained(self, workspace):
+        app = FakeApp()
+        app.warnings = ["attached to 'Fake' of two"]
+        api = Api(Workspace(workspace),
+                  driver_factory=lambda backend, **options: app)
+        job = api.job(api.start_run({"flow": "flow.yaml"})["run_id"])
+        notes = [e["text"] for e in self.drain(job) if e["type"] == "note"]
+
+        assert len(notes) == 1, notes
+
     def test_the_result_carries_the_response_and_a_transcript(self, api):
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])

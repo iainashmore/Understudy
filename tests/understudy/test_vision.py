@@ -9,7 +9,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from understudy.vision import DEFAULT_THRESHOLD, crop, locate, locate_all, to_gray, changed_region
+from understudy.vision import (
+    DEFAULT_THRESHOLD, SCALES, _shortlist, changed_region, crop, locate,
+    locate_all, locate_scaled, resized, to_gray,
+)
 
 
 def canvas(width=200, height=120, colour=(30, 40, 50)) -> np.ndarray:
@@ -228,3 +231,132 @@ class TestFindingTheOcrEngine:
         assert outcome.available is False
         assert "winget install" in (outcome.error or "")
         assert "UNDERSTUDY_TESSERACT" in (outcome.error or "")
+
+
+def toolbar(scale: float, palette=None) -> np.ndarray:
+    """A little interface, *drawn* at `scale` rather than resampled to it.
+
+    The distinction is the whole point. A picture scaled up is the same picture
+    with more pixels; an interface redrawn at another DPI has its edges on
+    different pixel boundaries, its borders a different number of pixels thick
+    and its text hinted differently. Anchors survive the first easily and the
+    second is what actually happens on a workstation at 125%.
+    """
+    at = lambda value: int(round(value * scale))
+    palette = palette or [(30, 90, 170), (200, 80, 40), (40, 150, 80), (140, 60, 160)]
+    image = np.full((at(240), at(400), 3), 235, dtype=np.uint8)
+    image[: at(40), :] = 250
+    for index, colour in enumerate(palette):
+        left, top = at(20 + index * 70), at(8)
+        right, bottom = at(20 + index * 70 + 56), at(32)
+        image[top:bottom, left:right] = 245
+        image[top:bottom, left : left + at(2)] = colour
+        image[top : top + at(2), left:right] = colour
+        for bar in range(3):
+            y = at(13 + bar * 6)
+            image[y : y + at(2), left + at(8) : right - at(8)] = colour
+    return image
+
+
+#: The second button, cut from the interface at the size it was recorded at.
+SECOND_BUTTON = toolbar(1.0)[6:34, 88:160].copy()
+#: Where its centre lands, at 100%.
+SECOND_CENTRE = (124, 20)
+#: The same interface with that button repainted grey: the control the anchor
+#: names is not there any more, and the three others still are.
+WITHOUT_IT = [(30, 90, 170), (90, 90, 90), (40, 150, 80), (140, 60, 160)]
+
+
+class TestFindingItAtAnotherSize:
+    """A recording is a photograph: its anchors are pixels captured at one
+    monitor's DPI. Replayed at 125% every anchor misses -- not because the
+    control moved, which anchors already handle, but because it is a different
+    number of pixels across."""
+
+    @pytest.mark.parametrize("drawn_at", [1.25, 1.5, 0.8, 0.75])
+    def test_the_control_is_found_and_the_size_reported(self, drawn_at):
+        screen = toolbar(drawn_at)
+        assert locate(screen, SECOND_BUTTON) is None, "and the strict path cannot"
+
+        found = locate_scaled(screen, SECOND_BUTTON)
+        assert found is not None
+        wanted = (round(SECOND_CENTRE[0] * drawn_at), round(SECOND_CENTRE[1] * drawn_at))
+        assert abs(found.centre[0] - wanted[0]) <= 3
+        assert abs(found.centre[1] - wanted[1]) <= 3
+        assert found.scale == pytest.approx(drawn_at, abs=0.06)
+
+    @pytest.mark.parametrize("drawn_at", [1.0, 1.25, 1.5, 0.8])
+    def test_a_control_that_is_gone_is_not_found_at_some_other_size(self, drawn_at):
+        """The failure that would matter. Three buttons remain that look almost
+        exactly like the one being searched for, and the best of them scores
+        0.81 -- comfortably above any floor worth setting. What separates them
+        is that the real control leads the runner-up by three times as much."""
+        assert locate_scaled(toolbar(drawn_at, WITHOUT_IT), SECOND_BUTTON) is None
+
+    def test_nothing_is_found_on_an_empty_screen(self):
+        blank = np.full((240, 400, 3), 235, dtype=np.uint8)
+        assert locate_scaled(blank, SECOND_BUTTON) is None
+
+    def test_the_match_is_the_size_it_was_found_at(self):
+        """So the click point is the centre of what is on screen now, and a
+        caller can say what it had to do to get there."""
+        found = locate_scaled(toolbar(1.5), SECOND_BUTTON)
+        assert found.scale == pytest.approx(1.5)
+        assert found.width == pytest.approx(SECOND_BUTTON.shape[1] * 1.5, abs=2)
+        assert found.height == pytest.approx(SECOND_BUTTON.shape[0] * 1.5, abs=2)
+
+    def test_the_size_it_was_captured_at_is_not_among_those_tried(self):
+        """`locate` owns that one, with a strict threshold. Trying it again
+        here would quietly overrule the threshold the flow asked for."""
+        assert 1.0 not in SCALES
+        assert locate_scaled(toolbar(1.0), SECOND_BUTTON) is None
+
+    def test_only_the_named_sizes_are_tried_when_the_caller_names_them(self):
+        """The caller that already knows the interface is at 150% -- because
+        the last target said so -- pays for one size instead of a dozen."""
+        assert locate_scaled(toolbar(1.5), SECOND_BUTTON, scales=(1.5,)) is not None
+        assert locate_scaled(toolbar(1.5), SECOND_BUTTON, scales=(0.8,)) is None
+
+    def test_a_region_bounds_the_search_and_the_answer_is_still_on_screen(self):
+        screen = toolbar(1.25)
+        found = locate_scaled(screen, SECOND_BUTTON,
+                              region={"x": 60, "y": 0, "width": 200, "height": 60})
+        assert found is not None
+        wanted = (round(SECOND_CENTRE[0] * 1.25), round(SECOND_CENTRE[1] * 1.25))
+        assert abs(found.centre[0] - wanted[0]) <= 3
+
+    def test_an_anchor_larger_than_the_screen_is_not_an_error(self):
+        small = np.full((20, 20, 3), 235, dtype=np.uint8)
+        assert locate_scaled(small, SECOND_BUTTON) is None
+
+
+class TestChoosingWhichSizesToConfirm:
+    """The coarse pass runs at half resolution, where 1.2 and 1.25 are nearly
+    the same picture. Confirming only its winner would take the wrong one of a
+    pair often enough to matter."""
+
+    def test_the_best_few_are_confirmed(self):
+        ranked = [(0.9, 1.25), (0.8, 0.8), (0.7, 2.0), (0.6, 0.5)]
+        assert _shortlist(ranked, confirm=2)[:2] == [1.25, 0.8]
+
+    def test_and_whatever_sits_either_side_of_the_winner(self):
+        ranked = [(0.9, 1.2), (0.8, 0.5), (0.7, 1.25), (0.6, 1.1)]
+        chosen = _shortlist(ranked, confirm=2)
+        assert 1.1 in chosen and 1.25 in chosen, chosen
+
+    def test_nothing_ranked_means_nothing_to_confirm(self):
+        assert _shortlist([], confirm=2) == []
+
+
+class TestResizing:
+    def test_the_size_it_was_asked_for(self):
+        assert resized(np.zeros((20, 40, 3), dtype=np.uint8), 1.5).shape[:2] == (30, 60)
+
+    def test_the_same_picture_back_at_its_own_size(self):
+        """Not a copy that has been through a resampler and come back subtly
+        different -- the strict path's scores have to stay exact."""
+        image = np.zeros((20, 40, 3), dtype=np.uint8)
+        assert resized(image, 1.0) is image
+
+    def test_it_never_rounds_away_to_nothing(self):
+        assert resized(np.zeros((3, 3, 3), dtype=np.uint8), 0.1).shape[:2] == (1, 1)

@@ -32,6 +32,38 @@ from harness.image import load_rgb
 #: is worse than a clean failure.
 DEFAULT_THRESHOLD = 0.9
 
+#: Sizes an anchor is tried at when it does not match at the one it was
+#: captured at. Windows offers 100/125/150/175/200% and applications add their
+#: own zoom on top; these are the ratios between the pairs anybody actually
+#: lands on, commonest first.
+SCALES = (1.25, 0.8, 1.5, 1.1, 0.9, 1.2, 1.33, 0.75, 0.67, 1.75, 2.0, 0.5)
+
+#: A resized anchor never matches as well as the one that was captured. A UI
+#: re-rendered at a different DPI is not the same picture scaled -- the text is
+#: hinted differently, the borders land on different pixels -- and measured
+#: against a genuine re-render the best possible score is around 0.7-0.85.
+#: Holding those to DEFAULT_THRESHOLD would reject every one of them.
+SCALED_FLOOR = 0.6
+
+#: ...so the score alone cannot decide it, and this does: how far the best
+#: position leads the best rival somewhere else. Measured on re-renders of a
+#: toolbar of near-identical buttons, the true position leads by 0.12-0.15
+#: (and by 0.27-0.32 where the controls are distinct); with the control
+#: removed, the best remaining position leads by 0.04. The score cannot tell
+#: those apart -- an absent control still scores 0.81 -- and the lead can.
+SCALED_MARGIN = 0.08
+
+#: Scale searching at full resolution costs ~2.4s per size on a 1936x1096
+#: window -- half a minute for a dozen. At half resolution it costs 0.18s, so
+#: the search is done small and only the best few are confirmed at full size.
+COARSE = 0.5
+
+#: How many sizes to confirm at full resolution. The coarse pass ranks the
+#: right one first most of the time but not always -- with half the pixels
+#: gone, 1.2 and 1.25 are nearly the same picture -- so the shortlist takes
+#: the best few *and* the winner's immediate neighbours.
+CONFIRM = 2
+
 
 @dataclass(frozen=True)
 class Match:
@@ -40,6 +72,10 @@ class Match:
     width: int
     height: int
     score: float
+    #: The size the anchor had to be tried at to be found. 1.0 means it matched
+    #: as captured; anything else means the interface is not at the scale it
+    #: was recorded at, and `width`/`height` are the scaled size.
+    scale: float = 1.0
 
     @property
     def centre(self) -> tuple[int, int]:
@@ -245,6 +281,123 @@ def locate_all(
         if len(matches) >= 50:
             break
     return matches
+
+
+def resized(image: np.ndarray, scale: float) -> np.ndarray:
+    """The same picture at a different size.
+
+    Lanczos rather than nearest-neighbour: a nearest-neighbour icon is a
+    different picture with aliasing all over it, and correlation notices.
+    """
+    from PIL import Image
+
+    if scale == 1.0:
+        return image
+    picture = Image.fromarray(np.ascontiguousarray(image, dtype=np.uint8))
+    size = (max(1, round(picture.width * scale)),
+            max(1, round(picture.height * scale)))
+    return np.asarray(picture.resize(size, Image.LANCZOS), dtype=np.uint8)
+
+
+def _best_and_rival(scores: np.ndarray, shape: tuple[int, int]):
+    """The top position, and the best position that is not it.
+
+    Positions overlapping the winner are its own peak seen one pixel over, not
+    a rival, so they are suppressed before the second is taken.
+    """
+    height, width = shape
+    flat = int(np.argmax(scores))
+    y, x = np.unravel_index(flat, scores.shape)
+    others = scores.copy()
+    others[max(0, y - height): y + height, max(0, x - width): x + width] = -1.0
+    return float(scores[y, x]), float(others.max()), int(x), int(y)
+
+
+def _shortlist(ranked: list[tuple[float, float]], confirm: int) -> list[float]:
+    """The sizes worth a full-resolution look.
+
+    The best few by the coarse score, plus whatever sits either side of the
+    winner: at half resolution neighbouring sizes are nearly indistinguishable,
+    and the one the coarse pass puts second is regularly the right one.
+    """
+    if not ranked:
+        return []
+    chosen = [scale for _, scale in ranked[:confirm]]
+    order = sorted(scale for _, scale in ranked)
+    winner = order.index(ranked[0][1])
+    for index in (winner - 1, winner + 1):
+        if 0 <= index < len(order) and order[index] not in chosen:
+            chosen.append(order[index])
+    return chosen
+
+
+def locate_scaled(
+    screenshot: bytes | np.ndarray,
+    anchor: bytes | np.ndarray,
+    scales: tuple[float, ...] = SCALES,
+    region: dict[str, int] | None = None,
+    floor: float = SCALED_FLOOR,
+    margin: float = SCALED_MARGIN,
+    coarse: float = COARSE,
+    confirm: int = CONFIRM,
+) -> Match | None:
+    """Find the anchor when the interface is not at the size it was captured at.
+
+    The rescue path for a recording made at one DPI and replayed at another --
+    a different monitor, a different workstation, a laptop undocked. Only worth
+    reaching for once `locate` has failed at the anchor's own size, because it
+    is both slower and, necessarily, less certain.
+
+    Accepting a match here cannot be a question of score: a re-rendered control
+    scores well below what a strict threshold demands. What it asks instead is
+    whether this position is *clearly* the best one on the screen -- ahead of
+    the runner-up by `margin` -- which is the property that actually
+    distinguishes "found it, slightly blurred" from "found the least bad of
+    several things that all look like this".
+    """
+    haystack = screenshot if isinstance(screenshot, np.ndarray) else load_rgb(screenshot)
+    needle = anchor if isinstance(anchor, np.ndarray) else load_rgb(anchor)
+
+    offset_x = offset_y = 0
+    if region:
+        offset_x, offset_y = int(region.get("x", 0)), int(region.get("y", 0))
+        haystack = haystack[
+            offset_y : offset_y + int(region["height"]),
+            offset_x : offset_x + int(region["width"]),
+        ]
+
+    def fits(small: np.ndarray, large: np.ndarray) -> bool:
+        return small.shape[0] <= large.shape[0] and small.shape[1] <= large.shape[1]
+
+    ranked: list[tuple[float, float]] = []
+    small_haystack = resized(haystack, coarse)
+    for scale in scales:
+        candidate = resized(resized(needle, scale), coarse)
+        if not fits(candidate, small_haystack):
+            continue
+        scores = correlate(small_haystack, candidate)
+        if scores.size:
+            ranked.append((float(scores.max()), scale))
+    ranked.sort(reverse=True)
+
+    best: Match | None = None
+    for scale in _shortlist(ranked, confirm):
+        candidate = resized(needle, scale)
+        if not fits(candidate, haystack):
+            continue
+        scores = correlate(haystack, candidate)
+        if not scores.size:
+            continue
+        score, rival, x, y = _best_and_rival(scores, candidate.shape[:2])
+        if score < floor or score - rival < margin:
+            continue
+        if best is None or score > best.score:
+            best = Match(
+                x=x + offset_x, y=y + offset_y,
+                width=candidate.shape[1], height=candidate.shape[0],
+                score=score, scale=scale,
+            )
+    return best
 
 
 def crop(screenshot: bytes | np.ndarray, region: dict[str, int]) -> np.ndarray:

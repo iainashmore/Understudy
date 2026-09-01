@@ -129,10 +129,132 @@ class TestAnchorPoints:
                        offset={"dx": 0, "dy": 26})
         assert point.point == (120, 236)
 
+    def test_an_offset_grows_with_the_interface(self):
+        """"26 pixels below the label" was measured in the pixels of the
+        machine that recorded it. On an interface drawn half again as large the
+        field is 39 below, and the old number lands in the label."""
+        point = _Point(NativeDriver(), Match(100, 200, 60, 30, 0.9, scale=1.5),
+                       offset={"dx": 0, "dy": 26})
+        assert point.point == (130, 254)
+
     def test_reading_text_from_an_anchor_says_why_it_cannot(self):
         point = _Point(NativeDriver(), Match(0, 0, 10, 10, 0.99))
         with pytest.raises(DriverError, match="no text to read"):
             point.get_value()
+
+
+class TestWhenTheInterfaceIsNotTheSizeItWasRecordedOn:
+    """Anchors are pixels captured at one monitor's DPI. Moved to a screen at
+    125%, every one of them misses -- and the flow is not wrong, the picture
+    is a different number of pixels across."""
+
+    def _screen(self, at=1.0):
+        """A window with one distinctive control in it."""
+        import numpy as np
+        from harness.image import to_png_bytes
+        from understudy.vision import resized
+
+        rng = np.random.default_rng(7)
+        image = np.full((300, 500, 3), 40, dtype=np.uint8)
+        image[60:100, 200:280] = rng.integers(0, 255, (40, 80, 3), dtype=np.uint8)
+        return to_png_bytes(resized(image, at)), image[60:100, 200:280].copy()
+
+    def _driver(self, showing, anchor, tmp_path):
+        from harness.image import to_png_bytes
+        from understudy.flow import Strategy
+
+        path = tmp_path / "anchor.png"
+        path.write_bytes(to_png_bytes(anchor))
+        driver = NativeDriver()
+        driver.screenshot = lambda *args, **kwargs: showing
+        return driver, Strategy("native", {"image": str(path), "threshold": 0.9})
+
+    def test_an_anchor_from_another_dpi_still_resolves(self, tmp_path):
+        showing, anchor = self._screen(1.25)
+        driver, strategy = self._driver(showing, anchor, tmp_path)
+
+        handle, note = driver._resolve_anchor(strategy)
+        assert handle is not None, note
+        assert "125%" in note, note
+        # The centre of the control as it is drawn now, not as it was captured.
+        assert handle.point == pytest.approx((300, 100), abs=3)
+
+    def test_it_says_so_rather_than_resolving_quietly(self, tmp_path):
+        """An interface that is not at the scale it was recorded at is a fact
+        about the run. Clicking a few pixels approximately and saying nothing
+        is how a sweep of eighty prompts goes subtly wrong."""
+        showing, anchor = self._screen(1.25)
+        driver, strategy = self._driver(showing, anchor, tmp_path)
+        driver._resolve_anchor(strategy)
+
+        assert len(driver.warnings) == 1
+        assert "125%" in driver.warnings[0]
+
+    def test_the_size_is_learned_once_and_then_simply_used(self, tmp_path):
+        """Searching costs a second a size. Every anchor in a rescaled
+        interface is rescaled the same way, so the second target asks about one
+        size rather than a dozen."""
+        showing, anchor = self._screen(1.25)
+        driver, strategy = self._driver(showing, anchor, tmp_path)
+        asked = []
+
+        import understudy.drivers.native as native
+        original = native.locate_scaled
+
+        def watched(shot, image, scales=None, **rest):
+            asked.append(scales)
+            return original(shot, image, **({} if scales is None else {"scales": scales}), **rest)
+
+        native.locate_scaled = watched
+        try:
+            driver._resolve_anchor(strategy)
+            driver._scale_searched = False       # a new target, a new search
+            driver._resolve_anchor(strategy)
+        finally:
+            native.locate_scaled = original
+
+        assert asked[0] is None, "the first target searches"
+        assert asked[1] == (1.25,), "the second is told where to look"
+        assert len(driver.warnings) == 1, "and it is not said twice"
+
+    def test_the_search_happens_once_per_target_not_once_per_poll(self, tmp_path):
+        """resolve() polls until its timeout. A search on every turn of that
+        loop would spend the whole budget resizing pictures."""
+        showing, anchor = self._screen(1.25)
+        driver, strategy = self._driver(showing, anchor, tmp_path)
+        driver._scale_searched = True
+
+        handle, note = driver._resolve_anchor(strategy)
+        assert handle is None and note == "0 visual match(es)"
+
+    def test_a_control_that_is_gone_is_not_rescued_by_resizing(self, tmp_path):
+        import numpy as np
+        from harness.image import to_png_bytes
+
+        _, anchor = self._screen()
+        empty = to_png_bytes(np.full((300, 500, 3), 40, dtype=np.uint8))
+        driver, strategy = self._driver(empty, anchor, tmp_path)
+
+        handle, note = driver._resolve_anchor(strategy)
+        assert handle is None
+        assert note == "0 visual match(es)"
+
+    def test_two_of_them_stays_ambiguous(self, tmp_path):
+        """Ambiguity is not resolution, and a second candidate size only adds
+        candidates."""
+        import numpy as np
+        from harness.image import to_png_bytes
+
+        _, anchor = self._screen()
+        image = np.full((300, 500, 3), 40, dtype=np.uint8)
+        image[60:100, 200:280] = anchor
+        image[160:200, 100:180] = anchor
+        driver, strategy = self._driver(to_png_bytes(image), anchor, tmp_path)
+
+        handle, note = driver._resolve_anchor(strategy)
+        assert handle is None
+        assert note == "2 visual match(es)"
+        assert not driver.warnings, "and nothing is blamed on the DPI"
 
 
 class TestTypingAtAPixel:

@@ -48,7 +48,7 @@ from understudy.native_match import (
 from understudy.ocr import read_text
 from understudy.recording import FfmpegRecorder, NullRecorder, Recording
 from understudy.resolvers import NullResolver, Resolver
-from understudy.vision import Match, crop, locate_all
+from understudy.vision import Match, crop, locate_all, locate_scaled
 from understudy.windows import OpenWindow, choose, open_windows, owned_by
 from harness.image import to_png_bytes
 
@@ -176,6 +176,13 @@ class NativeDriver:
         #: a DPI change invalidates them, a move does not.
         self.baseline: WindowGeometry | None = None
         self.dpi_awareness = "not set"
+        #: The size the interface turned out to be drawn at, relative to the
+        #: one the anchors were captured at. Learned from the first target that
+        #: only matched when resized, and tried first for every target after
+        #: it: a rescaled interface is rescaled all over, and searching for
+        #: that once is the difference between seconds and half a minute.
+        self.scale_hint: float | None = None
+        self._scale_searched = False
         self.warnings: list[str] = []
         self.mouse_style = MouseStyle()
         self.typing_style = TypingStyle()
@@ -460,6 +467,10 @@ class NativeDriver:
         """
         deadline = time.monotonic() + timeout_ms / 1000.0
         attempts: list[str] = []
+        # One scale search per target, not per poll: the loop below runs until
+        # the timeout, and a search on every turn of it would spend the whole
+        # budget resizing pictures.
+        self._scale_searched = False
 
         while True:
             try:
@@ -489,15 +500,61 @@ class NativeDriver:
     def _resolve_anchor(self, strategy: Strategy):
         from pathlib import Path
 
+        anchor = Path(strategy.fields["image"]).read_bytes()
+        region = strategy.fields.get("region")
+        shot = self.screenshot()
         matches = locate_all(
-            self.screenshot(), Path(strategy.fields["image"]).read_bytes(),
+            shot, anchor,
             threshold=float(strategy.fields.get("threshold", 0.9)),
-            region=strategy.fields.get("region"),
+            region=region,
         )
-        if len(matches) != 1:
+        if len(matches) == 1:
+            return _Point(self, matches[0], strategy.fields.get("offset")), \
+                f"score {matches[0].score:.3f}"
+        if matches:
+            # Several. Trying other sizes cannot help -- ambiguity is not
+            # resolution, and a second candidate size only adds candidates.
             return None, f"{len(matches)} visual match(es)"
-        return _Point(self, matches[0], strategy.fields.get("offset")), \
-            f"score {matches[0].score:.3f}"
+
+        found = self._at_another_size(shot, anchor, region)
+        if found is None:
+            return None, "0 visual match(es)"
+        return _Point(self, found, strategy.fields.get("offset")), \
+            f"score {found.score:.3f} at {found.scale:.0%}"
+
+    def _at_another_size(self, shot: bytes, anchor: bytes,
+                         region: dict[str, int] | None) -> Match | None:
+        """The anchor, in an interface drawn at a different scale.
+
+        A recording is a photograph: its anchors are pixels captured at one
+        monitor's DPI. Replayed on a workstation at 125%, or on the same one
+        undocked, every anchor in the flow misses -- not because the control
+        moved, which anchors handle, but because it is a different number of
+        pixels across.
+
+        Only reached once an anchor has failed at its own size, and reported
+        rather than swallowed: an interface that is not at the scale it was
+        recorded at is a fact about the run, and a person should see it.
+        """
+        if self.scale_hint:
+            found = locate_scaled(shot, anchor, scales=(self.scale_hint,),
+                                  region=region)
+            if found is not None:
+                return found
+        if self._scale_searched:
+            return None
+        self._scale_searched = True
+        found = locate_scaled(shot, anchor, region=region)
+        if found is None:
+            return None
+        if self.scale_hint != found.scale:
+            self.scale_hint = found.scale
+            self.warnings.append(
+                f"anchors match at {found.scale:.0%} of the size they were "
+                f"captured at -- the interface is not at the scale it was "
+                f"recorded on; click points are a few pixels approximate"
+            )
+        return found
 
     def _resolve_by_agent(self, target: Target, strategy: Strategy):
         learned = self.learned.get(target.name)
@@ -713,7 +770,11 @@ class _Point:
     @property
     def point(self) -> tuple[int, int]:
         x, y = self.match.centre
-        return x + int(self.offset.get("dx", 0)), y + int(self.offset.get("dy", 0))
+        # The offset was measured in the recording's pixels. In an interface
+        # drawn half again as large, "32px right of the anchor" is 48.
+        scale = self.match.scale
+        return (x + round(int(self.offset.get("dx", 0)) * scale),
+                y + round(int(self.offset.get("dy", 0)) * scale))
 
     @property
     def screen_point(self) -> tuple[int, int]:

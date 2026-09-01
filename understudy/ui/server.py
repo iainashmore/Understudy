@@ -427,11 +427,27 @@ flows: []
                 ),
             )
             driver.start(flow.app_config("native"))
-            # Which window it attached to, when there was a choice. Otherwise
-            # this is a decision made silently, and "it typed into the wrong
-            # 3DEXPERIENCE window" is not a thing to discover from a video.
-            for note in getattr(driver, "warnings", []):
-                job.emit("note", text=note)
+
+            said = 0
+
+            def say_what_is_new() -> None:
+                """Whatever the driver has noticed since it was last asked.
+
+                Which window it attached to, when there was a choice --
+                otherwise that is a decision made silently, and "it typed into
+                the wrong 3DEXPERIENCE window" is not a thing to discover from
+                a video. Drained again as the run goes on, because some of it
+                is only learned while driving: an interface drawn at a
+                different scale from the one the anchors were captured at is
+                found on the first click, not at startup.
+                """
+                nonlocal said
+                notes = getattr(driver, "warnings", [])
+                for note in notes[said:]:
+                    job.emit("note", text=note)
+                said = len(notes)
+
+            say_what_is_new()
 
             # What was under test: whatever the form said, falling back to
             # what this flow was last run against, so it is typed once.
@@ -453,6 +469,7 @@ flows: []
                     runner._append(result)
                     results.append(result)
                     job.emit("variant_finished", result=result.as_dict())
+                    say_what_is_new()
 
             job.results = [result.as_dict() for result in results]
             write_csv(results, job.out_dir / "results.csv")
