@@ -269,3 +269,42 @@ class TestWhatTheFlowIsCalled:
         out called 3DEXPERIENCE."""
         assert record_native.readable("leo-basics") == "Leo basics"
         assert record_native.readable("tolerance_check") == "Tolerance check"
+
+
+class TestTheBaselineTheReplyIsMeasuredAgainst:
+    """Where the answer appeared is worked out by diffing the screen at the
+    last recorded action against the screen at stop. Which screen counts as
+    "before" is the whole of it."""
+
+    def test_a_click_outside_the_window_does_not_move_the_baseline(self, session):
+        """The click that reaches Stop in the browser is outside the window,
+        and by then the answer is already on screen. Taking that as "before"
+        left every recording stopped from the app with no reply region."""
+        click(session, 280, 130)                 # in the window
+        before = session.last_screen
+        session.shot = lambda: session.answered  # the answer arrives
+        click(session, -5000, 500)               # reaching for Stop
+        assert session.last_screen is before
+
+        session.finish()
+        assert session.read_region == {"x": 492, "y": 292,
+                                       "width": 316, "height": 216}
+
+    def test_a_recorded_click_does_move_it(self, session):
+        click(session, 280, 130)
+        session.shot = lambda: session.answered
+        click(session, 300, 140)
+        assert session.last_screen is session.answered
+
+    def test_stopping_from_the_browser_still_finds_the_reply(self, session):
+        """The whole sequence, in the order the app makes people do it."""
+        click(session, 280, 130)
+        for character in "hello":
+            press(session, character)
+            release(session, character)
+        press(session, "Return")
+        session.shot = lambda: session.answered   # LEO answers
+        click(session, 1472, 503)                 # the browser's Stop button
+        session.finish()
+        assert session.read_region is not None
+        assert record_native.problems_with(session) == []

@@ -72,7 +72,12 @@ class Recorder:
     threshold: float = 0.88
     anchors: list[Anchor] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
+    #: Things that affect what the flow will do.
     warnings: list[str] = field(default_factory=list)
+    #: Things worth saying once and then forgetting. Reaching for the Stop
+    #: button means a click outside the window on every single recording, and
+    #: reporting that as a problem trains people to ignore the problems.
+    notes: list[str] = field(default_factory=list)
     _typed: list[str] = field(default_factory=list)
     _last_target: str = ""
 
@@ -96,7 +101,7 @@ class Recorder:
             # monitor, the taskbar. Clamping it produced an anchor cut from
             # the window's corner -- a picture of something nobody clicked,
             # which then fails to match, or worse, matches.
-            self.warnings.append(
+            self.notes.append(
                 f"a click at ({x}, {y}) was outside the window and was not "
                 f"recorded"
             )

@@ -240,7 +240,15 @@ class TestClicksThatWereNotInTheWindow:
     def test_it_says_so_rather_than_dropping_it_silently(self, window):
         recorder = Recorder()
         recorder.click(-50, 920, window)
-        assert any("outside the window" in w for w in recorder.warnings)
+        assert any("outside the window" in note for note in recorder.notes)
+
+    def test_it_is_a_note_rather_than_a_problem_with_the_flow(self):
+        """Reaching for the Stop button is a click outside the window on every
+        recording. Reporting that as a problem teaches people to ignore the
+        problems."""
+        recorder = Recorder()
+        recorder.click(-50, 920, np.zeros((600, 900, 3), dtype=np.uint8))
+        assert recorder.warnings == []
 
     def test_a_click_past_the_far_edge_counts_too(self, window):
         recorder = Recorder()

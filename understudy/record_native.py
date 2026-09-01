@@ -108,11 +108,17 @@ class Session:
     def click(self, x: int, y: int) -> None:
         self.counts["clicks"] += 1
         image = self.shot()
-        self.last_screen = image
         left, top = self.origin()
         name = self.recorder.click(x, y, image, (left, top))
-        if name and self.save:
-            self.save(self.recorder.anchors[-1])
+        if name:
+            # Only a click that was part of the recording moves the baseline
+            # the reply is measured against. The click that reaches the Stop
+            # button is in the browser, by which time the answer is already on
+            # screen -- and taking that as "before" made the reply region come
+            # out empty for everybody who stopped from the app.
+            self.last_screen = image
+            if self.save:
+                self.save(self.recorder.anchors[-1])
         # Both coordinates, because the difference between them is the whole
         # of what can go wrong here. On a monitor placed left of the primary
         # the screen coordinate is negative and the window one is not, and a
