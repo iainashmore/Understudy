@@ -60,9 +60,19 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from understudy.windows import (  # noqa: E402
-    OpenWindow, best_first, open_windows, process_names,
-)
+try:
+    from understudy.windows import (  # noqa: E402
+        OpenWindow, best_first, open_windows, process_names,
+    )
+except ImportError:  # pragma: no cover - a copied file, not a checkout
+    # Said plainly, because the machine this runs on is a locked-down
+    # workstation and the temptation is to copy one file onto it.
+    raise SystemExit(
+        "probe_native.py needs the rest of the repository beside it: it is\n"
+        "tools/probe_native.py inside the Understudy checkout, not a\n"
+        "standalone script. Copy or clone the whole folder and run it from\n"
+        "there."
+    ) from None
 
 DEFAULT_PORTS = [9222, 9223, 9229, 8888, 1337]
 MAX_TREE_DEPTH = 12
