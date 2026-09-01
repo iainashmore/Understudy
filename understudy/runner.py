@@ -211,6 +211,13 @@ class Runner:
         self.subject = flow.subject.merged_with(subject or Subject())
         self.record = record
         self.results_path = self.out_dir / "results.jsonl"
+        #: The window when the question was sent, for a flow that reads
+        #: whatever appeared afterwards.
+        self._baseline: bytes | None = None
+        self._reads_changes = any(
+            step.action == "read" and step.params.get("mode") == "changed"
+            for step in flow.reset + flow.steps
+        )
 
     # -- setup ----------------------------------------------------------------
 
@@ -394,6 +401,7 @@ class Runner:
 
         if action == "click":
             status.resolution = self.driver.click(target, timeout).as_dict()
+            self._mark_baseline()
 
         elif action == "type":
             resolution = self.driver.type(
@@ -416,6 +424,7 @@ class Runner:
             resolution = self.driver.key(step.params["keys"], target, timeout)
             status.resolution = resolution.as_dict() if resolution else None
             status.detail["keys"] = step.params["keys"]
+            self._mark_baseline()
 
         elif action == "capture":
             path = self._capture(
@@ -444,6 +453,25 @@ class Runner:
         region = step.params.get("region")
         mode = step.params.get("mode", "text")
 
+        if mode == "changed":
+            # The reply is the part of the screen that appeared while we
+            # waited. A fixed rectangle over a conversation panel reads the
+            # title, the date separators, the clock and the input box as well
+            # -- and reads the whole history once the thread has one, so the
+            # answer to prompt five arrives with prompts one to four attached.
+            region, appeared = self._changed_since(region, status)
+            if not appeared:
+                # Reading the rectangle anyway would report the panel's
+                # furniture as the answer, and a wrong answer recorded
+                # confidently is worse than a run that says it got none.
+                result.reads[store_as] = ""
+                status.detail["chars"] = 0
+                status.detail["store_as"] = store_as
+                status.status = Status.ERROR
+                status.error = "nothing appeared to read"
+                return
+            mode = "ocr"
+
         if mode == "text" and not region:
             text, resolution = self.driver.read(target, timeout)
             status.resolution = resolution.as_dict()
@@ -465,6 +493,59 @@ class Runner:
         result.reads[store_as] = text
         status.detail["chars"] = len(text)
         status.detail["store_as"] = store_as
+
+    def _mark_baseline(self) -> None:
+        """The window as it was when the question was sent.
+
+        Taken after whatever submits -- the Enter, or the click on send -- so
+        the reply is what appeared afterwards. The echo of the question itself
+        lands instantly and is on both sides of the comparison, which is why
+        it does not come back as part of the answer.
+
+        Only done for a flow that asks for it: a screenshot per click is not
+        free, and most flows never read a change.
+        """
+        if self._reads_changes:
+            self._baseline = self.driver.screenshot()
+
+    def _changed_since(
+        self, bound: dict[str, int] | None, status: StepStatus,
+    ) -> tuple[dict[str, int] | None, bool]:
+        """The part of the window that changed since the baseline, and whether
+        anything changed at all.
+
+        Bounded by `region` when the flow gives one, so a clock in a corner or
+        a status bar somewhere else cannot widen the answer to the whole
+        screen.
+        """
+        from harness.image import load_rgb
+        from understudy.vision import changed_region, crop
+
+        after = self.driver.screenshot()
+        if self._baseline is None:
+            # Nothing was clicked or sent before this read, so there is no
+            # "before". Fall back to reading what the flow pointed at.
+            status.detail["changed"] = "nothing to compare against"
+            return bound, True
+
+        before_image, after_image = load_rgb(self._baseline), load_rgb(after)
+        if bound:
+            before_image = crop(before_image, bound)
+            after_image = crop(after_image, bound)
+
+        found = changed_region(before_image, after_image)
+        if found is None:
+            status.detail["changed"] = "nothing on screen changed"
+            return bound, False
+        if bound:
+            # Back into screen coordinates, so the picture kept beside the
+            # answer is of where the answer actually was.
+            found = {**found, "x": found["x"] + bound["x"],
+                     "y": found["y"] + bound["y"]}
+        status.detail["changed"] = (
+            f"{found['width']}x{found['height']} at ({found['x']}, {found['y']})"
+        )
+        return found, True
 
     def _wait_for_stable(self, step: Step, target, timeout: int, status: StepStatus) -> None:
         stable_for = int(step.params.get("stable_for_ms", self.flow.defaults.stable_for_ms))

@@ -183,9 +183,17 @@ class TestTheFlowItWrites:
             window, read_region={"x": 1, "y": 2, "width": 3, "height": 4})
         assert [s["action"] for s in document["steps"][-2:]] == \
             ["wait_for_stable", "read"]
-        assert document["steps"][-1]["mode"] == "ocr"
         assert document["steps"][-1]["region"] == {"x": 1, "y": 2,
                                                    "width": 3, "height": 4}
+
+    def test_the_recorded_region_bounds_the_read_rather_than_being_it(
+            self, window):
+        """A rectangle drawn around a conversation panel holds the answer, and
+        also the title, the clock, the input box and every earlier answer.
+        What is wanted is the part of it that appeared while we waited."""
+        _, document = self._recorded(
+            window, read_region={"x": 1, "y": 2, "width": 3, "height": 4})
+        assert document["steps"][-1]["mode"] == "changed"
 
     def test_without_one_it_records_nothing_and_says_so_by_omission(self, window):
         _, document = self._recorded(window)
@@ -349,7 +357,7 @@ class TestARecordingWithNoClicksInIt:
         document = recorder.flow("f", "F", APP,
                                  read_region={"x": 1, "y": 2,
                                               "width": 300, "height": 200})
-        assert document["steps"][-1]["mode"] == "ocr"
+        assert document["steps"][-1]["mode"] == "changed"
         assert document["steps"][-1]["region"]["width"] == 300
 
     def test_waiting_is_dropped_because_it_has_nothing_to_name(self, window):

@@ -204,7 +204,12 @@ class Recorder:
                     "stable_for_ms": 4000, "timeout_ms": 180000,
                 })
             document["steps"].append({
-                "action": "read", "mode": "ocr",
+                # The region bounds the read rather than being it. What gets
+                # read is whatever appeared inside it while the flow waited:
+                # the reply, and not the title, the date separator, the clock,
+                # the input box, or -- once the thread has a history -- every
+                # answer that came before this one.
+                "action": "read", "mode": "changed",
                 "region": dict(read_region), "store_as": "response",
             })
         return document

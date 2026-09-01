@@ -336,7 +336,10 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
                     f"targets ({', '.join(sorted(known)) or 'none'})"
                 )
     for step in flow.reset + flow.steps:
-        if step.action == "read" and not (step.target or step.params.get("region")):
+        # `changed` reads whatever appeared while waiting, so it needs neither:
+        # the screen decides. A region is still allowed, to bound the search.
+        if (step.action == "read" and step.params.get("mode") != "changed"
+                and not (step.target or step.params.get("region"))):
             raise FlowError(
                 f"{step.describe()}: read needs either a target or a region"
             )

@@ -436,8 +436,10 @@
                 "type": "string",
                 "enum": [
                   "text",
-                  "ocr"
-                ]
+                  "ocr",
+                  "changed"
+                ],
+                "description": "text: ask the control. ocr: read a fixed region off the pixels. changed: read whatever appeared while waiting, which is the reply and not the panel around it. `region` bounds the search."
               }
             },
             "additionalProperties": false
