@@ -1,0 +1,136 @@
+# LEO, in the 3DEXPERIENCE native client, driven entirely by pixels.
+#
+# Why blind: the client's accessibility tree has 17 nodes for the whole
+# 1936x1096 window -- the frame and nothing else. LEO's panel is a web view
+# whose pages report about:blank with an empty document, so there is no DOM to
+# attach to either. What is left is the screen, which is what a person uses.
+#
+# The anchors are cut on the machine that replays this, from a capture taken
+# through the driver's own capture path:
+#
+#   python tools/capture_window.py --title "3DEXPERIENCE" \
+#       --process 3DEXPERIENCE.exe
+#
+# then one --cut per anchor (the commands are in the target comments below).
+# They are never committed: they belong to a window size, a theme and a DPI.
+
+version: 1
+name: leo-3dx
+title: LEO — 3DEXPERIENCE native client
+description: Ask LEO a question in the CATIA Part Design app and record what it answers
+tags: [leo, 3dx, native, blind]
+
+subject:
+  app: 3DEXPERIENCE
+  model: LEO
+
+target_app:
+  native:
+    window_title_pattern: "3DEXPERIENCE"
+    # Several DS processes own windows; this is the client.
+    process: "3DEXPERIENCE.exe"
+    # Visible travel, so a recording of a run is followable by someone who
+    # was not watching it happen.
+    mouse: {mode: human, speed: 2200}
+    typing: {mode: human, cps: 22}
+
+defaults:
+  timeout_ms: 30000
+  poll_interval_ms: 300
+  stable_for_ms: 3000
+
+targets:
+  send_icons:
+    intent: the send and language icons at the right end of LEO's input
+    native:
+      # Anchored here rather than on the input box itself: an empty text field
+      # is a featureless rounded rectangle, which matches nowhere or
+      # everywhere. These two glyphs have edges, and they sit at a fixed
+      # offset from the box they belong to.
+      #
+      #   --box 1820,894,90,46 --out anchors/leo/send_icons.png
+      - image: anchors/leo/send_icons.png
+        threshold: 0.88
+
+  prompt_box:
+    intent: the box LEO's question is typed into
+    native:
+      # The same anchor, acted on 170px to its left, which lands mid-box.
+      # Deliberately not the send glyph itself: the globe beside it changes
+      # the assistant's scope, and a mis-click there changes the run rather
+      # than failing it.
+      - image: anchors/leo/send_icons.png
+        threshold: 0.88
+        offset: {dx: -170, dy: 0}
+
+  leo_panel:
+    intent: LEO's badge at the top of the panel, proving the panel is open
+    native:
+      #   --box 1505,160,50,50 --out anchors/leo/badge.png
+      - image: anchors/leo/badge.png
+        threshold: 0.9
+
+  make_service_popup:
+    intent: the close button of the "Discover the Make Service" advert
+    native:
+      # Anchored on the title bar text and acted on at the X, because the X
+      # itself is 16 grey pixels and matches every other close button on
+      # screen.
+      #
+      #   --box 655,200,290,22 --out anchors/leo/make_service_title.png
+      - image: anchors/leo/make_service_title.png
+        threshold: 0.9
+        offset: {dx: 282, dy: 0}
+
+# Not part of the flow, and appears when it likes. Dismissed before every step
+# rather than at the start, because it turns up on a timer.
+interstitials: [make_service_popup]
+
+prompts:
+  - id: what-is-this
+    prompt: What is this part for?
+  - id: tolerance
+    prompt: What tolerance should I use on a press fit for a steel bushing?
+
+steps:
+  - action: wait_for_element
+    target: leo_panel
+    comment: fail here, with a screenshot, rather than typing into the CAD canvas
+
+  - action: capture
+    label: 1-before
+
+  - action: click
+    target: prompt_box
+  - action: type
+    target: prompt_box
+    text: "{{prompt}}"
+  - action: capture
+    label: 2-typed
+
+  # Enter rather than clicking send: the send glyph and the globe sit 38px
+  # apart, and the globe changes LEO's scope.
+  - action: key
+    keys: "{ENTER}"
+
+  # An answer streams in, so "it has appeared" is not the same as "it has
+  # finished". Watched as pixels rather than OCR: OCR every 300ms is slow and
+  # its own noise would read as change.
+  - action: wait_for_stable
+    # The schema wants a target even when a region says what to watch; this
+    # one is ignored for sampling, and doubles as a check the panel is still
+    # there while the answer streams.
+    target: leo_panel
+    mode: pixels
+    region: {x: 1502, y: 215, width: 424, height: 668}
+    stable_for_ms: 4000
+    timeout_ms: 180000
+
+  - action: capture
+    label: 3-answered
+
+  - action: read
+    mode: ocr
+    # The conversation column, between the panel header and the input box.
+    region: {x: 1502, y: 215, width: 424, height: 668}
+    store_as: response
