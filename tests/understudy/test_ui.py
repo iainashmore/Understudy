@@ -504,3 +504,44 @@ class TestWhatWasUnderTest:
 
     def test_an_unknown_flow_gives_empty_fields_rather_than_an_error(self, api):
         assert api.remembered_subject("nope.yaml") == {"subject": {}}
+
+
+class TestStoppingARecording:
+    """A hotkey works when you are in the application; a button is what the app
+    itself should offer. The difficulty is that the hook blocks on its own
+    thread, and a button press arrives on another one."""
+
+    def test_stopping_when_nothing_is_recording_says_so(self, api):
+        with pytest.raises(WorkspaceError, match="nothing is recording"):
+            api.stop_recording()
+
+    def test_stopping_before_the_hook_is_listening_is_refused_not_ignored(self, api):
+        api.recording = {"running": True, "flow": None, "error": None}
+        with pytest.raises(WorkspaceError, match="not started listening"):
+            api.stop_recording()
+
+    def test_stopping_asks_the_recording_to_stop(self, api, monkeypatch):
+        from understudy import record_native
+
+        asked = []
+        monkeypatch.setattr(record_native, "stop", lambda session: asked.append(session))
+        session = object()
+        api.recording = {"running": True, "session": session,
+                         "flow": None, "error": None}
+        api.stop_recording()
+        assert asked == [session]
+
+
+class TestStoppingFromAnotherThread:
+    """PostQuitMessage posts to whichever thread calls it, so stopping the hook
+    from the web server's thread would quit the server's loop and leave the
+    hook running."""
+
+    def test_the_stop_event_is_set_even_where_the_message_cannot_be_sent(self):
+        from understudy.recorder import Recorder
+        from understudy import record_native
+
+        session = record_native.Session(Recorder(), lambda: None, lambda: (0, 0))
+        assert record_native.stop(session) is False, "no thread to post to"
+        assert session.stopped.is_set(), \
+            "so it still stops at the next click or keystroke"

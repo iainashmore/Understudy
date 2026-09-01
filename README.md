@@ -119,7 +119,8 @@ understudy record --title "3DEXPERIENCE" --process 3DEXPERIENCE.exe --name leo-b
 
 or press **Record** in the app. Then, in the application:
 
-Click, type, wait for the reply, then **ctrl+alt+s** to stop.
+Click, type, wait for the reply, then **Stop recording** in the app — or
+**ctrl+alt+s**, which works without leaving the application you are recording.
 
 Every click becomes a picture of what was clicked on, matched again at replay
 time, and the whole window is kept beside it so what was clicked can be named

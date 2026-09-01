@@ -12,7 +12,7 @@ same kind of thing and can be edited into each other.
 
 What this module does not do is touch Windows. Events arrive already
 normalised, screenshots arrive as arrays. The half that cannot run outside a
-real desktop is the hook adapter in tools/record_flow.py, and it is kept as
+real desktop is the hook adapter in understudy/record_native.py, kept as
 thin as it can be so that everything decided here is decided in tests.
 """
 

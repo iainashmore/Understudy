@@ -71,6 +71,7 @@
   <span id="flowName" class="muted">no flow yet</span>
   <span class="grow"></span>
   <button id="record"><span class="rec-dot"></span>Record</button>
+  <button id="stop" hidden>Stop recording</button>
   <button id="replay" class="primary" disabled>Replay</button>
 </header>
 
@@ -79,9 +80,13 @@
     <h2>The application</h2>
     <div class="row">
       <label style="width:70px">Window</label>
+      <select id="pick" class="grow"><option value="">looking…</option></select>
+      <button id="refresh" title="Look again">↻</button>
+    </div>
+    <div class="row">
+      <label style="width:70px" title="What the flow will match on. Filled in from the window above; a glob is fine.">Matching</label>
       <input id="window" class="grow" placeholder="3DEXPERIENCE">
       <input id="process" placeholder="3DEXPERIENCE.exe" style="width:210px">
-      <button id="pick">Pick…</button>
     </div>
     <div class="row">
       <label style="width:70px">Call it</label>
@@ -93,7 +98,8 @@
   <section class="card" id="recording" hidden>
     <h2>Recording</h2>
     <p>Do it once: click, type, and <strong>wait for the reply</strong>. Then
-    <strong>ctrl+alt+s</strong> to stop.</p>
+    <strong>Stop recording</strong> above, or <strong>ctrl+alt+s</strong>
+    without leaving the application.</p>
     <p class="muted">Every click becomes a picture of what you clicked on, and
     the longest thing you type becomes the prompt. Whatever changed on screen
     while you waited is the area read back with OCR. Your clicks go through to
@@ -208,23 +214,47 @@ $("save").onclick = async () => {
 
 /* ---------- which window ---------- */
 
-$("pick").onclick = async () => {
-  let listed;
-  try { listed = await api("/api/windows"); }
-  catch (error) { return alert(error.message); }
-  if (!listed.windows.length) {
-    return alert(listed.supported
-      ? "Nothing is open to pick."
-      : "Only on Windows — this machine cannot look.");
+// The list is what is open right now, largest visible first -- which on a CAD
+// workstation is the client, with its splash screen and its message-only
+// windows below it. Title alone cannot separate those, so each row carries the
+// process that owns it and how big it is.
+let openWindows = [];
+
+async function loadWindows() {
+  const pick = $("pick");
+  try {
+    const listed = await api("/api/windows");
+    openWindows = listed.windows;
+    pick.innerHTML = "";
+    if (!openWindows.length) {
+      pick.innerHTML = '<option value="">' + (listed.supported
+        ? "nothing is open to pick"
+        : "only on Windows — this machine cannot look") + "</option>";
+      pick.disabled = true;
+      return;
+    }
+    pick.disabled = false;
+    pick.append(new Option("choose a window…", ""));
+    openWindows.forEach((w, index) => {
+      const size = w.width + "x" + w.height + (w.visible ? "" : ", hidden");
+      pick.append(new Option(
+        (w.title || "(untitled)") + " — " + (w.process || "pid " + w.pid) +
+        "  " + size, String(index)));
+    });
+  } catch (error) {
+    pick.innerHTML = '<option value="">' + escapeHtml(error.message) + "</option>";
+    pick.disabled = true;
   }
-  const lines = listed.windows.map((w, index) =>
-    `${index + 1}. ${w.title} — ${w.process || "pid " + w.pid} ${w.width}x${w.height}`);
-  const answer = prompt("Which window?\n\n" + lines.join("\n"), "1");
-  const chosen = listed.windows[Number(answer) - 1];
+}
+
+$("pick").onchange = () => {
+  const chosen = openWindows[Number($("pick").value)];
   if (!chosen) return;
   $("window").value = chosen.title;
   $("process").value = chosen.process || "";
 };
+
+$("refresh").onclick = loadWindows;
 
 /* ---------- recording ---------- */
 
@@ -235,11 +265,26 @@ async function recordingState() {
 
 function showRecording(recording) {
   $("recording").hidden = !recording.running;
-  $("record").disabled = recording.running || !recording.available;
+  $("record").hidden = recording.running;
+  $("stop").hidden = !recording.running;
+  $("record").disabled = !recording.available;
+  $("replay").disabled = recording.running || !state.flow || Boolean(state.flow.error);
   $("recordState").textContent = recording.available
-    ? (recording.running ? "recording — ctrl+alt+s to stop" : "")
+    ? (recording.running ? "recording" : "")
     : (recording.reason || "recording is unavailable here");
 }
+
+$("stop").onclick = async () => {
+  $("stop").disabled = true;
+  try {
+    showRecording(await post("/api/record/stop", {}));
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    $("stop").disabled = false;
+  }
+  watchRecording();
+};
 
 async function watchRecording() {
   const recording = await recordingState();
@@ -344,5 +389,6 @@ $("replay").onclick = async () => {
 /* ---------- start ---------- */
 
 loadFlow().catch((error) => alert(error.message));
+loadWindows();
 recordingState().then(showRecording);
 </script>

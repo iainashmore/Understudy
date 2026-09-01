@@ -13,7 +13,7 @@ reply is read back with OCR, because that is all a CAD application offers.
 While recording:
 
     click and type          recorded
-    ctrl+alt+s              stop, and write the flow
+    ctrl+alt+s              stop, and write the flow (or press Stop in the app)
 
 Every interaction saves the whole window as well as the crop around the
 pointer, so what was clicked can be worked out afterwards without going back
@@ -63,6 +63,11 @@ class Session:
         self.read_region: dict[str, int] | None = None
         self.stopped = threading.Event()
         self.held: set[str] = set()
+        #: The Win32 thread the hook is installed on. A message loop only
+        #: accepts a quit message posted to its own thread, so stopping from
+        #: anywhere else -- a button in the app, on another thread -- needs
+        #: this rather than the hook object.
+        self.thread_id = 0
         #: The window as it was at the last thing the person did. Diffed
         #: against the window at stop, which is where the reply landed.
         self.last_screen = None
@@ -119,6 +124,27 @@ class Session:
         self.read_region = region
         print(f"reply region: {region['width']}x{region['height']} at "
               f"({region['x']}, {region['y']})")
+
+
+def stop(session: Session) -> bool:
+    """Stop a recording from outside its own thread.
+
+    The hotkey works because it arrives on the hook's thread, where calling
+    the hook's own stop is enough. A button in the app is on a different
+    thread entirely, and PostQuitMessage posts to whichever thread calls it --
+    so it would quit the web server's loop and leave the hook running.
+
+    Returns whether the message went anywhere. The event is set either way, so
+    the recording still stops at the next click or keystroke if this fails.
+    """
+    session.stopped.set()
+    if not session.thread_id or sys.platform != "win32":
+        return False
+    import ctypes
+
+    WM_QUIT = 0x0012
+    return bool(ctypes.windll.user32.PostThreadMessageW(
+        session.thread_id, WM_QUIT, 0, 0))
 
 
 def dispatch(session: Session, event) -> None:
@@ -224,8 +250,13 @@ def app_config_for(title: str, process: str | None) -> dict[str, Any]:
     return config
 
 
-def record(title: str, process: str | None, name: str, out_dir: Path) -> Path:
-    """Attach, hook, and block until the stop hotkey. Windows only."""
+def record(title: str, process: str | None, name: str, out_dir: Path,
+           session_holder: dict[str, Any] | None = None) -> Path:
+    """Attach, hook, and block until stopped. Windows only.
+
+    `session_holder` is handed the session as soon as there is one, so that
+    whatever started this on another thread has something to stop.
+    """
     from harness.image import load_rgb
     from understudy.drivers.native import NativeDriver
 
@@ -244,11 +275,16 @@ def record(title: str, process: str | None, name: str, out_dir: Path) -> Path:
         return (geometry.left, geometry.top) if geometry else (0, 0)
 
     session = Session(Recorder(), shot, origin)
+    if session_holder is not None:
+        session_holder["session"] = session
     print(f"recording against {title!r}. Do the thing once, wait for the "
           f"reply, then {STOP} to stop.")
 
     from pywinauto.win32_hooks import Hook
 
+    import ctypes
+
+    session.thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
     hook = Hook()
 
     def handle(event) -> None:

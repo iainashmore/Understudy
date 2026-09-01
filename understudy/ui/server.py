@@ -589,7 +589,8 @@ flows: []
         def work() -> None:
             try:
                 path = record_native.record(title, process, name,
-                                            self.workspace.root)
+                                            self.workspace.root,
+                                            session_holder=job)
                 job["flow"] = self.workspace.relative(path)
             except Exception as exc:
                 job["error"] = f"{type(exc).__name__}: {exc}"
@@ -597,6 +598,21 @@ flows: []
                 job["running"] = False
 
         threading.Thread(target=work, daemon=True).start()
+        return self.recording_state()
+
+    def stop_recording(self) -> dict[str, Any]:
+        """Stop from the app rather than the hotkey.
+
+        The hotkey arrives on the hook's own thread; this does not, which is
+        the whole difficulty -- see record_native.stop.
+        """
+        job = self.recording
+        if not job or not job.get("running"):
+            raise WorkspaceError("nothing is recording")
+        session = job.get("session")
+        if session is None:
+            raise WorkspaceError("the recording has not started listening yet")
+        record_native.stop(session)
         return self.recording_state()
 
     def known_subject_values(self) -> dict[str, Any]:
@@ -989,6 +1005,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.api.compare(body["run_dirs"]))
             elif route == "/api/record/start":
                 self._json(self.api.start_recording(body))
+            elif route == "/api/record/stop":
+                self._json(self.api.stop_recording())
             elif route == "/api/subject":
                 self._json(self.api.remembered_subject(body["flow"]))
             elif route == "/api/repo/commit":

@@ -107,6 +107,49 @@ class TestItLoads:
         assert "window_title_pattern" in page.locator("#flowText").input_value()
 
 
+class TestPickingTheWindow:
+    """Every row says which process owns the window and how big it is. On a CAD
+    workstation several windows answer to the same name -- the client, its
+    splash screen, a message-only helper -- and the title cannot separate
+    them."""
+
+    def test_the_list_says_it_cannot_look_here(self, page):
+        """These tests run on Linux, where there are no windows to enumerate.
+        An empty dropdown would read as "no windows are open"."""
+        assert page.locator("#pick").is_disabled()
+        assert "only on Windows" in page.locator("#pick").inner_text()
+
+    def test_choosing_a_window_fills_in_what_the_flow_matches_on(self, page):
+        page.evaluate("""() => {
+          openWindows = [{title: "3DEXPERIENCE", process: "3DEXPERIENCE.exe",
+                          pid: 4136, width: 1936, height: 1096, visible: true}];
+          const pick = document.getElementById("pick");
+          pick.disabled = false;
+          pick.innerHTML = "";
+          pick.append(new Option("choose a window…", ""));
+          pick.append(new Option("3DEXPERIENCE — 3DEXPERIENCE.exe  1936x1096", "0"));
+        }""")
+        page.select_option("#pick", "0")
+        assert page.locator("#window").input_value() == "3DEXPERIENCE"
+        assert page.locator("#process").input_value() == "3DEXPERIENCE.exe"
+
+    def test_each_row_carries_the_process_and_the_size(self, page):
+        page.evaluate("""async () => {
+          window.api = async () => ({supported: true, windows: [
+            {title: "3DEXPERIENCE", process: "3DEXPERIENCE.exe", pid: 1,
+             width: 1936, height: 1096, visible: true},
+            {title: "3DEXPERIENCE", process: "CATSplash.exe", pid: 2,
+             width: 400, height: 300, visible: false},
+          ]});
+          await loadWindows();
+        }""")
+        page.wait_for_timeout(200)
+        shown = page.locator("#pick").inner_text()
+        assert "3DEXPERIENCE.exe" in shown and "CATSplash.exe" in shown
+        assert "1936x1096" in shown
+        assert "hidden" in shown, "a window with no pixels says so"
+
+
 class TestTheApplicationItDrives:
     def test_the_window_is_filled_in_from_the_flow(self, page):
         """The recorded flow already says which window. Asking again is asking
@@ -122,6 +165,24 @@ class TestTheApplicationItDrives:
 
     def test_the_recording_instructions_are_not_on_screen_until_recording(self, page):
         assert page.locator("#recording").is_hidden()
+
+    def test_stop_is_not_offered_when_nothing_is_recording(self, page):
+        assert page.locator("#stop").is_hidden()
+        assert page.locator("#record").is_visible()
+
+    def test_stop_replaces_record_while_it_runs(self, page):
+        """Not a second button beside it: there is one thing to do at a time,
+        and a live Record button during a recording is an invitation to start
+        a second one."""
+        page.evaluate("""() => showRecording(
+            {available: true, running: true})""")
+        assert page.locator("#stop").is_visible()
+        assert page.locator("#record").is_hidden()
+        assert page.locator("#recording").is_visible()
+
+    def test_replaying_is_not_offered_mid_recording(self, page):
+        page.evaluate("""() => showRecording({available: true, running: true})""")
+        assert page.locator("#replay").is_disabled()
 
 
 class TestReplaying:
