@@ -269,9 +269,20 @@ function showRecording(recording) {
   $("stop").hidden = !recording.running;
   $("record").disabled = !recording.available;
   $("replay").disabled = recording.running || !state.flow || Boolean(state.flow.error);
-  $("recordState").textContent = recording.available
-    ? (recording.running ? "recording" : "")
-    : (recording.reason || "recording is unavailable here");
+  if (!recording.available) {
+    $("recordState").textContent =
+      recording.reason || "recording is unavailable here";
+  } else if (recording.running) {
+    // What it has caught so far. Watching a counter move is the difference
+    // between "it is working" and "it started and did nothing", which
+    // otherwise look the same until you stop.
+    const counts = recording.counts || {};
+    $("recordState").textContent = counts.events
+      ? `${counts.clicks || 0} click(s), ${counts.keys || 0} key(s)`
+      : "recording — nothing captured yet";
+  } else {
+    $("recordState").textContent = "";
+  }
 }
 
 $("stop").onclick = async () => {
@@ -289,7 +300,7 @@ $("stop").onclick = async () => {
 async function watchRecording() {
   const recording = await recordingState();
   showRecording(recording);
-  if (recording.running) return setTimeout(watchRecording, 1000);
+  if (recording.running) return setTimeout(watchRecording, 700);
   if (recording.error) return alert(recording.error);
   if (recording.flow) await loadFlow(recording.flow);
 }

@@ -283,6 +283,16 @@ class NativeDriver:
         self._check_placement()
         self._elements = walk(self.window)
 
+    def where(self) -> WindowGeometry | None:
+        """Where the window is now, without walking the tree.
+
+        refresh() re-walks every element and sleeps for the UI to settle,
+        which is right before acting and far too expensive to do on every
+        click of a recording.
+        """
+        self.geometry = self._read_geometry()
+        return self.geometry
+
     def _read_geometry(self) -> WindowGeometry | None:
         try:
             rect = self.window.rectangle()

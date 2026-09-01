@@ -81,13 +81,27 @@ class Recorder:
     def click(self, x: int, y: int, image, origin: tuple[int, int] = (0, 0)) -> str:  # noqa: E501
         """A click at a screen point, with the window as it looked before it.
 
+        Returns the target's name, or "" for a click that was not in the
+        window at all.
+
         The screenshot has to be the one taken *before* the click landed: half
         the point of an anchor is that it is what was on screen when the
         person decided to click there, and a menu that opened on the click is
         not that.
         """
-        self._flush_text()
         window_x, window_y = x - origin[0], y - origin[1]
+        height, width = image.shape[:2]
+        if not (0 <= window_x < width and 0 <= window_y < height):
+            # Outside the window: the browser this was started from, another
+            # monitor, the taskbar. Clamping it produced an anchor cut from
+            # the window's corner -- a picture of something nobody clicked,
+            # which then fails to match, or worse, matches.
+            self.warnings.append(
+                f"a click at ({x}, {y}) was outside the window and was not "
+                f"recorded"
+            )
+            return ""
+        self._flush_text()
         anchor = self._cut(window_x, window_y, image, f"target_{len(self.anchors) + 1}")
         anchor.screen = to_png_bytes(image)
         anchor.point = (window_x, window_y)

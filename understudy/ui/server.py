@@ -556,14 +556,20 @@ flows: []
     # -- recording ------------------------------------------------------------
 
     def recording_state(self) -> dict[str, Any]:
-        job = self.recording
+        job = self.recording or {}
+        session = job.get("session")
+        unavailable = record_native.available()
         return {
-            "available": not record_native.available(),
-            "reason": record_native.available(),
-            "running": bool(job and job.get("running")),
-            "flow": (job or {}).get("flow"),
-            "error": (job or {}).get("error"),
-            "clicks": (job or {}).get("clicks", 0),
+            "available": not unavailable,
+            "reason": unavailable,
+            "running": bool(job.get("running")),
+            "flow": job.get("flow"),
+            "error": job.get("error"),
+            # What it is capturing, while it captures it. "Nothing was
+            # recorded" and "nothing reached the hook" look identical
+            # afterwards and have completely different fixes.
+            "counts": dict(getattr(session, "counts", None) or
+                           {"events": 0, "clicks": 0, "keys": 0}),
         }
 
     def start_recording(self, request: dict[str, Any]) -> dict[str, Any]:

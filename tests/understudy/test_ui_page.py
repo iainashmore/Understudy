@@ -268,3 +268,20 @@ def test_a_workspace_with_no_flow_says_to_record_one(tmp_path, browser):
         page.close()
     finally:
         server.shutdown()
+
+
+class TestWatchingARecording:
+    """Watching a counter move is the difference between "it is working" and
+    "it started and did nothing" -- which otherwise look the same until you
+    stop and find an empty flow."""
+
+    def test_it_says_when_nothing_has_been_captured_yet(self, page):
+        page.evaluate("""() => showRecording({available: true, running: true,
+            counts: {events: 0, clicks: 0, keys: 0}})""")
+        assert "nothing captured yet" in page.locator("#recordState").inner_text()
+
+    def test_it_counts_what_it_has_caught(self, page):
+        page.evaluate("""() => showRecording({available: true, running: true,
+            counts: {events: 40, clicks: 2, keys: 17}})""")
+        shown = page.locator("#recordState").inner_text()
+        assert "2 click(s)" in shown and "17 key(s)" in shown

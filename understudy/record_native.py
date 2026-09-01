@@ -44,6 +44,10 @@ STOP = "ctrl+alt+s"
 #: nothing about why -- which is exactly what the first real recording did.
 MIN_REGION = 40
 
+#: How many raw events to keep for diagnosis. Enough to see the shape of one
+#: click and a few keystrokes.
+SEEN_LIMIT = 40
+
 MODIFIERS = {"lcontrol", "rcontrol", "lmenu", "rmenu", "lshift", "rshift",
              "lwin", "rwin"}
 
@@ -68,19 +72,48 @@ class Session:
         #: anywhere else -- a button in the app, on another thread -- needs
         #: this rather than the hook object.
         self.thread_id = 0
+        #: Counted so a recording can say what it is capturing while it runs.
+        #: "Nothing was recorded" and "nothing reached the hook" are different
+        #: failures with different fixes, and they look identical afterwards.
+        self.counts = {"events": 0, "clicks": 0, "keys": 0}
+        #: The first few raw events, as whatever attributes they turned out to
+        #: have. The one part of this that cannot be tested off a desktop is
+        #: the shape pywinauto hands over, so a recording that captures
+        #: nothing keeps the evidence rather than needing to be done again.
+        self.seen: list[dict[str, Any]] = []
         #: The window as it was at the last thing the person did. Diffed
         #: against the window at stop, which is where the reply landed.
         self.last_screen = None
 
     # -- what the hooks call --------------------------------------------------
 
+    def note(self, event) -> None:
+        """Every event the hook produced, counted, and the first few kept."""
+        self.counts["events"] += 1
+        if len(self.seen) < SEEN_LIMIT:
+            self.seen.append({
+                name: str(getattr(event, name))[:80]
+                for name in dir(event)
+                if not name.startswith("_") and not callable(getattr(event, name, None))
+            })
+
     def click(self, x: int, y: int) -> None:
+        self.counts["clicks"] += 1
         image = self.shot()
         self.last_screen = image
-        name = self.recorder.click(x, y, image, self.origin())
-        print(f"  click ({x}, {y}) -> {name}")
+        left, top = self.origin()
+        name = self.recorder.click(x, y, image, (left, top))
+        # Both coordinates, because the difference between them is the whole
+        # of what can go wrong here. On a monitor placed left of the primary
+        # the screen coordinate is negative and the window one is not, and a
+        # window origin that failed to read looks exactly like a click that
+        # missed.
+        where = f"screen ({x}, {y}) -> window ({x - left}, {y - top})"
+        print(f"  click {where} -> {name}" if name
+              else f"  click {where}: outside the window, ignored")
 
     def text(self, characters: str) -> None:
+        self.counts["keys"] += 1
         self.recorder.text(characters)
 
     def key(self, name: str) -> None:
@@ -154,6 +187,7 @@ def dispatch(session: Session, event) -> None:
     cannot be exercised off a real desktop, so it reads what it can find
     rather than insisting on a shape.
     """
+    session.note(event)
     kind = getattr(event, "event_type", "")
     key = str(getattr(event, "current_key", "") or "")
 
@@ -270,13 +304,23 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
         return load_rgb(driver.screenshot())
 
     def origin():
-        driver.refresh()
-        geometry = driver.geometry
+        # Re-read every click: the window can be dragged mid-recording, and a
+        # stale origin puts every anchor after it in the wrong place. Reading
+        # the rectangle is cheap; refresh() walks the whole tree and is not.
+        geometry = driver.where()
         return (geometry.left, geometry.top) if geometry else (0, 0)
 
     session = Session(Recorder(), shot, origin)
     if session_holder is not None:
         session_holder["session"] = session
+    placement = driver.geometry
+    if placement:
+        # Said once, up front. A window on a monitor left of the primary has
+        # negative screen coordinates, which is expected and is also what a
+        # broken origin looks like.
+        print(f"  window at ({placement.left}, {placement.top}), "
+              f"{placement.width}x{placement.height}"
+              + (f" on {placement.monitor}" if placement.monitor else ""))
     print(f"recording against {title!r}. Do the thing once, wait for the "
           f"reply, then {STOP} to stop.")
 

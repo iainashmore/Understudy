@@ -223,3 +223,43 @@ class TestWhatIsKeptBesidesTheFlow:
         recorder.click(280, 130, window)
         document = recorder.flow("f", "F", APP)
         assert document["targets"]["target_1"]["intent"] == "recorded click 1"
+
+
+class TestClicksThatWereNotInTheWindow:
+    """The first click of a recording is often the one that returns to the
+    application after pressing Record in the browser -- and on a workstation
+    with a monitor to the left of the primary, its screen coordinates are
+    negative."""
+
+    def test_a_click_outside_the_window_is_not_recorded(self, window):
+        recorder = Recorder()
+        assert recorder.click(-50, 920, window) == ""
+        assert recorder.anchors == []
+        assert recorder.steps == []
+
+    def test_it_says_so_rather_than_dropping_it_silently(self, window):
+        recorder = Recorder()
+        recorder.click(-50, 920, window)
+        assert any("outside the window" in w for w in recorder.warnings)
+
+    def test_a_click_past_the_far_edge_counts_too(self, window):
+        recorder = Recorder()
+        assert recorder.click(5000, 10, window) == ""
+        assert recorder.click(10, 5000, window) == ""
+        assert recorder.anchors == []
+
+    def test_the_edges_themselves_are_inside(self, window):
+        recorder = Recorder()
+        assert recorder.click(0, 0, window) == "target_1"
+        assert recorder.click(899, 599, window) == "target_2"
+
+    def test_it_does_not_swallow_what_was_typed_before_it(self, window):
+        """The text is still going somewhere: the stray click did not move the
+        caret, because it was not in this window."""
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        recorder.text("hello")
+        recorder.click(-50, 920, window)
+        document = recorder.flow("f", "F", APP)
+        assert document["prompts"][0]["prompt"] == "hello"
+        assert [s["action"] for s in document["steps"]] == ["click", "type"]
