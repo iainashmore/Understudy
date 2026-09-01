@@ -29,22 +29,42 @@ from understudy.runner import Runner, Status, run_directory, write_csv
 from understudy.suite import SuiteError, load_suite
 
 
-def _load(flow_path: str, backend: str):
+def _load(flow_path: str, backend: str | None):
     flow = load_flow(flow_path)
     prompts = prompts_for(flow)
+    backend = backend or backend_of(flow)
     flow.validate_for_backend(backend)
     prompts.check_provides(flow.variables())
-    return flow, prompts
+    return flow, prompts, backend
+
+
+def backend_of(flow) -> str:
+    """What the flow drives, when nobody said.
+
+    The flow file already declares it, so defaulting to "web" turns a flow
+    that could only ever have been native into "these targets have no web
+    strategy" -- a question with one right answer, asked of somebody who
+    already answered it in the file. Only an ambiguous flow needs --backend.
+    """
+    declared = sorted(flow.target_app)
+    if len(declared) == 1:
+        return declared[0]
+    if not declared:
+        raise FlowError(f"{flow.name} declares no target_app")
+    raise FlowError(
+        f"{flow.name} can be driven as {' or '.join(declared)}; "
+        f"say which with --backend"
+    )
 
 
 def command_validate(args) -> int:
-    flow, prompts = _load(args.flow, args.backend)
+    flow, prompts, backend = _load(args.flow, args.backend)
     print(f"flow      {flow.title} ({flow.name}): {len(flow.steps)} step(s), "
           f"{len(flow.reset)} reset step(s), {len(flow.targets)} target(s)")
     print(f"variables {', '.join(sorted(flow.variables())) or 'none'}")
     print(f"prompts   {len(prompts)} prompt run(s): "
           f"{', '.join(v.id for v in prompts)}")
-    print(f"backend   {args.backend}: ok")
+    print(f"backend   {backend}: ok")
     return 0
 
 
@@ -305,7 +325,7 @@ def _subject_for(args, flow) -> Subject:
 
 
 def command_run(args) -> int:
-    flow, prompts = _load(args.flow, args.backend)
+    flow, prompts, backend = _load(args.flow, args.backend)
     only = args.only.split(",") if args.only else None
     prompts = prompts.select([name.strip() for name in only] if only else None)
 
@@ -319,7 +339,7 @@ def command_run(args) -> int:
             file=sys.stderr,
         )
     driver = build_driver(
-        args.backend,
+        backend,
         headless=not args.headed,
         resolver=build_resolver("claude" if args.agent != "off" else "off"),
         agent_mode=args.agent,
@@ -327,7 +347,7 @@ def command_run(args) -> int:
     )
 
     print(f"{flow.name}: {len(prompts)} prompt run(s) x {args.repeat} -> {out_dir}")
-    driver.start(flow.app_config(args.backend))
+    driver.start(flow.app_config(backend))
     for note in getattr(driver, "warnings", []):
         print(f"note: {note}")
     try:
@@ -454,7 +474,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, handler in (("run", command_run), ("validate", command_validate)):
         child = sub.add_parser(name)
         child.add_argument("flow")
-        child.add_argument("--backend", default="web", choices=["web", "native"])
+        child.add_argument("--backend", default=None, choices=["web", "native"],
+                           help="only needed when the flow declares both")
         child.set_defaults(handler=handler)
         if name == "run":
             child.add_argument(

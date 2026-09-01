@@ -400,3 +400,49 @@ def test_an_ordinary_flow_error_still_reads_as_one_problem(tmp_path):
     with pytest.raises(FlowError) as raised:
         load_flow(tmp_path / "missing.yaml")
     assert raised.value.problems == [str(raised.value)]
+
+
+class TestWhichBackendAFlowDrives:
+    """The flow file declares what it drives, so asking again on the command
+    line is a question with one right answer -- and defaulting to web turned a
+    native-only flow into "these targets have no web strategy"."""
+
+    def _flow(self, tmp_path, target_app):
+        from understudy.flow import load_flow
+
+        path = tmp_path / "flow.yaml"
+        path.write_text(f"""version: 1
+name: picky
+{target_app}
+targets:
+  box:
+    native:
+      - control_type: Edit
+    web:
+      - testid: box
+prompts:
+  - id: one
+    prompt: hello
+steps:
+  - {{action: type, target: box, text: "{{{{prompt}}}}"}}
+""")
+        return load_flow(path)
+
+    def test_a_flow_with_one_target_needs_no_backend_flag(self, tmp_path):
+        from understudy.cli import backend_of
+
+        flow = self._flow(tmp_path, 'target_app:\n  native:\n'
+                                    '    window_title_pattern: "*App*"\n')
+        assert backend_of(flow) == "native"
+
+    def test_a_flow_that_drives_both_asks(self, tmp_path):
+        from understudy.cli import backend_of
+        from understudy.flow import FlowError
+
+        flow = self._flow(tmp_path, 'target_app:\n  native:\n'
+                                    '    window_title_pattern: "*App*"\n'
+                                    '  web:\n    url: "https://example.com/"\n')
+        with pytest.raises(FlowError, match="--backend"):
+            backend_of(flow)
+        with pytest.raises(FlowError, match="native or web"):
+            backend_of(flow)
