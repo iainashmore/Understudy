@@ -25,8 +25,36 @@ from understudy.drivers.web import find_chromium  # noqa: E402
 pytest.importorskip("playwright", reason="needs playwright")
 
 PORT = 9413
+SHADOW_PORT = 9414
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "fixtures" / "chat_app" / "index.html"
+SHADOW_FIXTURE = REPO / "fixtures" / "shadow_chat" / "index.html"
+
+
+def serve_fixture(tmp_path_factory, port, fixture, name):
+    executable = find_chromium() or shutil.which("chromium")
+    if not executable:
+        pytest.skip("no chromium available")
+    profile = tmp_path_factory.mktemp(name)
+    process = subprocess.Popen(
+        [executable, "--headless=new", f"--remote-debugging-port={port}",
+         f"--user-data-dir={profile}", "--no-first-run", "--no-sandbox",
+         "--disable-dev-shm-usage", f"file://{fixture}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    url = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            if any(t.get("title") for t in inspect_cdp.targets(url)):
+                break
+        except Exception:
+            pass
+        time.sleep(0.2)
+    else:
+        process.kill()
+        pytest.skip("debugging endpoint never came up")
+    return url, process
 
 
 @pytest.fixture(scope="module")
@@ -70,6 +98,59 @@ class TestListingTargets:
     def test_a_dead_endpoint_is_an_error_not_a_traceback(self):
         with pytest.raises(Exception):
             inspect_cdp.targets("http://127.0.0.1:59997")
+
+
+@pytest.fixture(scope="module")
+def shadow_endpoint(tmp_path_factory):
+    url, process = serve_fixture(tmp_path_factory, SHADOW_PORT, SHADOW_FIXTURE,
+                                 "shadow-profile")
+    yield url
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+class TestAPanelBuiltFromCustomElements:
+    """What 3DEXPERIENCE turned out to be: a panel of custom elements with
+    open shadow roots. document.querySelectorAll stops at a shadow boundary,
+    so six live WebViews were all reported as holding nothing."""
+
+    @pytest.fixture(scope="class")
+    def report(self, shadow_endpoint, tmp_path_factory):
+        out = tmp_path_factory.mktemp("shadow-out")
+        return inspect_cdp.inspect(shadow_endpoint, out, shots=False)
+
+    def _frame(self, report):
+        return report["frames"][0]
+
+    def test_the_prompt_box_inside_a_shadow_root_is_found(self, report):
+        entries = self._frame(report)["entry"]
+        assert [inspect_cdp.selector_for(e) for e in entries] == \
+            ["[data-testid='leo-prompt']"]
+
+    def test_it_says_the_element_came_from_a_shadow_root(self, report):
+        """Because a selector that only resolves inside a shadow root is a
+        different thing to hand a flow than one that resolves at document
+        level, and the flow has to know."""
+        assert self._frame(report)["entry"][0]["shadowed"] is True
+
+    def test_nesting_two_deep_is_still_found(self, report):
+        """The transcript is a shadow root inside a shadow root."""
+        outputs = [inspect_cdp.selector_for(e) for e in self._frame(report)["output"]]
+        assert "[data-testid='leo-answer']" in outputs
+
+    def test_an_about_blank_url_is_not_taken_as_evidence_of_emptiness(self, report):
+        stats = self._frame(report)["stats"]
+        assert stats["elements"] > 3
+        assert stats["shadow_roots"] >= 3
+
+    def test_the_custom_element_names_are_reported(self, report):
+        """When nothing matches, these are what let a target be named by hand,
+        so they are worth carrying even when something does."""
+        names = self._frame(report)["stats"]["custom_elements"]
+        assert "leo-panel" in names and "leo-composer" in names
 
 
 class TestFindingEveryEndpoint:
@@ -150,23 +231,22 @@ class TestTheSuggestedFlow:
         assert "prompt_box:" in block and "[data-testid='prompt-input']" in block
         assert "send:" in block and "answer:" in block
 
+    def test_content_with_no_match_is_not_reported_as_empty(self):
+        lines = "\n".join(inspect_cdp.suggest({"frames": [
+            {"frame_url": "about:blank", "entry": [], "submit": [], "output": [],
+             "stats": {"elements": 482, "shadow_roots": 37}},
+        ]}))
+        assert "482 elements" in lines
+        assert "--remote-debugging-port" not in lines, \
+            "the port is not the problem when the content is right there"
+
     def test_blank_frames_only_names_the_port_collision(self):
         """What the workstation actually hit: several WebView2 hosts told to
         use one debugging port, only the first getting it, and the endpoint
         that answered belonging to some other part of the UI."""
         lines = "\n".join(inspect_cdp.suggest({"frames": [
-            {"frame_url": "about:blank", "entry": [], "submit": [], "output": []},
+            {"frame_url": "about:blank", "entry": [], "submit": [], "output": [],
+             "stats": {"elements": 0, "shadow_roots": 0}},
         ]}))
-        assert "not the panel" in lines
+        assert "not the" in lines
         assert "--remote-debugging-port=0" in lines
-
-    def test_real_frames_with_nothing_in_them_is_a_different_answer(self):
-        """A frame that loaded something but offers no controls we recognise
-        is not the same finding, and must not be reported as the same one."""
-        lines = "\n".join(inspect_cdp.suggest({"frames": [
-            {"frame_url": "https://example.com/leo", "entry": [], "submit": [],
-             "output": []},
-        ]}))
-        assert "nothing in them takes typing" in lines
-        assert "--remote-debugging-port=0" not in lines, \
-            "that is the other diagnosis, and offering both is offering neither"

@@ -59,6 +59,22 @@ OUTPUT = ("[aria-live], [role='log'], [role='status'], [role='article'], "
 
 COLLECT = r"""
 (selectors) => {
+  // Every element, crossing open shadow boundaries. document.querySelectorAll
+  // stops at the first shadow root, so against a panel built from custom
+  // elements -- which is how a component framework builds one -- it reports a
+  // page full of content as empty.
+  const everything = [];
+  const walk = (root, depth) => {
+    if (depth > 30) return;
+    let found;
+    try { found = root.querySelectorAll("*"); } catch (error) { return; }
+    for (const element of found) {
+      everything.push(element);
+      if (element.shadowRoot) walk(element.shadowRoot, depth + 1);
+    }
+  };
+  walk(document, 0);
+
   const described = (el) => {
     const rect = el.getBoundingClientRect();
     const attrs = {};
@@ -71,23 +87,32 @@ COLLECT = r"""
       text: (el.innerText || el.value || "").trim().slice(0, 120),
       box: {x: Math.round(rect.x), y: Math.round(rect.y),
             width: Math.round(rect.width), height: Math.round(rect.height)},
+      shadowed: el.getRootNode() !== document,
       visible: rect.width > 0 && rect.height > 0 &&
                getComputedStyle(el).visibility !== "hidden",
     };
   };
+
   const out = {};
   for (const [role, selector] of Object.entries(selectors)) {
-    let found = [];
-    try {
-      found = Array.from(document.querySelectorAll(selector));
-    } catch (error) {
-      out[role] = [{error: String(error)}];
-      continue;
-    }
-    out[role] = found.map(described).filter((e) => e.visible).slice(0, 40);
+    out[role] = everything
+      .filter((el) => { try { return el.matches(selector); } catch (e) { return false; } })
+      .map(described)
+      .filter((e) => e.visible)
+      .slice(0, 40);
   }
   out.title = document.title;
   out.url = location.href;
+  // What is actually in here, so "nothing matched" and "nothing here" can be
+  // told apart without guessing.
+  out.stats = {
+    elements: everything.length,
+    shadow_roots: everything.filter((el) => el.shadowRoot).length,
+    text_length: (document.body && document.body.innerText || "").length,
+    custom_elements: [...new Set(everything
+      .filter((el) => el.tagName.includes("-"))
+      .map((el) => el.tagName.toLowerCase()))].slice(0, 20),
+  };
   return out;
 }
 """
@@ -183,23 +208,32 @@ def inspect(cdp_url: str, out_dir: Path, shots: bool) -> dict[str, Any]:
 
                 counts = {role: len(found.get(role) or []) for role in
                           ("entry", "submit", "output")}
+                stats = found.get("stats") or {}
                 where = "  main frame" if frame is page.main_frame else "  iframe"
+                summary = (f"{stats.get('elements', 0)} elements, "
+                           f"{stats.get('shadow_roots', 0)} shadow roots, "
+                           f"{stats.get('text_length', 0)} chars of text")
                 if not any(counts.values()):
                     # Said out loud. "No frames at all" and "frames holding
                     # nothing I recognise" are completely different findings,
                     # and staying silent about the second makes them look the
                     # same to whoever is reading this on the workstation.
-                    print(f"{where}  {found['url'][:90]}  "
-                          f"-- nothing recognisable in it")
+                    print(f"{where}  {found['url'][:90]}  -- {summary}, "
+                          f"nothing matched")
+                    if stats.get("custom_elements"):
+                        print(f"      custom elements: "
+                              f"{', '.join(stats['custom_elements'][:8])}")
                     report["frames"].append({
                         "page": index, "page_url": page.url,
                         "frame_url": found["url"], "title": found.get("title", ""),
                         "is_main_frame": frame is page.main_frame,
-                        "entry": [], "submit": [], "output": [], "empty": True,
+                        "stats": stats,
+                        "entry": [], "submit": [], "output": [],
+                        "empty": not stats.get("elements"),
                     })
                     continue
 
-                print(f"{where}  {found['url'][:90]}")
+                print(f"{where}  {found['url'][:90]}  -- {summary}")
                 if found.get("title"):
                     print(f"    title: {found['title']!r}")
                 for role, label in (("entry", "type into"),
@@ -219,6 +253,7 @@ def inspect(cdp_url: str, out_dir: Path, shots: bool) -> dict[str, Any]:
                     "page": index, "page_url": page.url, "frame_url": found["url"],
                     "title": found.get("title", ""),
                     "is_main_frame": frame is page.main_frame,
+                    "stats": stats,
                     **{role: found.get(role) or [] for role in
                        ("entry", "submit", "output")},
                 })
@@ -234,19 +269,25 @@ def suggest(report: dict[str, Any]) -> list[str]:
     a starting point to write.
     """
     frame = next((f for f in report["frames"] if f.get("entry")), None)
-    if frame:
-        pass
-    elif any(f.get("frame_url") not in ("", "about:blank")
-             for f in report["frames"]):
-        return ["Frames were found, but nothing in them takes typing. Either the",
-                "panel is not one of these, or its controls are drawn in a way",
-                "this does not recognise -- send elements.json and a screenshot."]
-    else:
-        return ["Nothing but blank frames here, so this endpoint is not the panel.",
-                "If several WebView2 hosts were told to use one debugging port,",
-                "only the first got it and the rest have none. Relaunch with",
+    if not frame:
+        occupied = [f for f in report["frames"]
+                    if (f.get("stats") or {}).get("elements")]
+        if occupied:
+            biggest = max(occupied,
+                          key=lambda f: f["stats"].get("elements", 0))
+            return [
+                f"Content is here -- {biggest['stats']['elements']} elements in "
+                f"the largest frame -- but nothing in it takes typing.",
+                "So the panel is one of these and its controls are not shaped",
+                "like anything looked for. Send elements.json and a screenshot;",
+                "the custom element names in it are usually enough to name a",
+                "target by hand.",
+            ]
+        return ["Every frame is genuinely empty, so this endpoint is not the",
+                "panel. If several WebView2 hosts were told to share one",
+                "debugging port, only the first got it. Relaunch with",
                 "--remote-debugging-port=0 so each takes its own, then run",
-                "probe_native.py to find them all."]
+                "inspect_cdp.py --all."]
 
     lines = ["targets:"]
     lines += ["  prompt_box:", "    intent: the box the question is typed into",
