@@ -179,3 +179,52 @@ class TestFindingWhatChanged:
         would be measured against the wrong frame."""
         assert changed_region(self._screen(),
                               np.zeros((400, 400, 3), dtype=np.uint8)) is None
+
+
+class TestFindingTheOcrEngine:
+    """"tesseract is not recognized" is the ordinary outcome of installing
+    Tesseract on Windows: ticking "add to PATH" is optional and easily missed,
+    and even when ticked a new terminal is needed. Looking where it installs
+    to is kinder than explaining that."""
+
+    def test_the_override_wins(self, monkeypatch, tmp_path):
+        from understudy.ocr import find_tesseract
+
+        monkeypatch.setenv("UNDERSTUDY_TESSERACT", "D:/tools/tesseract.exe")
+        assert find_tesseract() == "D:/tools/tesseract.exe"
+
+    def test_the_path_is_used_when_there_is_one(self, monkeypatch):
+        from understudy import ocr
+
+        monkeypatch.delenv("UNDERSTUDY_TESSERACT", raising=False)
+        monkeypatch.setattr(ocr.shutil if hasattr(ocr, "shutil") else __import__("shutil"),
+                            "which", lambda name: "/usr/bin/tesseract")
+        assert ocr.find_tesseract() == "/usr/bin/tesseract"
+
+    def test_where_windows_puts_it_is_searched_next(self, monkeypatch, tmp_path):
+        from understudy import ocr
+
+        installed = tmp_path / "Tesseract-OCR" / "tesseract.exe"
+        installed.parent.mkdir()
+        installed.write_text("")
+        monkeypatch.delenv("UNDERSTUDY_TESSERACT", raising=False)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(ocr, "WINDOWS_PLACES", (str(installed),))
+        assert ocr.find_tesseract() == str(installed)
+
+    def test_nothing_anywhere_is_none_rather_than_a_guess(self, monkeypatch):
+        from understudy import ocr
+
+        monkeypatch.delenv("UNDERSTUDY_TESSERACT", raising=False)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(ocr, "WINDOWS_PLACES", ())
+        assert ocr.find_tesseract() is None
+
+    def test_a_missing_engine_says_how_to_get_one(self, monkeypatch):
+        from understudy import ocr
+
+        monkeypatch.setattr(ocr, "find_tesseract", lambda: None)
+        outcome = ocr.read_text(b"")
+        assert outcome.available is False
+        assert "winget install" in (outcome.error or "")
+        assert "UNDERSTUDY_TESSERACT" in (outcome.error or "")
