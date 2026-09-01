@@ -466,13 +466,13 @@ def main(argv: list[str] | None = None) -> int:
     ports = [int(p) for p in args.ports.split(",") if p.strip()]
     print(f"probing ports {ports} ...")
     names = process_names()
-    cdp = probe_cdp(ports, names=names)
+    owners = listening_ports()
+    cdp = probe_cdp(ports, owners=owners, names=names)
 
     if not cdp and not args.no_scan:
         # 3DEXPERIENCE is a crowd of processes and any of them could be the
         # one hosting the panel, on any port it was handed. Five guesses is a
         # poor substitute for asking the machine what is listening.
-        owners = listening_ports()
         rest = sorted(set(owners) - set(ports))
         if rest:
             print(f"nothing on the usual ports; scanning {len(rest)} listening "
@@ -480,7 +480,8 @@ def main(argv: list[str] | None = None) -> int:
             cdp = probe_cdp(rest, owners=owners, names=names, timeout=0.5)
 
     for endpoint in cdp:
-        owner = f"  [{endpoint['process']} pid {endpoint['pid']}]" if endpoint.get("process") else ""
+        owner = (f"  [{endpoint['process']} pid {endpoint['pid']}]"
+                 if endpoint.get("pid") and endpoint.get("process") else "")
         print(f"  FOUND {endpoint['cdp_url']}  {endpoint['browser']}{owner}")
         for page in endpoint["pages"]:
             print(f"        page {page['title']!r}  {page['url'][:90]}")
