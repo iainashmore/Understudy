@@ -93,6 +93,25 @@ COLLECT = r"""
 """
 
 
+def endpoints(ports: list[int] | None = None) -> list[str]:
+    """Every debugging endpoint on this machine, not just the well-known one.
+
+    A host that creates several WebView2 environments and is told to use one
+    port gives it to whichever starts first; the rest get none. Launched with
+    --remote-debugging-port=0 they each take a free port instead, and then
+    there is no port to guess -- so ask the machine what is listening and try
+    all of it.
+    """
+    import probe_native
+
+    owners = probe_native.listening_ports()
+    candidates = sorted(set(ports if ports is not None
+                            else list(owners) + probe_native.DEFAULT_PORTS))
+    found = probe_native.probe_cdp(candidates, owners=owners,
+                                   names=probe_native.process_names(), timeout=0.5)
+    return [endpoint["cdp_url"] for endpoint in found]
+
+
 def targets(cdp_url: str) -> list[dict[str, Any]]:
     """Every target the endpoint knows about, whatever its type.
 
@@ -248,29 +267,51 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cdp", default=DEFAULT_CDP)
+    parser.add_argument("--all", action="store_true",
+                        help="find every debugging endpoint on this machine and "
+                             "inspect each, rather than only --cdp")
     parser.add_argument("--shots", action="store_true",
                         help="screenshot each page, to read the DOM against pixels")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
 
     stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
-    out_dir = Path(args.out or f"cdp-{stamp}")
+    root = Path(args.out or f"cdp-{stamp}")
+    root.mkdir(parents=True, exist_ok=True)
+
+    if args.all:
+        found = endpoints()
+        if not found:
+            print("no debugging endpoint anywhere on this machine.",
+                  file=sys.stderr)
+            return 1
+        print(f"{len(found)} endpoint(s): {', '.join(found)}\n")
+        failures = 0
+        for endpoint in found:
+            print("=" * 72)
+            print(endpoint)
+            print("=" * 72)
+            failures += one(endpoint, root / endpoint.rsplit(":", 1)[-1], args.shots)
+        return 1 if failures == len(found) else 0
+
+    return one(args.cdp, root, args.shots)
+
+
+def one(cdp_url: str, out_dir: Path, shots: bool) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        listed = targets(args.cdp)
+        listed = targets(cdp_url)
     except Exception as exc:
-        print(f"no endpoint at {args.cdp}: {exc}", file=sys.stderr)
+        print(f"no endpoint at {cdp_url}: {exc}", file=sys.stderr)
         return 1
-
-    print(f"{len(listed)} target(s) at {args.cdp}:")
+    print(f"{len(listed)} target(s) at {cdp_url}:")
     for target in listed:
         print(f"  {target.get('type', '?'):<10} {str(target.get('title', ''))[:40]!r:<44}"
               f" {str(target.get('url', ''))[:80]}")
     (out_dir / "targets.json").write_text(json.dumps(listed, indent=2), encoding="utf-8")
 
     try:
-        report = inspect(args.cdp, out_dir, args.shots)
+        report = inspect(cdp_url, out_dir, shots)
     except ImportError:
         print("\nplaywright is not installed, so only the target list above was\n"
               "read. pip install playwright -- no browser download is needed,\n"

@@ -72,6 +72,18 @@ class TestListingTargets:
             inspect_cdp.targets("http://127.0.0.1:59997")
 
 
+class TestFindingEveryEndpoint:
+    """Launched with --remote-debugging-port=0 each WebView2 host takes a free
+    port, so there is no port left to guess and they all have to be found."""
+
+    def test_a_live_endpoint_is_picked_out_of_a_list_of_ports(self, endpoint):
+        port = int(endpoint.rsplit(":", 1)[1])
+        assert inspect_cdp.endpoints([port, 59997, 59998]) == [endpoint]
+
+    def test_ports_with_nothing_on_them_yield_nothing(self):
+        assert inspect_cdp.endpoints([59997, 59998]) == []
+
+
 class TestFindingWhatAFlowNames:
     @pytest.fixture(scope="class")
     def report(self, endpoint, tmp_path_factory):
