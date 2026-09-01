@@ -38,9 +38,48 @@ SIMILAR_ENOUGH = 0.995
 VERDICTS = ("asked", "same", "reworded", "changed", "missing", "failed")
 
 
+#: Times and dates, in the shapes a chat panel puts them in. Read off the
+#: screen along with the answer, and different on every single run.
+CLOCK = re.compile(
+    r"""
+    \b\d{1,2}[:.]\d{2}\s*(?:[ap]\.?m\.?)?\b     # 3:45 PM, 15.45, 3.45pm
+    | \b\d{1,2}[:.]\d{2}[:.]\d{2}\b               # 15:45:02
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+WEEKDAY = r"(?:mon|tues|wednes|thurs|fri|satur|sun)day"
+MONTH = (r"(?:january|february|march|april|may|june|july|august|september"
+         r"|october|november|december)")
+CALENDAR = re.compile(
+    rf"""
+    \b{WEEKDAY}(?:,)?\s+{MONTH}\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b
+    | \b{WEEKDAY}\b
+    | \b{MONTH}\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b
+    | \b\d{{1,2}}[/-]\d{{1,2}}[/-]\d{{2,4}}\b
+    | \b(?:today|yesterday)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def without_clock(text: str) -> str:
+    """The same text with times and dates taken out.
+
+    An answer read off a chat panel arrives with the panel around it: "LEO
+    3:45 PM", "Tuesday, September 1". Those change on every run, so a
+    comparison that reads them reports every prompt as changed between two
+    releases -- for reasons that have nothing to do with what was said. This
+    is only for deciding whether two answers differ; what is shown, kept and
+    published is always what was actually read.
+    """
+    return CALENDAR.sub(" ", CLOCK.sub(" ", text or ""))
+
+
 def normalise(text: str) -> str:
-    """Whitespace and trailing punctuation are not behaviour changes."""
-    return re.sub(r"\s+", " ", (text or "").strip()).rstrip(".").lower()
+    """Whitespace, trailing punctuation, and the clock, are not behaviour
+    changes."""
+    collapsed = re.sub(r"\s+", " ", without_clock(text).strip())
+    return collapsed.rstrip(".").lower()
 
 
 @dataclass(frozen=True)

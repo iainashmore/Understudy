@@ -438,3 +438,64 @@ class TestAConversationIsComparedTurnByTurn:
             make_run(tmp_path, "after", R33, {"a": "X"}),
         ])
         assert [row.prompt_id for row in comparison.rows] == ["a"]
+
+
+class TestTheClockIsNotBehaviour:
+    """An answer read off a chat panel arrives with the panel around it: "LEO
+    3:45 PM", "Tuesday, September 1". Those change on every run, so without
+    this every prompt reads as changed between two releases -- for reasons
+    that have nothing to do with what was said."""
+
+    ANSWER = ("LEO {time} Mechanical Engineering Hello! I'm LEO, your "
+              "mechanical engineering assistant. {date}")
+
+    def _row(self, *responses):
+        from understudy.compare import Row
+
+        return Row(prompt_id="a", prompt="hello", responses=list(responses),
+                   statuses=["ok"] * len(responses),
+                   prompts=["hello"] * len(responses))
+
+    def test_the_same_answer_at_a_different_time_is_the_same_answer(self):
+        row = self._row(
+            self.ANSWER.format(time="3:45 PM", date="Tuesday, September 1"),
+            self.ANSWER.format(time="9:02 AM", date="Wednesday, September 2"),
+        )
+        assert row.verdict == "same"
+
+    def test_a_different_answer_is_still_different(self):
+        row = self._row(
+            self.ANSWER.format(time="3:45 PM", date="Tuesday, September 1"),
+            "LEO 9:02 AM Mechanical Engineering I cannot help with that.",
+        )
+        assert row.verdict == "changed"
+
+    def test_the_shapes_a_panel_writes_a_clock_in(self):
+        from understudy.compare import without_clock
+
+        for stamp in ("3:45 PM", "3.45pm", "15:45", "15:45:02", "9:02 a.m."):
+            assert stamp not in without_clock(f"LEO {stamp} said hello"), stamp
+
+    def test_the_shapes_it_writes_a_date_in(self):
+        from understudy.compare import without_clock
+
+        for day in ("Tuesday, September 1", "Tuesday", "September 1, 2026",
+                    "01/09/2026", "today", "Yesterday"):
+            assert day.lower() not in without_clock(f"on {day} it said").lower(), day
+
+    def test_a_number_that_is_an_answer_survives(self):
+        """Tolerances, diameters and part numbers are the point of the
+        exercise. Stripping them to be safe would make every answer identical.
+        """
+        from understudy.compare import without_clock
+
+        kept = without_clock("use H7/g6 with 0.021 mm clearance on 25 mm")
+        assert "0.021" in kept and "25" in kept and "H7/g6" in kept
+
+    def test_what_is_shown_is_still_what_was_read(self):
+        """Only the comparison ignores the clock. The transcript, the diff and
+        anything published carry what actually came back."""
+        answer = self.ANSWER.format(time="3:45 PM", date="Tuesday, September 1")
+        row = self._row(answer, answer)
+        assert row.responses[0] == answer
+        assert "3:45 PM" in row.responses[0]
