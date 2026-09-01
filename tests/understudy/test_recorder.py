@@ -19,10 +19,13 @@ from understudy.recorder import Recorder
 def window():
     """A window with distinguishable content, so a crop can be checked."""
     image = np.zeros((600, 900, 3), dtype=np.uint8)
-    # Exactly one anchor's worth of blue, centred on (280, 130), so a crop
-    # that lands anywhere else shows up as black in the assertions.
+    # Exactly one anchor's worth of blue, centred on (280, 130).
     image[98:162, 200:360] = (30, 144, 255)
     image[398:462, 600:760] = (255, 128, 0)
+    # Texture everywhere, because a crop of flat colour is deliberately
+    # widened until it has something in it -- which is the subject of its own
+    # tests below, and noise in these.
+    image[::4, :] = 200
     return image
 
 
@@ -41,7 +44,8 @@ class TestWhatAClickBecomes:
         recorder = Recorder()
         recorder.click(280, 130, window)
         cut = load_rgb(recorder.anchors[0].png)
-        assert (cut == (30, 144, 255)).all(), "the crop is the click, not near it"
+        assert (cut == window[98:162, 200:360]).all(), \
+            "the crop is the click, not near it"
         assert (recorder.anchors[0].dx, recorder.anchors[0].dy) == (0, 0)
 
     def test_screen_coordinates_are_made_window_relative(self, window):
@@ -49,7 +53,7 @@ class TestWhatAClickBecomes:
         offsets are window-relative so the flow survives the window moving."""
         recorder = Recorder()
         recorder.click(1280, 530, window, origin=(1000, 400))
-        assert (load_rgb(recorder.anchors[0].png) == (30, 144, 255)).all()
+        assert (load_rgb(recorder.anchors[0].png) == window[98:162, 200:360]).all()
 
     def test_a_click_near_an_edge_still_records_the_right_point(self, window):
         """Clamped rather than refused -- clicking near an edge is ordinary --
@@ -271,3 +275,56 @@ class TestClicksThatWereNotInTheWindow:
         document = recorder.flow("f", "F", APP)
         assert document["prompts"][0]["prompt"] == "hello"
         assert [s["action"] for s in document["steps"]] == ["click", "type"]
+
+
+class TestAnchorsWithNothingInThem:
+    """The thing people click is very often featureless. An empty prompt box
+    is a flat rounded rectangle, and a picture of flat colour matches
+    everywhere in the window or nowhere in it.
+
+    Found by file size: the anchor for a real click on LEO's prompt box came
+    out at 343 bytes, which is what a 160x64 PNG of one colour weighs.
+    """
+
+    def _flat_window(self):
+        image = np.zeros((600, 900, 3), dtype=np.uint8)
+        image[:] = (40, 44, 50)                       # a flat panel
+        image[300:308, :] = (90, 96, 104)             # one edge, far from the click
+        return image
+
+    def test_a_flat_crop_is_widened_until_it_reaches_something(self):
+        recorder = Recorder()
+        recorder.click(450, 260, self._flat_window())
+        anchor = recorder.anchors[0]
+        assert (anchor.width, anchor.height) > (160, 64), \
+            "a picture of one colour is not worth matching on"
+
+    def test_the_click_stays_where_it_was(self):
+        """Widening moves the crop's middle; the offset has to carry the
+        difference or every recorded click lands somewhere else."""
+        recorder = Recorder()
+        recorder.click(450, 260, self._flat_window())
+        anchor = recorder.anchors[0]
+        centre_x = 450 - anchor.dx
+        centre_y = 260 - anchor.dy
+        assert abs(centre_x - 450) <= anchor.width // 2
+        assert abs(centre_y - 260) <= anchor.height // 2
+
+    def test_a_crop_that_already_has_edges_is_left_alone(self, window):
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        assert (recorder.anchors[0].width, recorder.anchors[0].height) == (160, 64)
+
+    def test_a_window_of_nothing_at_all_says_so(self):
+        blank = np.full((600, 900, 3), 40, dtype=np.uint8)
+        recorder = Recorder()
+        recorder.click(450, 300, blank)
+        assert any("picture of almost nothing" in w for w in recorder.warnings)
+
+    def test_flat_colour_scores_nothing(self):
+        from understudy.recorder import features
+
+        assert features(np.full((64, 160, 3), 40, dtype=np.uint8)) == 0.0
+        textured = np.zeros((64, 160, 3), dtype=np.uint8)
+        textured[::4] = 255
+        assert features(textured) > 6

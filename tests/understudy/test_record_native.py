@@ -187,14 +187,14 @@ class TestNotLosingARecording:
     -- lost every click."""
 
     def test_each_click_is_written_as_it_happens(self, session, tmp_path):
-        session.save = record_native.saver(tmp_path, "leo")
+        session.save, session.save_screen = record_native.saver(tmp_path, "leo")
         click(session, 280, 130)
         anchors = tmp_path / "anchors" / "leo"
         assert (anchors / "target_1.png").exists()
         assert (anchors / "screens" / "target_1.png").exists()
 
     def test_a_click_outside_the_window_writes_nothing(self, session, tmp_path):
-        session.save = record_native.saver(tmp_path, "leo")
+        session.save, session.save_screen = record_native.saver(tmp_path, "leo")
         click(session, -5000, 130)
         assert not (tmp_path / "anchors").exists()
 
@@ -308,3 +308,45 @@ class TestTheBaselineTheReplyIsMeasuredAgainst:
         session.finish()
         assert session.read_region is not None
         assert record_native.problems_with(session) == []
+
+
+class TestSeeingBothEnds:
+    """Every other screen is one taken *before* a click, so a recording could
+    show every click and never the answer -- the one picture somebody wants.
+    Start and end are kept whatever happens, including when nothing at all was
+    captured, which is exactly when somebody wants to see the screen."""
+
+    def _wired(self, session, tmp_path):
+        session.save, session.save_screen = record_native.saver(tmp_path, "leo")
+        return tmp_path / "anchors" / "leo" / "screens"
+
+    def test_the_screen_at_the_start_is_kept(self, session, tmp_path):
+        screens = self._wired(session, tmp_path)
+        session.begin()
+        assert (screens / "start.png").exists()
+
+    def test_the_screen_at_the_end_is_kept(self, session, tmp_path):
+        screens = self._wired(session, tmp_path)
+        click(session, 280, 130)
+        session.shot = lambda: session.answered
+        session.finish()
+        assert (screens / "end.png").exists()
+
+    def test_both_are_kept_even_when_nothing_was_recorded(self, session, tmp_path):
+        screens = self._wired(session, tmp_path)
+        session.begin()
+        session.finish()
+        assert (screens / "start.png").exists()
+        assert (screens / "end.png").exists()
+        assert session.read_region is None, "and it still found no reply"
+
+    def test_the_screen_the_region_was_measured_against_is_kept_too(
+            self, session, tmp_path):
+        """A region that looks wrong is only checkable against the pair it
+        came from."""
+        screens = self._wired(session, tmp_path)
+        click(session, 280, 130)
+        session.shot = lambda: session.answered
+        session.finish()
+        assert (screens / "before-reply.png").read_bytes() != \
+               (screens / "end.png").read_bytes()

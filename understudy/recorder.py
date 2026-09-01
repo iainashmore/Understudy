@@ -30,6 +30,23 @@ from harness.image import to_png_bytes
 #: of text above or below a featureless box.
 ANCHOR = (160, 64)
 
+#: How flat a crop may be before it is not worth matching on. Standard
+#: deviation across the grey channel: a flat panel is under 2, a box with a
+#: border and some text in it is comfortably over 10.
+FEATURE_FLOOR = 6.0
+#: How much bigger to try, and how many times. Four steps at 1.5x reaches
+#: roughly five times the area, which has always been enough to find an edge.
+GROW_BY = 1.5
+GROW_LIMIT = 4
+
+
+def features(piece) -> float:
+    """How much there is to match on. Flat colour scores zero."""
+    import numpy as np
+
+    return float(np.asarray(piece, dtype=np.float32).mean(axis=2).std())
+
+
 #: Keys that are an instruction rather than text, in the SendKeys spelling the
 #: driver types with.
 NAMED_KEYS = {
@@ -219,19 +236,41 @@ class Recorder:
     # -- internals ------------------------------------------------------------
 
     def _cut(self, x: int, y: int, image, name: str) -> Anchor:
-        """The window around a point, clamped to the window.
+        """The window around a point, clamped to the window, widened until it
+        has something in it.
 
         Clamped rather than refused: a click near an edge is ordinary, and the
         offset carries the difference so the driver still acts on the point
         that was clicked rather than on the middle of the crop.
+
+        Widened because the thing people click is very often featureless. An
+        empty prompt box is a flat rounded rectangle, and a picture of flat
+        colour matches everywhere in the window or nowhere in it. Growing the
+        crop reaches the border, the placeholder text, the icons beside it --
+        something with edges -- and the offset keeps the click where it was.
         """
         height, width = image.shape[:2]
         box_width = min(self.anchor_size[0], width)
         box_height = min(self.anchor_size[1], height)
-        left = max(0, min(x - box_width // 2, width - box_width))
-        top = max(0, min(y - box_height // 2, height - box_height))
-        piece = crop(image, {"x": left, "y": top,
-                             "width": box_width, "height": box_height})
+        piece, left, top = self._piece(image, x, y, box_width, box_height)
+
+        for _ in range(GROW_LIMIT):
+            if features(piece) >= FEATURE_FLOOR:
+                break
+            grown_width = min(int(box_width * GROW_BY), width)
+            grown_height = min(int(box_height * GROW_BY), height)
+            if (grown_width, grown_height) == (box_width, box_height):
+                break
+            box_width, box_height = grown_width, grown_height
+            piece, left, top = self._piece(image, x, y, box_width, box_height)
+
+        if features(piece) < FEATURE_FLOOR:
+            self.warnings.append(
+                f"{name} is a picture of almost nothing -- whatever was "
+                f"clicked has no edges to match on, so it may find the wrong "
+                f"place or no place. Anchor on something nearby with an edge "
+                f"and act at an offset from it."
+            )
         return Anchor(
             name=name,
             png=to_png_bytes(piece),
@@ -240,6 +279,13 @@ class Recorder:
             width=box_width,
             height=box_height,
         )
+
+    def _piece(self, image, x: int, y: int, box_width: int, box_height: int):
+        height, width = image.shape[:2]
+        left = max(0, min(x - box_width // 2, width - box_width))
+        top = max(0, min(y - box_height // 2, height - box_height))
+        return crop(image, {"x": left, "y": top, "width": box_width,
+                            "height": box_height}), left, top
 
     def _flush_text(self) -> None:
         typed = "".join(self._typed)

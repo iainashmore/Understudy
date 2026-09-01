@@ -124,7 +124,11 @@ Click, type, wait for the reply, then **Stop recording** in the app — or
 
 Every click becomes a picture of what was clicked on, matched again at replay
 time, and the whole window is kept beside it so what was clicked can be named
-rather than guessed at. The longest thing typed becomes the prompt, which is
+rather than guessed at. The screen is kept at the start and at the end too,
+whatever happened in between -- a recording that captured nothing is exactly
+when you want to see what was on screen. A picture of flat colour matches
+everywhere or nowhere, so an anchor with nothing in it is widened until it
+reaches an edge. The longest thing typed becomes the prompt, which is
 the point: the click path is fixed and the question is what varies. The area
 to read back is not asked for -- it is whatever changed on screen while you
 waited for the answer -- and it is read with OCR.

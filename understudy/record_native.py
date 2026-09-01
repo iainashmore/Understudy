@@ -89,6 +89,10 @@ class Session:
         #: everything in memory until it stopped, so a session that was killed
         #: -- or whose stop did not work -- lost the lot.
         self.save = None
+        #: Called with a name and a picture, for the two screens that are not
+        #: a click: the one the reply was measured against and the one with
+        #: the reply on it.
+        self.save_screen = None
         #: The window as it was at the last thing the person did. Diffed
         #: against the window at stop, which is where the reply landed.
         self.last_screen = None
@@ -141,6 +145,13 @@ class Session:
             # measured against.
             self.last_screen = self.shot()
 
+    def _keep(self, label: str, image) -> None:
+        if self.save_screen is None or image is None:
+            return
+        from harness.image import to_png_bytes
+
+        self.save_screen(label, to_png_bytes(image))
+
     # -- hotkeys --------------------------------------------------------------
 
     def hotkey(self, combination: str) -> bool:
@@ -150,6 +161,12 @@ class Session:
             return True
         return False
 
+    def begin(self) -> None:
+        """The screen as the recording starts. Kept whatever happens next: a
+        recording that captured nothing is exactly when somebody wants to see
+        what was on screen at the time."""
+        self._keep("start", self.shot())
+
     def finish(self) -> None:
         """Work out where the reply appeared, from what changed.
 
@@ -157,9 +174,17 @@ class Session:
         -- almost always pressing Enter -- and stopping, the only part of the
         window that changes much is the part the answer arrived in.
         """
+        after = self.shot()
+        # Unconditionally, before anything is decided. Every screen saved
+        # otherwise is one taken *before* a click, so a recording could show
+        # every click and never the answer.
+        self._keep("end", after)
         if self.last_screen is None:
             return
-        region = changed_region(self.last_screen, self.shot())
+        # And the one the region is measured against, so a region that looks
+        # wrong can be checked against the pair it came from.
+        self._keep("before-reply", self.last_screen)
+        region = changed_region(self.last_screen, after)
         if region is None:
             print("nothing on screen changed after the last step, so there is "
                   "no reply region to read. Wait for the answer before "
@@ -301,17 +326,24 @@ def saver(out_dir: Path, name: str):
     Everything used to be held until the recording stopped, so a session that
     was killed -- or whose stop did not work -- lost every click. The flow
     still needs the end, but the evidence does not.
+
+    Returns the two sinks: one for anchors, one for the screens that are not a
+    click.
     """
     anchors = out_dir / "anchors" / name
     screens = anchors / "screens"
 
-    def save(anchor) -> None:
+    def save_anchor(anchor) -> None:
         screens.mkdir(parents=True, exist_ok=True)
         (anchors / f"{anchor.name}.png").write_bytes(anchor.png)
         if anchor.screen:
             (screens / f"{anchor.name}.png").write_bytes(anchor.screen)
 
-    return save
+    def save_screen(label: str, png: bytes) -> None:
+        screens.mkdir(parents=True, exist_ok=True)
+        (screens / f"{label}.png").write_bytes(png)
+
+    return save_anchor, save_screen
 
 
 def write(session: Session, name: str, title: str, out_dir: Path,
@@ -400,7 +432,8 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
         return (geometry.left, geometry.top) if geometry else (0, 0)
 
     session = Session(Recorder(), shot, origin)
-    session.save = saver(out_dir, name)
+    session.save, session.save_screen = saver(out_dir, name)
+    session.begin()
     if session_holder is not None:
         session_holder["session"] = session
     placement = driver.geometry
@@ -440,7 +473,7 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
           f"{session.counts['keys']} keystroke(s)")
     print(f"  flow      {path}")
     print(f"  anchors   {anchors}")
-    print(f"  screens   {anchors / 'screens'}   (the whole window, per click)")
+    print(f"  screens   {anchors / 'screens'}   (per click, plus start and end)")
     for problem in problems_with(session):
         print(f"\n! {problem}")
     if not session.read_region:
