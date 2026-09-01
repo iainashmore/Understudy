@@ -40,6 +40,9 @@
              margin-right:6px; }
   .card { background:var(--panel); border:1px solid var(--line);
           border-radius:6px; padding:14px; }
+  #problems { border-left:3px solid var(--bad); }
+  #problems ul { margin:0; padding-left:18px; }
+  #problems li { margin-bottom:6px; }
   .row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
   .row:last-child { margin-bottom:0; }
   .grow { flex:1; }
@@ -93,6 +96,11 @@
       <input id="name" class="grow" placeholder="leo-basics">
       <span id="recordState" class="muted"></span>
     </div>
+  </section>
+
+  <section class="card" id="problems" hidden>
+    <h2>What this recording is missing</h2>
+    <ul id="problemList"></ul>
   </section>
 
   <section class="card" id="recording" hidden>
@@ -303,10 +311,22 @@ async function watchRecording() {
   if (recording.running) return setTimeout(watchRecording, 700);
   if (recording.error) return alert(recording.error);
   if (recording.note) $("recordState").textContent = recording.note;
+  showProblemsWith(recording);
   if (recording.flow) await loadFlow(recording.flow);
 }
 
+// A recording can capture every click and still produce a flow that proves
+// nothing -- no reply region means it drives the application and records the
+// answer nowhere. That is not visible in a folder full of files.
+function showProblemsWith(recording) {
+  const problems = recording.problems || [];
+  $("problems").hidden = problems.length === 0;
+  $("problemList").innerHTML = problems
+    .map((problem) => "<li>" + escapeHtml(problem) + "</li>").join("");
+}
+
 $("record").onclick = async () => {
+  $("problems").hidden = true;
   try {
     showRecording(await post("/api/record/start", {
       title: $("window").value.trim() || "*",

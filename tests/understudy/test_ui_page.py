@@ -285,3 +285,24 @@ class TestWatchingARecording:
             counts: {events: 40, clicks: 2, keys: 17}})""")
         shown = page.locator("#recordState").inner_text()
         assert "2 click(s)" in shown and "17 key(s)" in shown
+
+
+class TestWhatARecordingIsMissing:
+    """The first real recording produced a flow with no read step: it drove
+    the application and recorded the answer nowhere. That was printed to a
+    console behind the browser."""
+
+    def test_nothing_is_said_when_there_is_nothing_to_say(self, page):
+        page.evaluate("""() => showProblemsWith({problems: []})""")
+        assert page.locator("#problems").is_hidden()
+
+    def test_the_missing_read_step_is_on_screen(self, page):
+        page.evaluate("""() => showProblemsWith({problems: [
+            "no reply region was found, so this flow drives the application " +
+            "and records nothing."]})""")
+        assert page.locator("#problems").is_visible()
+        assert "records nothing" in page.locator("#problemList").inner_text()
+
+    def test_every_problem_is_listed(self, page):
+        page.evaluate("""() => showProblemsWith({problems: ["one", "two"]})""")
+        assert page.locator("#problemList li").count() == 2

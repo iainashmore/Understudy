@@ -567,6 +567,7 @@ flows: []
             "flow": job.get("flow"),
             "error": job.get("error"),
             "note": job.get("note"),
+            "problems": job.get("problems") or [],
             # What it is capturing, while it captures it. "Nothing was
             # recorded" and "nothing reached the hook" look identical
             # afterwards and have completely different fixes.
@@ -600,6 +601,12 @@ flows: []
                                             self.workspace.root,
                                             session_holder=job)
                 job["flow"] = self.workspace.relative(path)
+                # A recording can capture perfectly and still produce a flow
+                # that proves nothing. Said in the app, because the console is
+                # behind the browser and nobody is reading it.
+                session = job.get("session")
+                if session is not None:
+                    job["problems"] = record_native.problems_with(session)
             except Exception as exc:
                 job["error"] = f"{type(exc).__name__}: {exc}"
             finally:

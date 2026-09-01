@@ -200,6 +200,30 @@ def stop(session: Session) -> bool:
         session.thread_id, WM_QUIT, 0, 0))
 
 
+def problems_with(session: Session) -> list[str]:
+    """What is wrong with what was just recorded, in the order it matters.
+
+    A recording can succeed at capturing and still produce a flow that proves
+    nothing, and the difference is not visible in a folder full of files. It
+    is visible here.
+    """
+    found = []
+    if not session.recorder.anchors:
+        found.append(
+            "no clicks inside the window were recorded, so the flow has "
+            "nothing to aim at. Press Record first, then click into the "
+            "application."
+        )
+    if not session.read_region:
+        found.append(
+            "no reply region was found, so this flow drives the application "
+            "and records nothing. Ask the question, wait for the whole answer "
+            "to arrive, and only then stop."
+        )
+    found.extend(session.recorder.warnings)
+    return found
+
+
 def dispatch(session: Session, event) -> None:
     """One pywinauto hook event, normalised.
 
@@ -312,6 +336,12 @@ def write(session: Session, name: str, title: str, out_dir: Path,
     return path
 
 
+def readable(name: str) -> str:
+    """`leo-basics` -> `Leo basics`. The window's own title was being used,
+    which says what was driven rather than what the flow does."""
+    return name.replace("-", " ").replace("_", " ").strip().capitalize() or name
+
+
 def app_config_for(title: str, process: str | None) -> dict[str, Any]:
     config: dict[str, Any] = {"window_title_pattern": title}
     if process:
@@ -333,7 +363,8 @@ def finish_and_write(session: Session, name: str, title: str,
     """
     session.finish()
     name_clicks(session)
-    return write(session, name, title, out_dir, app_config_for(title, process))
+    return write(session, name, readable(name), out_dir,
+                 app_config_for(title, process))
 
 
 def record(title: str, process: str | None, name: str, out_dir: Path,
@@ -404,8 +435,8 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
     print(f"  flow      {path}")
     print(f"  anchors   {anchors}")
     print(f"  screens   {anchors / 'screens'}   (the whole window, per click)")
-    for warning in session.recorder.warnings:
-        print(f"note: {warning}")
+    for problem in problems_with(session):
+        print(f"\n! {problem}")
     if not session.read_region:
         print("no reply region was found, so the flow drives the application "
               "and records nothing. Re-record, and wait for the answer to "

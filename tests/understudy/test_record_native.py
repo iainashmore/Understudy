@@ -226,3 +226,46 @@ class TestNotLosingARecording:
         made.hook = AngryHook()
         record_native.stop(made)
         assert made.stopped.is_set()
+
+
+class TestSayingWhatIsMissing:
+    """A recording can capture every click and still produce a flow that
+    proves nothing. The first real one did exactly that: no reply region, so
+    it drove the application and recorded the answer nowhere."""
+
+    def test_no_reply_region_is_the_one_that_matters(self, session):
+        click(session, 280, 130)
+        problems = record_native.problems_with(session)
+        assert any("records nothing" in p for p in problems)
+        assert any("wait for the whole answer" in p for p in problems)
+
+    def test_no_clicks_at_all_says_to_press_record_first(self, session):
+        problems = record_native.problems_with(session)
+        assert any("Press Record first" in p for p in problems)
+
+    def test_typing_before_any_click_is_carried_through(self, session):
+        for character in "hello":
+            press(session, character)
+            release(session, character)
+        click(session, 280, 130)
+        assert any("outside" in p or "before any click" in p
+                   for p in record_native.problems_with(session))
+
+    def test_a_complete_recording_has_nothing_to_say(self, session):
+        click(session, 280, 130)
+        for character in "hello":
+            press(session, character)
+            release(session, character)
+        press(session, "Return")
+        session.shot = lambda: session.answered
+        session.finish()
+        assert record_native.problems_with(session) == []
+
+
+class TestWhatTheFlowIsCalled:
+    def test_the_title_is_the_name_it_was_given(self, session, tmp_path):
+        """It used to be the window's title, which says what was driven rather
+        than what the flow does -- every recording against 3DEXPERIENCE came
+        out called 3DEXPERIENCE."""
+        assert record_native.readable("leo-basics") == "Leo basics"
+        assert record_native.readable("tolerance_check") == "Tolerance check"
