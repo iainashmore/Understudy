@@ -81,6 +81,14 @@ class Session:
         #: the shape pywinauto hands over, so a recording that captures
         #: nothing keeps the evidence rather than needing to be done again.
         self.seen: list[dict[str, Any]] = []
+        #: The hook, once installed. Stopping needs both halves: unhooking,
+        #: which any thread may do, and waking the message loop, which only a
+        #: message posted to its own thread will.
+        self.hook = None
+        #: Called with each anchor as it is captured. A recording used to hold
+        #: everything in memory until it stopped, so a session that was killed
+        #: -- or whose stop did not work -- lost the lot.
+        self.save = None
         #: The window as it was at the last thing the person did. Diffed
         #: against the window at stop, which is where the reply landed.
         self.last_screen = None
@@ -103,6 +111,8 @@ class Session:
         self.last_screen = image
         left, top = self.origin()
         name = self.recorder.click(x, y, image, (left, top))
+        if name and self.save:
+            self.save(self.recorder.anchors[-1])
         # Both coordinates, because the difference between them is the whole
         # of what can go wrong here. On a monitor placed left of the primary
         # the screen coordinate is negative and the window one is not, and a
@@ -171,8 +181,18 @@ def stop(session: Session) -> bool:
     the recording still stops at the next click or keystroke if this fails.
     """
     session.stopped.set()
+    # Unhook first, from whichever thread: the hook handle belongs to the
+    # process, and this is what makes the loop's own condition false.
+    if session.hook is not None:
+        try:
+            session.hook.stop()
+        except Exception:
+            pass
     if not session.thread_id or sys.platform != "win32":
         return False
+    # Then wake it. A message loop blocked in GetMessage does not notice that
+    # a flag changed; it notices a message, and only one posted to its own
+    # thread.
     import ctypes
 
     WM_QUIT = 0x0012
@@ -245,6 +265,25 @@ def name_clicks(session: Session) -> None:
             print(f"  {anchor.name}: {anchor.described}")
 
 
+def saver(out_dir: Path, name: str):
+    """Write each anchor and its screen the moment it is captured.
+
+    Everything used to be held until the recording stopped, so a session that
+    was killed -- or whose stop did not work -- lost every click. The flow
+    still needs the end, but the evidence does not.
+    """
+    anchors = out_dir / "anchors" / name
+    screens = anchors / "screens"
+
+    def save(anchor) -> None:
+        screens.mkdir(parents=True, exist_ok=True)
+        (anchors / f"{anchor.name}.png").write_bytes(anchor.png)
+        if anchor.screen:
+            (screens / f"{anchor.name}.png").write_bytes(anchor.screen)
+
+    return save
+
+
 def write(session: Session, name: str, title: str, out_dir: Path,
           app_config: dict[str, Any]) -> Path:
     """The flow, and its anchors beside it where the flow looks for them."""
@@ -284,6 +323,19 @@ def app_config_for(title: str, process: str | None) -> dict[str, Any]:
     return config
 
 
+def finish_and_write(session: Session, name: str, title: str,
+                     process: str | None, out_dir: Path) -> Path:
+    """Work out the reply region, name the clicks, and write the flow.
+
+    Called from the recording's own thread when the hook loop ends, and from
+    whoever pressed Stop when it does not. Either way somebody gets their
+    recording.
+    """
+    session.finish()
+    name_clicks(session)
+    return write(session, name, title, out_dir, app_config_for(title, process))
+
+
 def record(title: str, process: str | None, name: str, out_dir: Path,
            session_holder: dict[str, Any] | None = None) -> Path:
     """Attach, hook, and block until stopped. Windows only.
@@ -311,6 +363,7 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
         return (geometry.left, geometry.top) if geometry else (0, 0)
 
     session = Session(Recorder(), shot, origin)
+    session.save = saver(out_dir, name)
     if session_holder is not None:
         session_holder["session"] = session
     placement = driver.geometry
@@ -330,6 +383,7 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
 
     session.thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
     hook = Hook()
+    session.hook = hook
 
     def handle(event) -> None:
         try:
@@ -342,9 +396,7 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
     hook.handler = handle
     hook.hook(keyboard=True, mouse=True)
 
-    session.finish()
-    name_clicks(session)
-    path = write(session, name, title, out_dir, app_config_for(title, process))
+    path = finish_and_write(session, name, title, process, out_dir)
     anchors = out_dir / "anchors" / name
     print(f"\n{len(session.recorder.anchors)} anchor(s), "
           f"{len(session.recorder.steps)} step(s), "

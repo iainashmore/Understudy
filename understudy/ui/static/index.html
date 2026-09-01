@@ -302,6 +302,7 @@ async function watchRecording() {
   showRecording(recording);
   if (recording.running) return setTimeout(watchRecording, 700);
   if (recording.error) return alert(recording.error);
+  if (recording.note) $("recordState").textContent = recording.note;
   if (recording.flow) await loadFlow(recording.flow);
 }
 

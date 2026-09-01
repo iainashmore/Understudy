@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import queue
+import time
 import sys
 import threading
 import traceback
@@ -565,6 +566,7 @@ flows: []
             "running": bool(job.get("running")),
             "flow": job.get("flow"),
             "error": job.get("error"),
+            "note": job.get("note"),
             # What it is capturing, while it captures it. "Nothing was
             # recorded" and "nothing reached the hook" look identical
             # afterwards and have completely different fixes.
@@ -589,7 +591,7 @@ flows: []
         title = request.get("title") or "*"
         process = request.get("process") or None
         job: dict[str, Any] = {"running": True, "flow": None, "error": None,
-                               "clicks": 0}
+                               "name": name, "title": title, "process": process}
         self.recording = job
 
         def work() -> None:
@@ -619,6 +621,24 @@ flows: []
         if session is None:
             raise WorkspaceError("the recording has not started listening yet")
         record_native.stop(session)
+
+        # Give the hook's own thread a moment to notice and write the flow.
+        deadline = time.monotonic() + 5
+        while job.get("running") and time.monotonic() < deadline:
+            time.sleep(0.1)
+
+        if job.get("running"):
+            # It did not. Rather than leave somebody with a stuck recording
+            # and nothing to show for it -- which is how this was found -- the
+            # flow is written from here, from the same session.
+            job["flow"] = self.workspace.relative(
+                record_native.finish_and_write(session, job["name"],
+                                               job["title"], job["process"],
+                                               self.workspace.root)
+            )
+            job["running"] = False
+            job["note"] = ("the recorder did not stop on its own; the flow was "
+                           "written anyway")
         return self.recording_state()
 
     def known_subject_values(self) -> dict[str, Any]:

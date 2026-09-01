@@ -524,12 +524,43 @@ class TestStoppingARecording:
         from understudy import record_native
 
         asked = []
-        monkeypatch.setattr(record_native, "stop", lambda session: asked.append(session))
+
+        def stop(session):
+            asked.append(session)
+            api.recording["running"] = False       # as the hook's thread would
+
+        monkeypatch.setattr(record_native, "stop", stop)
         session = object()
-        api.recording = {"running": True, "session": session,
-                         "flow": None, "error": None}
+        api.recording = {"running": True, "session": session, "flow": None,
+                         "error": None, "name": "x", "title": "x",
+                         "process": None}
         api.stop_recording()
         assert asked == [session]
+
+    def test_a_recorder_that_will_not_stop_still_hands_over_the_flow(
+            self, api, monkeypatch, tmp_path):
+        """How this was found: Stop did nothing, the server was killed, and the
+        recording -- held in memory until it finished -- went with it."""
+        from understudy import record_native
+
+        monkeypatch.setattr(record_native, "stop", lambda session: None)
+        monkeypatch.setattr(
+            record_native, "finish_and_write",
+            lambda session, name, title, process, out: _write_stub(out, name))
+        api.recording = {"running": True, "session": object(), "flow": None,
+                         "error": None, "name": "leo", "title": "LEO",
+                         "process": None}
+
+        state = api.stop_recording()
+        assert state["running"] is False
+        assert state["flow"] == "leo.yaml"
+        assert "did not stop on its own" in state["note"]
+
+
+def _write_stub(out_dir, name):
+    path = out_dir / f"{name}.yaml"
+    path.write_text("version: 1\n")
+    return path
 
 
 class TestStoppingFromAnotherThread:

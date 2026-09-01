@@ -179,3 +179,50 @@ class TestWhatItWrites:
         record_native.write(session, "leo-recorded", "LEO", tmp_path,
                           {"window_title_pattern": "x"})
         assert (tmp_path / "anchors" / "leo-recorded" / "target_1.png").exists()
+
+
+class TestNotLosingARecording:
+    """Everything was held in memory until the recording stopped. A session
+    that was killed -- or whose stop did not work, which is how this was found
+    -- lost every click."""
+
+    def test_each_click_is_written_as_it_happens(self, session, tmp_path):
+        session.save = record_native.saver(tmp_path, "leo")
+        click(session, 280, 130)
+        anchors = tmp_path / "anchors" / "leo"
+        assert (anchors / "target_1.png").exists()
+        assert (anchors / "screens" / "target_1.png").exists()
+
+    def test_a_click_outside_the_window_writes_nothing(self, session, tmp_path):
+        session.save = record_native.saver(tmp_path, "leo")
+        click(session, -5000, 130)
+        assert not (tmp_path / "anchors").exists()
+
+    def test_stopping_unhooks_as_well_as_waking_the_loop(self):
+        """Waking the loop is not enough on its own: the loop's condition is
+        the hook's own flag, and only the hook can clear it."""
+        from understudy.recorder import Recorder
+
+        unhooked = []
+
+        class FakeHook:
+            def stop(self):
+                unhooked.append(True)
+
+        made = record_native.Session(Recorder(), lambda: None, lambda: (0, 0))
+        made.hook = FakeHook()
+        record_native.stop(made)
+        assert unhooked == [True]
+        assert made.stopped.is_set()
+
+    def test_a_hook_that_throws_on_stop_does_not_stop_the_stop(self):
+        from understudy.recorder import Recorder
+
+        class AngryHook:
+            def stop(self):
+                raise RuntimeError("already unhooked")
+
+        made = record_native.Session(Recorder(), lambda: None, lambda: (0, 0))
+        made.hook = AngryHook()
+        record_native.stop(made)
+        assert made.stopped.is_set()
