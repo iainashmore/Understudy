@@ -306,3 +306,34 @@ class TestWhatARecordingIsMissing:
     def test_every_problem_is_listed(self, page):
         page.evaluate("""() => showProblemsWith({problems: ["one", "two"]})""")
         assert page.locator("#problemList li").count() == 2
+
+
+class TestSeeingTheAnswerWhenOcrIsMissing:
+    """The pixels the answer was read from are kept whether or not OCR ran.
+    Without an engine the text is empty and they are the only record of what
+    came back -- which is exactly the state a fresh Windows machine is in."""
+
+    def _turn(self, page, result):
+        page.evaluate("(r) => showTurn(r, 'runs/x')", result)
+
+    def test_the_read_region_is_shown_when_there_is_no_text(self, page):
+        self._turn(page, {"prompt_id": "baseline", "status": "error",
+                          "prompt": "hello", "response": "",
+                          "read_images": {"response": "baseline/response.png"},
+                          "screenshots": []})
+        assert page.locator(".shots.answer img").count() == 1
+        assert "not read as text" in page.locator(".turn").inner_text()
+
+    def test_it_says_the_pixels_are_there(self, page):
+        self._turn(page, {"prompt_id": "baseline", "status": "error",
+                          "prompt": "hello", "response": "",
+                          "read_images": {"response": "baseline/response.png"},
+                          "screenshots": []})
+        assert "pixels it was read from" in page.locator(".turn").inner_text()
+
+    def test_text_is_shown_when_there_is_text(self, page):
+        self._turn(page, {"prompt_id": "baseline", "status": "ok",
+                          "prompt": "hello", "response": "I'm AURA",
+                          "read_images": {}, "screenshots": []})
+        assert "I'm AURA" in page.locator(".turn").inner_text()
+        assert page.locator(".shots.answer").count() == 0
