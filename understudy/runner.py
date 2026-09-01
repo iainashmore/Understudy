@@ -393,7 +393,7 @@ class Runner:
                 clear=bool(step.params.get("clear", True)),
                 delay_ms=int(step.params.get("delay_ms", 0)),
             )
-            status.resolution = resolution.as_dict()
+            status.resolution = resolution.as_dict() if resolution else None
             status.detail["chars"] = len(step.params["text"])
             # What was actually typed, after variable substitution. The
             # transcript shows it against the step rather than guessing which

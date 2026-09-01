@@ -545,14 +545,14 @@ class TestTheRecordPanel:
         assert record_tab.locator("#recStart").is_disabled()
         assert "Windows" in record_tab.locator("#recStatus").inner_text()
 
-    def test_the_hotkeys_are_on_screen_not_in_a_manual(self, record_tab):
-        shown = record_tab.locator("#tab-record").inner_text()
-        assert "ctrl+alt+s" in shown and "ctrl+alt+r" in shown
+    def test_the_hotkey_is_on_screen_not_in_a_manual(self, record_tab):
+        assert "ctrl+alt+s" in record_tab.locator("#tab-record").inner_text()
 
-    def test_it_says_what_happens_without_a_marked_region(self, record_tab):
-        """Recording a path that reads nothing produces a demo, not a test,
-        and it is not obvious until the transcript comes back empty."""
-        assert "records nothing" in record_tab.locator("#tab-record").inner_text()
+    def test_it_says_to_wait_for_the_reply_before_stopping(self, record_tab):
+        """The region read back is whatever changed while you waited, so
+        stopping early is the one mistake that costs a re-record."""
+        shown = record_tab.locator("#tab-record").inner_text()
+        assert "Wait for the reply" in shown
 
     def test_the_window_can_be_picked_rather_than_typed(self, record_tab):
         record_tab.click("#recPick")

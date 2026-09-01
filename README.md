@@ -119,16 +119,14 @@ understudy record --title "3DEXPERIENCE" --process 3DEXPERIENCE.exe --name leo-b
 
 or press **Record** in the app. Then, in the application:
 
-| | |
-|---|---|
-| click and type | recorded |
-| **ctrl+alt+r**, then two clicks | marks the area a reply appears in |
-| **ctrl+alt+s** | stop, and write the flow |
+Click, type, wait for the reply, then **ctrl+alt+s** to stop.
 
 Every click becomes a picture of what was clicked on, matched again at replay
-time. The longest thing typed becomes the prompt, which is the point: the
-click path is fixed and the question is what varies. The reply is read back
-with OCR.
+time, and the whole window is kept beside it so what was clicked can be named
+rather than guessed at. The longest thing typed becomes the prompt, which is
+the point: the click path is fixed and the question is what varies. The area
+to read back is not asked for -- it is whatever changed on screen while you
+waited for the answer -- and it is read with OCR.
 
 Nothing is read from the accessibility tree or from an embedded web view.
 Against the 3DEXPERIENCE client both are dead ends -- 17 UIA nodes for the

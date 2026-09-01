@@ -276,3 +276,69 @@ def load_narration(run_dir: Path | str) -> dict[str, str]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+CLICK_SYSTEM = (
+    "You are looking at a screenshot of a desktop application, with a red "
+    "circle drawn around the point somebody clicked. Say what they clicked "
+    "on, as a short noun phrase naming the control: 'the send icon', 'the "
+    "Filters tab', 'the prompt box'. Name the thing, not the action, and do "
+    "not describe the circle. If you cannot tell, answer 'unknown'."
+)
+
+
+def marked(screen: bytes, point: tuple[int, int], radius: int = 26) -> bytes:
+    """The screen with a ring around the point that was clicked.
+
+    Drawn rather than described because a coordinate in a prompt is a number
+    the model has to trust; a ring is something it can see.
+    """
+    import io
+
+    from PIL import Image, ImageDraw
+
+    picture = Image.open(io.BytesIO(screen)).convert("RGB")
+    draw = ImageDraw.Draw(picture)
+    x, y = point
+    draw.ellipse([x - radius, y - radius, x + radius, y + radius],
+                 outline=(255, 48, 48), width=4)
+    buffer = io.BytesIO()
+    picture.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def describe_click(screen: bytes, point: tuple[int, int], client: Any = None,
+                   model: str = DEFAULT_MODEL) -> str:
+    """What was clicked on, in words.
+
+    A recorded flow otherwise names its targets target_1, target_2, which
+    tells a reader nothing and makes the flow unreadable at exactly the moment
+    it wants editing. It is also the beginning of a record of what a person
+    did and why -- screen, point, description -- which is the shape a
+    demonstration takes.
+    """
+    if client is None:
+        import anthropic
+
+        from understudy import credentials
+
+        client = anthropic.Anthropic(**credentials.client_options())
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=200,
+        system=CLICK_SYSTEM,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png",
+                "data": base64.standard_b64encode(
+                    _shrink(marked(screen, point))
+                ).decode("utf-8"),
+            }},
+            {"type": "text", "text": "What was clicked?"},
+        ]}],
+    )
+    parts = [block.text for block in response.content
+             if getattr(block, "type", "") == "text"]
+    described = " ".join(parts).strip().strip(".")
+    return "" if described.lower() in ("", "unknown") else described

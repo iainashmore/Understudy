@@ -51,6 +51,17 @@ class Anchor:
     dy: int
     width: int
     height: int
+    #: Where the click landed in the window, so the point can be found again
+    #: on the saved screen.
+    point: tuple[int, int] = (0, 0)
+    #: What was clicked, in words, when a model was asked. Empty otherwise,
+    #: and the flow falls back to saying which click it was.
+    described: str = ""
+    #: The whole window at that moment. The crop is what the driver matches
+    #: on; this is what lets anyone -- or anything -- work out afterwards what
+    #: was actually clicked, and re-cut a different crop without asking for
+    #: the recording to be done again.
+    screen: bytes = b""
 
 
 @dataclass
@@ -61,12 +72,13 @@ class Recorder:
     threshold: float = 0.88
     anchors: list[Anchor] = field(default_factory=list)
     steps: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     _typed: list[str] = field(default_factory=list)
     _last_target: str = ""
 
     # -- events ---------------------------------------------------------------
 
-    def click(self, x: int, y: int, image, origin: tuple[int, int] = (0, 0)) -> str:
+    def click(self, x: int, y: int, image, origin: tuple[int, int] = (0, 0)) -> str:  # noqa: E501
         """A click at a screen point, with the window as it looked before it.
 
         The screenshot has to be the one taken *before* the click landed: half
@@ -77,6 +89,8 @@ class Recorder:
         self._flush_text()
         window_x, window_y = x - origin[0], y - origin[1]
         anchor = self._cut(window_x, window_y, image, f"target_{len(self.anchors) + 1}")
+        anchor.screen = to_png_bytes(image)
+        anchor.point = (window_x, window_y)
         self.anchors.append(anchor)
         self._last_target = anchor.name
         self.steps.append({"action": "click", "target": anchor.name})
@@ -126,7 +140,7 @@ class Recorder:
                          "stable_for_ms": 2000},
             "targets": {
                 anchor.name: {
-                    "intent": f"recorded click {index + 1}",
+                    "intent": anchor.described or f"recorded click {index + 1}",
                     "native": [{
                         "image": f"anchors/{name}/{anchor.name}.png",
                         "threshold": self.threshold,
@@ -154,8 +168,34 @@ class Recorder:
             })
         return document
 
+    def manifest(self) -> list[dict[str, Any]]:
+        """What was done, where, and on what -- one entry per click.
+
+        Kept next to the flow because it is the durable part of a recording:
+        a screen, a point on it, and a description of what was there. A flow
+        is one thing that can be built from that; it is not the only one.
+        """
+        return [
+            {"target": anchor.name, "point": list(anchor.point),
+             "screen": f"screens/{anchor.name}.png",
+             "anchor": f"{anchor.name}.png",
+             "clicked": anchor.described}
+            for anchor in self.anchors
+        ]
+
     def anchor_files(self) -> dict[str, bytes]:
         return {f"{anchor.name}.png": anchor.png for anchor in self.anchors}
+
+    def screen_files(self) -> dict[str, bytes]:
+        """The whole window at each interaction, kept beside the anchors.
+
+        Not used at replay time. It is what makes a recording reviewable --
+        which icon was that? -- and what a second pass would need to re-cut an
+        anchor, or to name a target something better than target_3, without
+        anybody going back to the workstation.
+        """
+        return {f"screens/{anchor.name}.png": anchor.screen
+                for anchor in self.anchors if anchor.screen}
 
     # -- internals ------------------------------------------------------------
 
@@ -190,6 +230,16 @@ class Recorder:
         step: dict[str, Any] = {"action": "type", "text": typed}
         if self._last_target:
             step["target"] = self._last_target
+        else:
+            # Typed before anything was clicked, so there is no picture of
+            # where it went. It replays into whatever has focus when the run
+            # starts, which is a real assumption about the application's
+            # state and worth saying out loud.
+            self.warnings.append(
+                "typing was recorded before any click, so it replays into "
+                "whatever has focus at the start. Click the box you type into "
+                "first, and the flow will find it by picture."
+            )
         self.steps.append(step)
 
     def _lift_prompt(self, steps: list[dict[str, Any]]) -> str:

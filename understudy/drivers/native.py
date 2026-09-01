@@ -541,8 +541,24 @@ class NativeDriver:
         if centre:
             self.move_pointer_to(*centre)
 
-    def type(self, target: Target, text: str, timeout_ms: int, mode: str = "type",
-             clear: bool = True, delay_ms: int = 0) -> Resolution:
+    def type(self, target: Target | None, text: str, timeout_ms: int,
+             mode: str = "type", clear: bool = True,
+             delay_ms: int = 0) -> Resolution | None:
+        if target is None:
+            # Typing into whatever already has focus. A recording that starts
+            # with typing means the person found the caret already in the
+            # right place, and there is no picture of anything to click.
+            _act(lambda: type_text(
+                text,
+                send=lambda chunk: self.window.type_keys(
+                    escape_send_keys(chunk), with_spaces=True,
+                    with_newlines=False
+                ),
+                sleep=time.sleep,
+                style=self.typing_style,
+            ))
+            self.refresh()
+            return None
         handle, resolution = self.resolve(target, timeout_ms)
         self._approach(handle)
         _act(lambda: handle.click_input())

@@ -704,9 +704,18 @@ class WebDriver:
         return resolution
 
     def type(
-        self, target: Target, text: str, timeout_ms: int,
+        self, target: Target | None, text: str, timeout_ms: int,
         mode: str = "type", clear: bool = True, delay_ms: int = 0,
-    ) -> Resolution:
+    ) -> Resolution | None:
+        if target is None:
+            # Only the recorder produces these, and it only records against a
+            # window. Typing into "whatever has focus" on a page means typing
+            # into the body as often as into a field, so it is refused rather
+            # than done unreliably.
+            raise DriverError(
+                "typing with no target is a native-only thing: on a page, name "
+                "the field to type into"
+            )
         locator, resolution = self.resolve(target, timeout_ms)
         point = self._approach(locator)
         if mode == "fill":

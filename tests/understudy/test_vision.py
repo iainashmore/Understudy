@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from understudy.vision import DEFAULT_THRESHOLD, crop, locate, locate_all, to_gray
+from understudy.vision import DEFAULT_THRESHOLD, crop, locate, locate_all, to_gray, changed_region
 
 
 def canvas(width=200, height=120, colour=(30, 40, 50)) -> np.ndarray:
@@ -126,3 +126,56 @@ class TestRegions:
 
 def test_grayscale_is_luma_weighted():
     assert to_gray(np.array([[[255, 0, 0]]], dtype=np.uint8))[0, 0] == pytest.approx(76.245)
+
+
+class TestFindingWhatChanged:
+    """Where a reply appears, found by watching rather than by asking.
+
+    Marking it by hand meant two clicks with a modifier held, and the first
+    real attempt produced a 4x10 region -- unreadable, and nothing said why.
+    """
+
+    def _screen(self):
+        return np.full((600, 900, 3), 40, dtype=np.uint8)
+
+    def test_the_area_that_filled_in_is_the_area_to_read(self):
+        before = self._screen()
+        after = before.copy()
+        after[200:320, 500:800] = 220           # an answer arrives
+        region = changed_region(before, after, pad=0)
+        assert region == {"x": 500, "y": 200, "width": 300, "height": 120}
+
+    def test_a_little_room_is_left_around_it(self):
+        before = self._screen()
+        after = before.copy()
+        after[200:320, 500:800] = 220
+        region = changed_region(before, after, pad=8)
+        assert (region["x"], region["y"]) == (492, 192)
+        assert (region["width"], region["height"]) == (316, 136)
+
+    def test_a_blinking_caret_does_not_stretch_it_across_the_window(self):
+        """A caret two pixels wide changes as much as anything else, and a box
+        around every changed pixel would read the whole interface."""
+        before = self._screen()
+        after = before.copy()
+        after[200:320, 500:800] = 220
+        after[880:890, 10:12] = 255              # a caret, far away
+        region = changed_region(before, after, pad=0)
+        assert region["height"] < 200, region
+
+    def test_an_unchanged_screen_is_no_region_rather_than_an_empty_one(self):
+        before = self._screen()
+        assert changed_region(before, before.copy()) is None
+
+    def test_a_small_change_is_still_reported_rather_than_dropped(self):
+        before = self._screen()
+        after = before.copy()
+        after[300:308, 400:460] = 250
+        region = changed_region(before, after, pad=0)
+        assert region is not None and region["width"] >= 60
+
+    def test_pictures_of_different_sizes_are_refused(self):
+        """The window was resized mid-recording; anything computed from that
+        would be measured against the wrong frame."""
+        assert changed_region(self._screen(),
+                              np.zeros((400, 400, 3), dtype=np.uint8)) is None

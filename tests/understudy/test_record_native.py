@@ -28,9 +28,13 @@ class Event:
 
 @pytest.fixture
 def session():
-    window = np.zeros((600, 900, 3), dtype=np.uint8)
-    window[98:162, 200:360] = (30, 144, 255)
-    return record_native.Session(Recorder(), lambda: window, lambda: (0, 0))
+    blank = np.zeros((600, 900, 3), dtype=np.uint8)
+    blank[98:162, 200:360] = (30, 144, 255)
+    answered = blank.copy()
+    answered[300:500, 500:800] = 200          # a reply arrives here
+    made = record_native.Session(Recorder(), lambda: blank, lambda: (0, 0))
+    made.blank, made.answered = blank, answered
+    return made
 
 
 def press(session, key, x=0, y=0):
@@ -87,7 +91,7 @@ class TestWhatGetsRecorded:
         assert session.recorder.steps[-1] == {"action": "key", "keys": "{ENTER}"}
 
 
-class TestStoppingAndMarking:
+class TestStoppingAndFindingTheReply:
     def test_the_stop_hotkey_stops(self, session):
         press(session, "Lcontrol")
         press(session, "Lmenu")
@@ -100,37 +104,32 @@ class TestStoppingAndMarking:
         press(session, "s")
         assert session.recorder._typed == []
 
-    def test_marking_takes_two_clicks_and_records_no_steps(self, session):
-        press(session, "Lcontrol")
-        press(session, "Lmenu")
-        press(session, "r")
-        release(session, "r")
-        click(session, 1502, 215)
-        click(session, 1926, 883)
-        assert session.read_region == {"x": 1502, "y": 215,
-                                       "width": 424, "height": 668}
-        assert session.recorder.steps == [], "marking a region is not a click"
-
-    def test_corners_in_either_order(self, session):
-        session.hotkey(record_native.MARK)
-        click(session, 1926, 883)
-        click(session, 1502, 215)
-        assert session.read_region["x"] == 1502 and session.read_region["y"] == 215
-
-    def test_the_region_is_window_relative(self, session):
-        session.origin = lambda: (100, 50)
-        session.hotkey(record_native.MARK)
-        click(session, 200, 100)
-        click(session, 300, 200)
-        assert session.read_region == {"x": 100, "y": 50,
-                                       "width": 100, "height": 100}
-
-    def test_clicking_after_marking_is_recorded_again(self, session):
-        session.hotkey(record_native.MARK)
-        click(session, 10, 10)
-        click(session, 110, 110)
+    def test_the_reply_region_is_whatever_changed_after_the_last_step(self, session):
+        """Nobody draws a box. Marking it by hand meant a modifier and two
+        clicks, and the first real attempt produced a 4x10 region."""
         click(session, 280, 130)
-        assert len(session.recorder.steps) == 1
+        press(session, "Return")
+        session.shot = lambda: session.answered
+        session.finish()
+        assert session.read_region == {"x": 492, "y": 292,
+                                       "width": 316, "height": 216}
+
+    def test_a_screen_that_did_not_change_writes_no_read_step(self, session):
+        click(session, 280, 130)
+        press(session, "Return")
+        session.finish()
+        assert session.read_region is None
+
+    def test_a_caret_sized_change_is_not_an_answer(self, session):
+        """The failure this replaces: a 4x10 region, OCR returning nothing,
+        and no clue in the run about why."""
+        click(session, 280, 130)
+        press(session, "Return")
+        tiny = session.blank.copy()
+        tiny[300:308, 400:404] = 255
+        session.shot = lambda: tiny
+        session.finish()
+        assert session.read_region is None
 
 
 class TestWhatItWrites:
@@ -140,9 +139,8 @@ class TestWhatItWrites:
             press(session, character)
             release(session, character)
         press(session, "Return")
-        session.hotkey(record_native.MARK)
-        click(session, 1502, 215)
-        click(session, 1926, 883)
+        session.shot = lambda: session.answered
+        session.finish()
 
         path = record_native.write(
             session, "leo-recorded", "LEO", tmp_path,

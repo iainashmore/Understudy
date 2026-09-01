@@ -253,3 +253,41 @@ def crop(screenshot: bytes | np.ndarray, region: dict[str, int]) -> np.ndarray:
         int(region["y"]) : int(region["y"]) + int(region["height"]),
         int(region["x"]) : int(region["x"]) + int(region["width"]),
     ]
+
+
+def changed_region(before: np.ndarray, after: np.ndarray, tolerance: int = 12,
+                   min_fraction: float = 0.01, pad: int = 8) -> dict[str, int] | None:
+    """Where the picture changed between two moments.
+
+    Used to find where a reply appears without anyone having to describe it:
+    take the screen before the question is sent and again once the answer has
+    landed, and the part that changed is the part to read.
+
+    Rows and columns are kept only if a real proportion of them changed. A
+    blinking caret, a clock, an antialiased edge -- each moves a handful of
+    pixels, and a bounding box drawn around every changed pixel would stretch
+    across the whole window and read the entire interface.
+    """
+    if before.shape != after.shape:
+        return None
+    difference = np.abs(before.astype(np.int16) - after.astype(np.int16))
+    changed = difference.max(axis=2) > tolerance
+    if not changed.any():
+        return None
+
+    rows = changed.mean(axis=1) > min_fraction
+    columns = changed.mean(axis=0) > min_fraction
+    if not rows.any() or not columns.any():
+        # Something changed, but nothing changed *much*. Better to hand back
+        # the small thing that did than to report nothing.
+        rows, columns = changed.any(axis=1), changed.any(axis=0)
+
+    top, bottom = np.flatnonzero(rows)[[0, -1]]
+    left, right = np.flatnonzero(columns)[[0, -1]]
+    height, width = changed.shape
+    top = max(0, int(top) - pad)
+    left = max(0, int(left) - pad)
+    bottom = min(height - 1, int(bottom) + pad)
+    right = min(width - 1, int(right) + pad)
+    return {"x": left, "y": top,
+            "width": right - left + 1, "height": bottom - top + 1}

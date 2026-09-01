@@ -186,3 +186,40 @@ class TestTheFlowItWrites:
     def test_without_one_it_records_nothing_and_says_so_by_omission(self, window):
         _, document = self._recorded(window)
         assert not [s for s in document["steps"] if s["action"] == "read"]
+
+
+class TestWhatIsKeptBesidesTheFlow:
+    """A recording is worth more than the flow built from it: a screen, the
+    point on it that was clicked, and what was there. That is the shape a
+    demonstration takes, and a flow is only one thing to build from it."""
+
+    def test_the_whole_window_is_kept_for_every_click(self, window):
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        recorder.click(680, 430, window)
+        screens = recorder.screen_files()
+        assert sorted(screens) == ["screens/target_1.png", "screens/target_2.png"]
+        assert load_rgb(screens["screens/target_1.png"]).shape == window.shape
+
+    def test_the_manifest_says_where_each_click_landed(self, window):
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        entry = recorder.manifest()[0]
+        assert entry["point"] == [280, 130]
+        assert entry["screen"] == "screens/target_1.png"
+        assert entry["anchor"] == "target_1.png"
+
+    def test_a_described_click_names_the_target_in_the_flow(self, window):
+        """target_1 tells a reader nothing at the moment they most want to
+        edit the flow."""
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        recorder.anchors[0].described = "the send icon"
+        document = recorder.flow("f", "F", APP)
+        assert document["targets"]["target_1"]["intent"] == "the send icon"
+
+    def test_without_a_description_it_still_says_which_click_it_was(self, window):
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        document = recorder.flow("f", "F", APP)
+        assert document["targets"]["target_1"]["intent"] == "recorded click 1"
