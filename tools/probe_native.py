@@ -100,6 +100,8 @@ def probe_cdp(ports: list[int], owners: dict[int, int] | None = None,
             version = fetch_json(f"{base}/json/version", timeout)
         except Exception:
             continue
+        if not looks_like_cdp(version):
+            continue
         try:
             targets = fetch_json(f"{base}/json/list", timeout)
         except Exception:
@@ -113,12 +115,27 @@ def probe_cdp(ports: list[int], owners: dict[int, int] | None = None,
             "browser": version.get("Browser", "?"),
             "webkit_version": version.get("WebKit-Version", "?"),
             "pages": [
-                {"title": t.get("title", ""), "url": t.get("url", ""),
-                 "type": t.get("type", "")}
-                for t in targets if t.get("type") == "page"
+                {"title": target.get("title", ""), "url": target.get("url", ""),
+                 "type": target.get("type", "")}
+                for target in (targets if isinstance(targets, list) else [])
+                if isinstance(target, dict) and target.get("type") == "page"
             ],
         })
     return found
+
+
+def looks_like_cdp(version: Any) -> bool:
+    """Whether what answered is a DevTools endpoint or some other JSON service.
+
+    Scanning every listening port means asking things that were never meant
+    for us -- a licence daemon, a telemetry agent, an update service -- and
+    plenty of them answer /json/version with perfectly valid JSON of an
+    entirely different shape. One returning a bare string is what took the
+    probe down mid-scan, on the workstation the probe exists for.
+    """
+    return isinstance(version, dict) and bool(
+        {"Browser", "webSocketDebuggerUrl"} & set(version)
+    )
 
 
 def listening_ports() -> dict[int, int]:

@@ -249,9 +249,38 @@ Active Connections
         assert "2 windows matched" in lines
         assert "largest visible one" in lines
 
+    def test_a_json_service_that_is_not_cdp_is_passed_over(self, monkeypatch):
+        """Scanning every listening port means asking a licence daemon, a
+        telemetry agent, an update service. This is not hypothetical: on the
+        workstation this exists for, one of 44 ports answered /json/version
+        with a bare string and took the whole probe down mid-scan."""
+        answers = {
+            "9001": "ok",                       # a bare string
+            "9002": {"status": "healthy"},      # JSON, wrong shape
+            "9003": ["a", "list"],
+            "9004": None,
+        }
+
+        def canned(url, timeout=1.5):
+            return answers[url.rsplit(":", 1)[1].split("/")[0]]
+
+        monkeypatch.setattr(probe_native, "fetch_json", canned)
+        assert probe_native.probe_cdp([9001, 9002, 9003, 9004]) == []
+
+    def test_a_target_list_of_the_wrong_shape_does_not_kill_the_scan(self, monkeypatch):
+        def canned(url, timeout=1.5):
+            if url.endswith("version"):
+                return {"Browser": "Chrome/120", "webSocketDebuggerUrl": "ws://x"}
+            return ["not a target", {"type": "page", "title": "LEO", "url": "x"}]
+
+        monkeypatch.setattr(probe_native, "fetch_json", canned)
+        found = probe_native.probe_cdp([9222])
+        assert [page["title"] for page in found[0]["pages"]] == ["LEO"]
+
     def test_an_endpoint_reports_which_process_answered(self, monkeypatch):
         monkeypatch.setattr(probe_native, "fetch_json", lambda url, timeout=1.5: (
-            {"Browser": "Chrome/120"} if url.endswith("version") else []
+            {"Browser": "Chrome/120", "webSocketDebuggerUrl": "ws://x"}
+            if url.endswith("version") else []
         ))
         found = probe_native.probe_cdp([9222], owners={9222: 7788},
                                        names={7788: "CATIA.exe"})
