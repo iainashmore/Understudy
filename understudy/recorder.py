@@ -193,11 +193,16 @@ class Recorder:
         if read_region:
             # Without this the flow drives the application and records
             # nothing, which is a demo rather than a test.
-            document["steps"].append({
-                "action": "wait_for_stable", "target": self.anchors[-1].name,
-                "mode": "pixels", "region": dict(read_region),
-                "stable_for_ms": 4000, "timeout_ms": 180000,
-            })
+            if self.anchors:
+                # Waiting needs a target it can be asked about, even though
+                # the region is what it watches. With no clicks recorded there
+                # is nothing to name -- and a recording with a reply but no
+                # clicks used to crash here on an empty list.
+                document["steps"].append({
+                    "action": "wait_for_stable", "target": self.anchors[-1].name,
+                    "mode": "pixels", "region": dict(read_region),
+                    "stable_for_ms": 4000, "timeout_ms": 180000,
+                })
             document["steps"].append({
                 "action": "read", "mode": "ocr",
                 "region": dict(read_region), "store_as": "response",

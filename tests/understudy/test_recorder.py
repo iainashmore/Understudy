@@ -328,3 +328,46 @@ class TestAnchorsWithNothingInThem:
         textured = np.zeros((64, 160, 3), dtype=np.uint8)
         textured[::4] = 255
         assert features(textured) > 6
+
+
+class TestARecordingWithNoClicksInIt:
+    """Typing into a panel that already had focus, then waiting for a reply,
+    records no clicks at all -- and writing the flow crashed on an empty list
+    at the moment the recording ended, taking the recording with it."""
+
+    def test_it_writes_a_flow_rather_than_raising(self, window):
+        recorder = Recorder()
+        recorder.text("hello")
+        document = recorder.flow("f", "F", APP,
+                                 read_region={"x": 1, "y": 2,
+                                              "width": 300, "height": 200})
+        assert [s["action"] for s in document["steps"]] == ["type", "read"]
+
+    def test_the_reply_is_still_read(self, window):
+        recorder = Recorder()
+        recorder.text("hello")
+        document = recorder.flow("f", "F", APP,
+                                 read_region={"x": 1, "y": 2,
+                                              "width": 300, "height": 200})
+        assert document["steps"][-1]["mode"] == "ocr"
+        assert document["steps"][-1]["region"]["width"] == 300
+
+    def test_waiting_is_dropped_because_it_has_nothing_to_name(self, window):
+        """wait_for_stable needs a target even when a region says what to
+        watch. With no clicks there is nothing to give it."""
+        recorder = Recorder()
+        recorder.text("hello")
+        document = recorder.flow("f", "F", APP,
+                                 read_region={"x": 1, "y": 2,
+                                              "width": 300, "height": 200})
+        assert not [s for s in document["steps"]
+                    if s["action"] == "wait_for_stable"]
+
+    def test_a_flow_with_a_click_still_waits(self, window):
+        recorder = Recorder()
+        recorder.click(280, 130, window)
+        document = recorder.flow("f", "F", APP,
+                                 read_region={"x": 1, "y": 2,
+                                              "width": 300, "height": 200})
+        assert [s["action"] for s in document["steps"]] == [
+            "click", "wait_for_stable", "read"]
