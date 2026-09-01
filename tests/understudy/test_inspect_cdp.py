@@ -231,6 +231,15 @@ class TestTheSuggestedFlow:
         assert "prompt_box:" in block and "[data-testid='prompt-input']" in block
         assert "send:" in block and "answer:" in block
 
+    def test_a_never_navigated_document_is_empty_not_content(self):
+        """html, head and body. Five pooled WebViews reporting exactly this
+        were called "content is here" at the moment the answer mattered."""
+        lines = "\n".join(inspect_cdp.suggest({"frames": [
+            {"frame_url": "about:blank", "entry": [], "submit": [], "output": [],
+             "stats": {"elements": 3, "shadow_roots": 0, "text_length": 0}},
+        ]}))
+        assert "not the" in lines, lines
+
     def test_content_with_no_match_is_not_reported_as_empty(self):
         lines = "\n".join(inspect_cdp.suggest({"frames": [
             {"frame_url": "about:blank", "entry": [], "submit": [], "output": [],

@@ -42,6 +42,10 @@ from typing import Any
 
 DEFAULT_CDP = "http://127.0.0.1:9222"
 
+#: html, head, body. What a document that was never navigated to anything
+#: still contains.
+EMPTY_DOCUMENT = 3
+
 #: Attribute preference, most durable first. A data-testid is put there for
 #: automation and survives a redesign; a class name from a CSS-in-JS bundler
 #: changes when anything near it changes.
@@ -229,7 +233,8 @@ def inspect(cdp_url: str, out_dir: Path, shots: bool) -> dict[str, Any]:
                         "is_main_frame": frame is page.main_frame,
                         "stats": stats,
                         "entry": [], "submit": [], "output": [],
-                        "empty": not stats.get("elements"),
+                        "empty": (stats.get("elements", 0) <= EMPTY_DOCUMENT
+                                  and not stats.get("text_length")),
                     })
                     continue
 
@@ -270,8 +275,12 @@ def suggest(report: dict[str, Any]) -> list[str]:
     """
     frame = next((f for f in report["frames"] if f.get("entry")), None)
     if not frame:
+        # html, head and body exist in a document that was never navigated,
+        # so a bare 3 is emptiness, not content. Calling it content is how a
+        # blank pooled WebView gets reported as the panel.
         occupied = [f for f in report["frames"]
-                    if (f.get("stats") or {}).get("elements")]
+                    if (f.get("stats") or {}).get("elements", 0) > EMPTY_DOCUMENT
+                    or (f.get("stats") or {}).get("text_length", 0)]
         if occupied:
             biggest = max(occupied,
                           key=lambda f: f["stats"].get("elements", 0))
