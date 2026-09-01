@@ -145,8 +145,12 @@ class Api:
     """The verbs the UI needs. Kept apart from HTTP so it can be tested
     directly."""
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, driver_factory=None) -> None:
         self.workspace = workspace
+        #: How a driver is made. Overridden in tests with a fake application,
+        #: so the path from "press Replay" to "a transcript exists" is covered
+        #: on a machine with no Windows on it.
+        self.driver_factory = driver_factory or build_driver
         self.jobs: dict[str, RunJob] = {}
         self._counter = 0
         self._lock = threading.Lock()
@@ -167,7 +171,7 @@ class Api:
             entry: dict[str, Any] = {"path": relative, "name": "",
                                      "title": relative,
                                      "description": "", "tags": [],
-                                     "variants": 0, "backends": [],
+                                     "variants": 0,
                                      "embedded": False, "error": None}
             try:
                 flow = load_flow(self.workspace.resolve(relative))
@@ -177,9 +181,6 @@ class Api:
                     title=flow.title or flow.name, description=flow.description,
                     tags=list(flow.tags), steps=len(flow.steps),
                     variants=len(flow.embedded_prompts),
-                    # What this flow can be driven as. The flow says so; the
-                    # form has no business asking.
-                    backends=sorted(flow.target_app),
                     embedded=bool(flow.embedded_prompts),
                 )
             except Exception as exc:
@@ -223,30 +224,30 @@ description: {description}
 tags: []
 
 target_app:
-  web:
-    url: "https://example.com/"
+  native:
+    window_title_pattern: "*Change me*"
 
-defaults: {{timeout_ms: 10000, stable_for_ms: 1500}}
+defaults: {{timeout_ms: 30000, stable_for_ms: 2000}}
 
-# Named elements. Strategies are tried in order, most stable first.
+# Named elements. Strategies are tried in order, most stable first. Recording
+# writes these for you as pictures; by hand, a control's own id is steadier
+# than its name, and a picture is what is left when it has neither.
 targets:
   prompt_box:
     intent: the main text input
-    web:
-      - testid: prompt-input
-      - role: textbox
+    native:
+      - control_type: Edit
 
   send_button:
     intent: submits the prompt
-    web:
-      - testid: send
-      - role: button
+    native:
+      - control_type: Button
         name: Send
 
   response_area:
     intent: where the reply appears
-    web:
-      - testid: response
+    native:
+      - control_type: Text
 
 # One entry per prompt run. Any key besides `id` is a variable the steps use.
 prompts:
@@ -256,6 +257,8 @@ prompts:
 steps:
   - action: capture
     label: before-prompt
+  - action: click
+    target: prompt_box
   - action: type
     target: prompt_box
     text: "{{{{prompt}}}}"
@@ -263,7 +266,7 @@ steps:
     target: send_button
   - action: wait_for_stable
     target: response_area
-    stable_for_ms: 1500
+    stable_for_ms: 2000
     timeout_ms: 120000
   - action: capture
     label: after-response
@@ -336,12 +339,12 @@ flows: []
 
     # -- validation -----------------------------------------------------------
 
-    def validate(self, flow_path: str, backend: str = "web") -> dict[str, Any]:
+    def validate(self, flow_path: str) -> dict[str, Any]:
         problems: list[str] = []
         summary: dict[str, Any] = {}
         try:
             flow = load_flow(self.workspace.resolve(flow_path))
-            flow.validate_for_backend(backend)
+            flow.validate_for_backend("native")
             summary["flow"] = {
                 "name": flow.name,
                 "steps": len(flow.steps),
@@ -399,7 +402,6 @@ flows: []
         return {"run_id": job_id, "out_dir": self.workspace.relative(out_dir)}
 
     def _execute(self, job: RunJob, request: dict[str, Any]) -> None:
-        backend = request.get("backend", "web")
         only = [name for name in (request.get("only") or []) if name]
         repeats = int(request.get("repeats", 1))
         agent_mode = request.get("agent", "off")
@@ -408,23 +410,22 @@ flows: []
         try:
             flow = load_flow(self.workspace.resolve(job.flow_path))
             prompts = prompts_for(flow).select(only or None)
-            flow.validate_for_backend(backend)
+            flow.validate_for_backend("native")
             prompts.check_provides(flow.variables())
 
             job.status = "running"
             job.emit("started", variants=len(prompts) * repeats,
                      out_dir=self.workspace.relative(job.out_dir))
 
-            driver = build_driver(
-                backend,
-                headless=not request.get("headed", False),
+            driver = self.driver_factory(
+                "native",
                 resolver=build_resolver("claude" if agent_mode != "off" else "off"),
                 agent_mode=agent_mode,
                 learned_dir=str(
                     self.workspace.resolve(job.flow_path).parent / "learned"
                 ),
             )
-            driver.start(flow.app_config(backend))
+            driver.start(flow.app_config("native"))
             # Which window it attached to, when there was a choice. Otherwise
             # this is a decision made silently, and "it typed into the wrong
             # 3DEXPERIENCE window" is not a thing to discover from a video.
@@ -954,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/file":
                 self._json(self.api.write_file(body["path"], body.get("text", "")))
             elif route == "/api/validate":
-                self._json(self.api.validate(body["flow"], body.get("backend", "web")))
+                self._json(self.api.validate(body["flow"]))
             elif route == "/api/new":
                 self._json(self.api.create(
                     body.get("kind", "flow"), body["path"],

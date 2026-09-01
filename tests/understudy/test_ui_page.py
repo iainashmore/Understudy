@@ -24,12 +24,12 @@ FLOW = """version: 1
 name: page-test
 title: Page test
 target_app:
-  web:
-    url: "about:blank"
+  native:
+    window_title_pattern: "*Fake*"
 targets:
   box:
-    web:
-      - testid: prompt-input
+    native:
+      - control_type: Edit
 prompts:
   - id: baseline
     prompt: hello
@@ -69,7 +69,7 @@ def browser():
     pytest.importorskip("playwright")
     from playwright.sync_api import sync_playwright
 
-    from understudy.drivers.web import find_chromium
+    from understudy.chromium import find_chromium
 
     with sync_playwright() as pw:
         launched = pw.chromium.launch(executable_path=find_chromium())
@@ -117,24 +117,10 @@ def test_a_flow_lists_its_runs_underneath(page):
     assert page.locator(".run-list:not([hidden]) .run").count() == 1
 
 
-def test_showing_the_browser_is_not_offered_for_a_windows_flow(run_tab):
-    """There is no browser to show. An option that cannot mean anything is a
-    question the reader has to answer before they can ignore it."""
-    page = run_tab
-    assert page.locator("#headedLabel").is_visible(), "this flow drives a page"
-
-    page.evaluate("() => { document.getElementById('backend').value = 'native'; "
-                  "backendChanged(); }")
-    assert page.locator("#headedLabel").is_hidden()
-
-
 def test_the_form_says_what_the_flow_drives_rather_than_asking(run_tab):
-    """The flow file already says. Asking again is a question with one right
-    answer, and the wrong one fails at the first step with "flow has no
-    target_app.web section"."""
-    page = run_tab
-    assert page.locator("#backend").is_hidden(), "a choice with one option"
-    assert "web page" in page.locator("#drivesLabel").inner_text()
+    """There is one thing this drives, so there is nothing to ask."""
+    assert "Windows application" in run_tab.locator("#drivesLabel").inner_text()
+    assert run_tab.locator("#headedLabel").count() == 0
 
 
 def test_the_tag_box_offers_what_has_been_used_before(page):

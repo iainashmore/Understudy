@@ -52,7 +52,7 @@ only offers once this file is on the default branch — or publish a release.
 Locally, on the platform you are targeting:
 
 ```bash
-pip install ".[web,agent,ocr,native]" pyinstaller
+pip install ".[native,agent,ocr,pdf]" pyinstaller
 python packaging/fetch_payload.py            # or --skip-browsers for a small build
 pyinstaller --noconfirm --clean --distpath dist packaging/understudy-server.spec
 cd desktop && npm install && npm run dist

@@ -20,11 +20,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import probe_native  # noqa: E402
 
-from understudy.drivers.web import find_chromium  # noqa: E402
+from understudy.chromium import find_chromium  # noqa: E402
 from understudy.windows import OpenWindow  # noqa: E402
 
 PORT = 9412
-FIXTURE = (Path(__file__).resolve().parents[2] / "fixtures" / "chat_app" / "index.html")
 
 
 class FakeInfo:
@@ -53,54 +52,6 @@ class Exploding:
     @property
     def element_info(self):
         raise RuntimeError("no accessible information")
-
-
-class TestCdpDetection:
-    @pytest.fixture(scope="class")
-    @classmethod
-    def endpoint(cls, tmp_path_factory):
-        executable = find_chromium() or shutil.which("chromium")
-        if not executable:
-            pytest.skip("no chromium available")
-        profile = tmp_path_factory.mktemp("probe-profile")
-        process = subprocess.Popen(
-            [executable, "--headless=new", f"--remote-debugging-port={PORT}",
-             f"--user-data-dir={profile}", "--no-first-run", "--no-sandbox",
-             "--disable-dev-shm-usage", f"file://{FIXTURE}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        # Wait for a *page* target, not just the endpoint: /json/version
-        # answers before the page has loaded and taken its title.
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            found = probe_native.probe_cdp([PORT])
-            if found and any(page["title"] for page in found[0]["pages"]):
-                break
-            time.sleep(0.2)
-        else:
-            process.kill()
-            pytest.skip("debugging endpoint never came up")
-        yield PORT
-        process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-    def test_a_live_endpoint_is_found_with_its_pages(self, endpoint):
-        found = probe_native.probe_cdp([endpoint])
-        assert len(found) == 1
-        assert found[0]["cdp_url"] == f"http://127.0.0.1:{endpoint}"
-        assert any(page["title"] == "Fixture Chat" for page in found[0]["pages"])
-
-    def test_dead_ports_are_silent_not_slow_failures(self, endpoint):
-        assert probe_native.probe_cdp([59998, 59999]) == []
-
-    def test_the_verdict_hands_back_ready_made_flow_config(self, endpoint):
-        found = probe_native.probe_cdp([endpoint])
-        lines = "\n".join(probe_native.verdict(found, {}))
-        assert "attach over CDP" in lines
-        assert f'cdp_url: "http://127.0.0.1:{endpoint}"' in lines
 
 
 class TestTreeWalking:
@@ -170,20 +121,15 @@ class TestReporting:
         assert summary["with_name"] == 2
         assert summary["control_types"]["Window"] == 1
 
-    def test_no_cdp_gives_the_instructions_for_turning_it_on(self):
-        lines = "\n".join(probe_native.verdict([], {"available": True, **probe_native.summarise_tree(self.NODES)}))
-        assert "remote-debugging-port" in lines
-        assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in lines
-
     def test_a_sparse_uia_tree_is_called_out(self):
         lines = "\n".join(
-            probe_native.verdict([], {"available": True, **probe_native.summarise_tree(self.NODES)})
+            probe_native.verdict({"available": True, **probe_native.summarise_tree(self.NODES)})
         )
         assert "Very few AutomationIds" in lines
-        assert "OCR" in lines
+        assert "OCR" in lines, "and it says which path that means"
 
     def test_a_missing_dependency_is_reported_not_hidden(self):
-        lines = "\n".join(probe_native.verdict([], {"available": False, "error": "pywinauto not installed"}))
+        lines = "\n".join(probe_native.verdict({"available": False, "error": "pywinauto not installed"}))
         assert "pywinauto not installed" in lines
 
 
@@ -228,7 +174,7 @@ Active Connections
         assert "not visible" in described
 
     def test_missing_the_title_lists_what_is_open(self):
-        lines = "\n".join(probe_native.verdict([], {
+        lines = "\n".join(probe_native.verdict({
             "available": True,
             "error": "no window matching '*3DX*'",
             "matched": [],
@@ -241,7 +187,7 @@ Active Connections
         assert "--title '3DEXPERIENCE R2026x'" in lines
 
     def test_walking_one_of_several_matches_admits_it(self):
-        lines = "\n".join(probe_native.verdict([], {
+        lines = "\n".join(probe_native.verdict({
             "available": True,
             "others": [{"title": "3DEXPERIENCE splash"}],
             **probe_native.summarise_tree(TestReporting.NODES),
@@ -249,66 +195,3 @@ Active Connections
         assert "2 windows matched" in lines
         assert "largest visible one" in lines
 
-    def test_a_json_service_that_is_not_cdp_is_passed_over(self, monkeypatch):
-        """Scanning every listening port means asking a licence daemon, a
-        telemetry agent, an update service. This is not hypothetical: on the
-        workstation this exists for, one of 44 ports answered /json/version
-        with a bare string and took the whole probe down mid-scan."""
-        answers = {
-            "9001": "ok",                       # a bare string
-            "9002": {"status": "healthy"},      # JSON, wrong shape
-            "9003": ["a", "list"],
-            "9004": None,
-        }
-
-        def canned(url, timeout=1.5):
-            return answers[url.rsplit(":", 1)[1].split("/")[0]]
-
-        monkeypatch.setattr(probe_native, "fetch_json", canned)
-        assert probe_native.probe_cdp([9001, 9002, 9003, 9004]) == []
-
-    def test_a_target_list_of_the_wrong_shape_does_not_kill_the_scan(self, monkeypatch):
-        def canned(url, timeout=1.5):
-            if url.endswith("version"):
-                return {"Browser": "Chrome/120", "webSocketDebuggerUrl": "ws://x"}
-            return ["not a target", {"type": "page", "title": "LEO", "url": "x"}]
-
-        monkeypatch.setattr(probe_native, "fetch_json", canned)
-        found = probe_native.probe_cdp([9222])
-        assert [page["title"] for page in found[0]["pages"]] == ["LEO"]
-
-    def test_an_endpoint_reports_which_process_answered(self, monkeypatch):
-        monkeypatch.setattr(probe_native, "fetch_json", lambda url, timeout=1.5: (
-            {"Browser": "Chrome/120", "webSocketDebuggerUrl": "ws://x"}
-            if url.endswith("version") else []
-        ))
-        found = probe_native.probe_cdp([9222], owners={9222: 7788},
-                                       names={7788: "CATIA.exe"})
-        assert found[0]["process"] == "CATIA.exe"
-        assert found[0]["pid"] == 7788
-
-
-class TestWhatNoEndpointMeans:
-    """"No CDP" is two different findings with two different next steps."""
-
-    def test_a_webview_host_makes_the_debug_port_worth_chasing(self):
-        hosts = probe_native.browser_hosts(
-            {1: "explorer.exe", 2: "msedgewebview2.exe", 3: "CATIA.exe"}
-        )
-        assert hosts == ["msedgewebview2.exe"]
-        lines = "\n".join(probe_native.verdict(
-            [], {"available": True, "browser_hosts": hosts,
-                 **probe_native.summarise_tree(TestReporting.NODES)}
-        ))
-        assert "embedded browser host is running" in lines
-        assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in lines
-
-    def test_no_host_says_stop_chasing_it(self):
-        lines = "\n".join(probe_native.verdict(
-            [], {"available": True, "browser_hosts": [],
-                 **probe_native.summarise_tree(TestReporting.NODES)}
-        ))
-        assert "probably native drawing" in lines
-
-    def test_cef_counts_too(self):
-        assert probe_native.browser_hosts({1: "libcef.dll.exe"}) == ["libcef.dll.exe"]

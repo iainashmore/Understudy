@@ -20,14 +20,12 @@ import pytest
 from understudy.windows import OpenWindow
 from understudy.ui.server import Api, Workspace, WorkspaceError, serve
 
-REPO = Path(__file__).resolve().parents[2]
-FIXTURE = (REPO / "fixtures" / "chat_app" / "index.html").resolve()
-# as_uri(), not "file://" + str(). A Windows path is C:\..., whose backslashes
-# are escape sequences inside a double-quoted YAML scalar -- the flow does not
-# parse at all, and every test that loads it fails somewhere else entirely.
-FIXTURE_URL = FIXTURE.as_uri()
+# The UI drives a Windows application, which this machine is not. The fake
+# stands in for one so the path from "press Replay" to "a transcript exists"
+# stays covered where it can actually be run.
+from tests.understudy.test_runner_end_to_end import FakeApp
 
-FLOW = f"""version: 1
+FLOW = """version: 1
 name: ui-test-flow
 title: UI test flow
 description: Used by the UI tests
@@ -35,19 +33,23 @@ prompts:
   - id: alpha
     prompt: first prompt
 target_app:
-  web:
-    url: "{FIXTURE_URL}?mode=instant&dialog=none"
+  native:
+    window_title_pattern: "*Fake*"
 targets:
   prompt_box:
-    web: "textarea[data-testid=prompt-input]"
+    native:
+      - control_type: Edit
   send_button:
-    web: "button[data-testid=send]"
+    native:
+      - control_type: Button
+        name: Send
   response_area:
-    web: "div[data-testid=response]"
+    native:
+      - control_type: Text
 steps:
   - action: type
     target: prompt_box
-    text: "{{{{prompt}}}}"
+    text: "{{prompt}}"
   - action: click
     target: send_button
   - action: capture
@@ -68,7 +70,8 @@ def workspace(tmp_path):
 
 @pytest.fixture
 def api(workspace):
-    return Api(Workspace(workspace))
+    return Api(Workspace(workspace),
+               driver_factory=lambda backend, **options: FakeApp())
 
 
 class TestFiles:
@@ -254,7 +257,6 @@ class TestRunning:
         raise AssertionError("run did not finish")
 
     def test_a_run_streams_progress_and_finishes(self, api):
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         kinds = [event["type"] for event in self.drain(job)]
@@ -265,17 +267,15 @@ class TestRunning:
         assert job.status == "finished"
 
     def test_the_result_carries_the_response_and_a_transcript(self, api):
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
 
-        assert job.results[0]["response"] == "Echo: first prompt"
+        assert job.results[0]["response"] == "tpmorp tsrif"
         assert job.transcript and job.transcript.endswith("transcript.md")
         assert (api.workspace.root / job.transcript).exists()
 
     def test_the_transcript_is_also_written_as_a_page_to_view_in_the_app(self, api):
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
@@ -291,13 +291,12 @@ class TestRunning:
         assert pages, "no prompt run pages were written"
         page = pages[0].read_text()
         assert "first prompt" in page
-        assert "Echo: first prompt" in page
+        assert "tpmorp tsrif" in page, "the answer as well as the question"
         # Numbered so a step can be quoted. This run has no recording, so the
         # video element is covered where it exists: test_transcript_html.
         assert '<span class="step-no">1</span>' in page
 
     def test_rebuilding_writes_both_forms(self, api):
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
@@ -308,7 +307,6 @@ class TestRunning:
         assert rebuilt["transcript_html"].endswith("transcript.html")
 
     def test_a_standalone_page_carries_its_own_screenshots(self, api):
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)
@@ -320,7 +318,6 @@ class TestRunning:
 
     def test_the_pdf_export_reports_a_failure_instead_of_raising(self, api, monkeypatch):
         """A missing print engine loses the export, not the run."""
-        pytest.importorskip("playwright")
         started = api.start_run({"flow": "flow.yaml"})
         job = api.job(started["run_id"])
         self.drain(job)

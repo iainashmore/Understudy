@@ -1,3 +1,8 @@
+> Kept as an illustration of anchor relocation. The flow and fixture it
+> was made from are gone with the web driver; the point it makes -- that a
+> visual anchor is found again after the thing it names has moved -- is
+> exactly what carries a CAD application.
+
 # Demo: select, rename, ask — with the dialog in two different places
 
 The same flow (`examples/cad_rename_and_ask.yaml`), run twice against

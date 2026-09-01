@@ -205,12 +205,7 @@
            gear because they are configuration, not content. -->
       <section id="tab-flow" class="active">
         <div class="row">
-          <label id="drivesLabel" title="What this flow drives. The flow file says which; this is only a choice when it describes both.">Drives</label>
-          <select id="backend" title="What this flow drives">
-            <option value="web">a web page</option>
-            <option value="native">a Windows application</option>
-          </select>
-          <label id="headedLabel" title="Show the browser while it replays, instead of running it invisibly. Web flows only — a native application is always on screen."><input id="headed" type="checkbox"> show the browser</label>
+          <label id="drivesLabel" title="The window this flow drives">Drives a Windows application</label>
           <label title="Capture a screenshot after every step, not only where the flow asks for one"><input id="captureSteps" type="checkbox"> screenshots</label>
           <label title="Record the replay to video"><input id="record" type="checkbox"> record video</label>
           <label title="When the flow's own strategies cannot find a control, let a model look at the screen and find it. Off means the step fails instead — which is what you want when you are testing whether the flow still works."><input id="agentFallback" type="checkbox"> use agent</label>
@@ -1205,35 +1200,16 @@ async function removeCollection(path, name) {
 /* ---------- validate / run ---------- */
 
 function showWhatItDrives(flow) {
-  // The flow file already says what it drives. Asking again is a question
-  // with one right answer, and getting it wrong fails at the first step with
-  // "flow has no target_app.web section".
-  const backends = (flow && flow.backends) || [];
-  const picker = $("backend"), label = $("drivesLabel");
-  if (flow && flow.error) {
-    // Nothing can be said about what a flow drives when it does not load,
-    // and "a web page" -- the picker's first option -- is a guess that reads
-    // as a fact.
-    picker.hidden = true;
-    label.textContent = "Will not load — see below";
-    return;
-  }
-  if (backends.length === 1) {
-    picker.value = backends[0];
-    picker.hidden = true;
-    label.textContent = "Drives " + (backends[0] === "native"
-      ? "a Windows application" : "a web page");
-  } else {
-    picker.hidden = false;
-    label.textContent = "Drives";
-    if (backends.length) picker.value = backends[0];
-  }
-  backendChanged();
+  // One backend now, so nothing to choose. What is still worth saying is when
+  // there is nothing to drive at all.
+  $("drivesLabel").textContent = flow && flow.error
+    ? "Will not load — see below"
+    : "Drives a Windows application";
 }
 
 $("validate").onclick = async () => {
   if (!state.flow) return alert("Open a flow first.");
-  const result = await post("/api/validate", { flow: state.flow, backend: $("backend").value });
+  const result = await post("/api/validate", { flow: state.flow });
   const box = $("validation");
   if (result.ok) {
     const f = result.summary.flow, p = result.summary.prompts;
@@ -1247,17 +1223,6 @@ $("validate").onclick = async () => {
   }
   showTab("run");
 };
-
-function backendChanged() {
-  // There is no browser to show when the flow drives a Windows application,
-  // and an option that cannot mean anything is worse than a missing one: it
-  // is a question the reader has to answer before they can ignore it.
-  const native = $("backend").value === "native";
-  $("headedLabel").hidden = native;
-  if (native) $("headed").checked = false;
-}
-$("backend").addEventListener("change", backendChanged);
-backendChanged();
 
 function logLine(text, cls) {
   const line = document.createElement("div");
@@ -1275,11 +1240,10 @@ $("run").onclick = async () => {
   showTab("run");
   try {
     const started = await post("/api/run", {
-      flow: state.flow, backend: $("backend").value,
+      flow: state.flow,
       // Every prompt, every time. A run of some of them is not a run of the
       // flow, and two runs to compare have to have asked the same questions.
       agent: $("agentFallback").checked ? "fallback" : "off",
-      headed: $("headed").checked,
       capture_steps: $("captureSteps").checked,
       record: $("record").checked,
       subject: readSubject(),

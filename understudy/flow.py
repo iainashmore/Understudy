@@ -29,13 +29,8 @@ SCHEMA_PATH = Path(__file__).resolve().parent / "schema" / "flow.schema.json"
 #: {{name}} -- the same syntax for every variable, not just {{prompt}}.
 VARIABLE_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
-WEB_STRATEGY_KEYS = {
-    "testid", "role", "text", "label", "placeholder", "css", "xpath", "image",
-    "agent",
-}
-WEB_MODIFIER_KEYS = {"name", "exact", "nth", "threshold", "region", "offset"}
-#: `image` is available on every backend: it works on pixels, which every
-#: backend has, and it is the only thing left when a surface exposes nothing.
+#: `image` is the one that carries a CAD application: it works on pixels,
+#: which is all such a surface exposes.
 NATIVE_STRATEGY_KEYS = {
     "automation_id", "name", "control_type", "class_name", "image", "agent",
     "path",
@@ -168,28 +163,8 @@ class Flow:
                     found.update(VARIABLE_RE.findall(value))
         return found
 
-    def app_config(self, backend: str) -> dict[str, Any]:
-        config = dict(self.target_app.get(backend) or {})
-        if config.get("url"):
-            config["url"] = self.resolve_url(config["url"])
-        return config
-
-    def resolve_url(self, url: str) -> str:
-        """Turn a flow-relative file path into one the browser can open.
-
-        Anchor images already resolve against the flow file, so a `url:` that
-        did not was the odd one out -- and an absolute path baked into a flow is
-        a flow that only runs on the machine it was written on. A checkout in a
-        different directory, or a repository that has been renamed, breaks every
-        example that hard-codes one.
-
-        Anything with a scheme (http:, https:, file:///...) is left alone.
-        """
-        if "://" in url or self.source_path is None:
-            return url
-        path, _, query = url.partition("?")
-        resolved = (self.source_path.parent / path).resolve()
-        return resolved.as_uri() + (f"?{query}" if query else "")
+    def app_config(self, backend: str = "native") -> dict[str, Any]:
+        return dict(self.target_app.get(backend) or {})
 
     def validate_for_backend(self, backend: str) -> None:
         """Check every target the flow actually uses can be found on this
@@ -221,17 +196,15 @@ def _normalise_strategies(
 ) -> tuple[Strategy, ...]:
     """Accept the brief form and the ranked form.
 
-        web: "textarea[data-testid=x]"        one CSS selector
-        web: {testid: x}                      one strategy
-        web: [{testid: x}, {role: ..}]        ranked, most stable first
+        native: "Send"                        one control, by name
+        native: {control_type: Button}        one strategy
+        native: [{image: a.png}, {name: OK}]  ranked, most stable first
     """
     entries = raw if isinstance(raw, list) else [raw]
     strategies = []
     for position, entry in enumerate(entries):
         if isinstance(entry, str):
-            fields: dict[str, Any] = (
-                {"css": entry} if backend == "web" else {"name": entry}
-            )
+            fields: dict[str, Any] = {"name": entry}
         elif isinstance(entry, dict):
             fields = dict(entry)
         else:
@@ -240,11 +213,7 @@ def _normalise_strategies(
                 f"a string or a mapping, got {type(entry).__name__}"
             )
 
-        allowed = (
-            WEB_STRATEGY_KEYS | WEB_MODIFIER_KEYS
-            if backend == "web"
-            else NATIVE_STRATEGY_KEYS | NATIVE_MODIFIER_KEYS
-        )
+        allowed = NATIVE_STRATEGY_KEYS | NATIVE_MODIFIER_KEYS
         unknown = sorted(set(fields) - allowed)
         if unknown:
             raise FlowError(
@@ -252,7 +221,7 @@ def _normalise_strategies(
                 f"unknown key {unknown[0]!r}; allowed: {', '.join(sorted(allowed))}"
             )
 
-        primary = WEB_STRATEGY_KEYS if backend == "web" else NATIVE_STRATEGY_KEYS
+        primary = NATIVE_STRATEGY_KEYS
         if not set(fields) & primary:
             raise FlowError(
                 f"target {target_name!r}: {backend} strategy {position} needs one "
@@ -322,7 +291,7 @@ def parse_flow(data: dict[str, Any], source_path: Path | None = None,
             intent=spec.get("intent"),
             strategies={
                 backend: _normalise_strategies(spec[backend], backend, name, base_dir)
-                for backend in ("web", "native")
+                for backend in ("native",)
                 if backend in spec
             },
         )
@@ -398,11 +367,10 @@ def load_flow(path: Path | str) -> Flow:
 def _yaml_hint(text: str, exc: Exception) -> str:
     """A nudge for the mistake a Windows user makes on their first flow.
 
-    `url: "file://C:\\Users\\me\\app.html"` is not a broken URL, it is
+    `executable: "C:\\Program Files\\app.exe"` is not a broken path, it is
     broken YAML: inside double quotes those backslashes are escape sequences,
     and the parser fails somewhere that looks unrelated. Single quotes fix it,
-    a relative path is better, and neither is guessable from the scanner's own
-    message.
+    and that is not guessable from the scanner's own message.
     """
     if "double-quoted scalar" not in str(exc):
         return ""

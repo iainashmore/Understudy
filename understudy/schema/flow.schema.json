@@ -25,149 +25,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "web": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": {
-              "type": "string",
-              "minLength": 1
-            },
-            "storage_state": {
-              "type": "string"
-            },
-            "viewport": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "width",
-                "height"
-              ],
-              "properties": {
-                "width": {
-                  "type": "integer",
-                  "minimum": 1
-                },
-                "height": {
-                  "type": "integer",
-                  "minimum": 1
-                }
-              }
-            },
-            "cdp_url": {
-              "description": "Attach to a Chromium already running in another process (WebView2/CEF) instead of launching one, e.g. http://127.0.0.1:9222",
-              "type": "string"
-            },
-            "page_url_pattern": {
-              "description": "Glob selecting which attached page to drive.",
-              "type": "string"
-            },
-            "page_title_pattern": {
-              "description": "Glob selecting which attached page to drive.",
-              "type": "string"
-            },
-            "navigate": {
-              "description": "In attach mode, navigate the attached page to `url` first. Off by default: the host is usually already where it needs to be.",
-              "type": "boolean"
-            },
-            "typing": {
-              "description": "How text is entered. 'human' types character by character at a fast typing speed, which also exercises whatever the application does between keystrokes; 'instant' fills the field.",
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "mode": {
-                  "type": "string",
-                  "enum": [
-                    "human",
-                    "instant"
-                  ]
-                },
-                "cps": {
-                  "description": "Characters per second. 12 is about 145 wpm.",
-                  "type": "number",
-                  "minimum": 0.5
-                },
-                "variance": {
-                  "type": "number",
-                  "minimum": 0
-                },
-                "sentence_pause_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "clause_pause_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "max_total_s": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              }
-            },
-            "record": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "framerate": {
-                  "type": "integer",
-                  "minimum": 1
-                }
-              }
-            },
-            "mouse": {
-              "description": "How the pointer moves. 'human' travels to the target so a screen recording is followable; 'instant' teleports, which is faster for unattended sweeps. On the web backend these are CDP input events: the page's hover states follow the path, but the desktop cursor does not move.",
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "mode": {
-                  "type": "string",
-                  "enum": [
-                    "human",
-                    "instant"
-                  ]
-                },
-                "speed": {
-                  "type": "number",
-                  "minimum": 1
-                },
-                "arc": {
-                  "type": "number",
-                  "minimum": 0
-                },
-                "settle_ms": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "step_rate": {
-                  "type": "number",
-                  "minimum": 1
-                },
-                "input": {
-                  "description": "Where clicks come from. 'cdp' dispatches synthetic events into the page: the page reacts, but the desktop cursor does not move, so an external screen recorder sees nothing. 'os' moves and clicks the real Windows cursor at the page's position on screen. 'auto' (the default) means 'os' when attached to another application's browser, which is the embedded-panel case, and 'cdp' otherwise.",
-                  "type": "string",
-                  "enum": [
-                    "auto",
-                    "cdp",
-                    "os"
-                  ]
-                }
-              }
-            }
-          },
-          "anyOf": [
-            {
-              "required": [
-                "url"
-              ]
-            },
-            {
-              "required": [
-                "cdp_url"
-              ]
-            }
-          ]
-        },
         "native": {
           "type": "object",
           "additionalProperties": false,
@@ -275,7 +132,11 @@
             }
           }
         }
-      }
+      },
+      "required": [
+        "native"
+      ],
+      "description": "The Windows application under test. One backend: this drives a window, not a page."
     },
     "defaults": {
       "type": "object",
@@ -399,9 +260,6 @@
       "minProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "web": {
-          "$ref": "#/$defs/strategyList"
-        },
         "native": {
           "$ref": "#/$defs/strategyList"
         },
@@ -409,7 +267,14 @@
           "description": "Plain-language description of what this element is for. Unused by deterministic replay; it is the guidance an agent-assisted resolver would need if the UI moves.",
           "type": "string"
         }
-      }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "native"
+          ]
+        }
+      ]
     },
     "strategyList": {
       "description": "One strategy, or several tried in order, most stable first. A bare string is a CSS selector (web) for brevity.",

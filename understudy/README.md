@@ -10,27 +10,29 @@ recording of the application being used rather than driven.
 | Component | State |
 |---|---|
 | Flow schema, parser, embedded prompts | done |
-| Web driver — launch **and CDP attach** | done |
+| Native driver — attach by title and process | done, against 3DEXPERIENCE |
+| **Recorder** — clicks and typing to a flow | done, hooks unexercised off Windows |
 | Runner, transcripts (md, html, pdf), video | done |
 | `wait_for_stable`, text and pixel, region-scoped | done |
-| Visual anchoring + OCR, for surfaces with no DOM | done |
+| Visual anchoring + OCR, for surfaces that expose nothing | done |
 | Agent fallback rung (vision model, cached) | done |
 | Real cursor and human typing | done |
 | Git backend, publish, GitHub/GitLab | done |
 | Subject fields and release comparison | done |
 | Desktop installer (Electron + PyInstaller) | done |
-| **Recorder** | **not started** |
-| Native driver (UIAutomation) | matching tested; pywinauto contact unexercised |
 
-Everything marked done is tested offline against `fixtures/chat_app` and
-`fixtures/cad_app` — a fake streaming assistant and a deliberately hostile CAD
-surface: opaque canvas, unlabelled controls, a viewport that never stops moving,
-and a dialog that opens somewhere different between runs.
+There used to be a web driver, and a CAD fixture and a chat fixture to exercise
+it. Both are gone: this drives Windows applications, and a second backend that
+was never going to be used was a second backend to keep working. What that cost
+is offline coverage of the runner, which is now kept by a fake application
+implementing the driver protocol — no browser, no desktop, and the suite runs in
+twenty seconds rather than seven minutes.
 
 ```bash
+understudy record --title "*3DEXPERIENCE*" --name leo-basics
 understudy ui --workspace ~/flows          # the authoring and replay app
-understudy validate examples/fixture_chat.yaml
-understudy run      examples/fixture_chat.yaml --out runs/today --record
+understudy validate examples/leo_3dx.yaml
+understudy run      examples/leo_3dx.yaml --record --capture-steps
 understudy run      flow.yaml --only baseline,terse --repeat 3
 understudy compare  runs/a runs/b --out comparisons/a-vs-b
 understudy transcript runs/today --pdf
@@ -55,7 +57,7 @@ python3 -m understudy.cli run flow.yaml --record
 
 One video per variant, in the variant's folder, linked from the transcript.
 **H.264 mp4, no audio track**, from both backends — Playwright writes WebM, so
-the web driver transcodes and drops the intermediate.
+the recorder transcodes and drops the intermediate.
 
 **Native** uses ffmpeg. It captures the *monitor region* by default, not the
 window rectangle: menus, tooltips and modal dialogs routinely fall outside the
@@ -77,7 +79,7 @@ video is filed with its own results, rather than being something to line up
 afterwards.
 
 Writing mp4 needs an ffmpeg with an H.264 encoder. Playwright's bundled copy has
-only VP8/WebM, so if that is the one found, the web driver keeps the WebM and
+only VP8/WebM, so if that is the one found, the recorder keeps the WebM and
 says so in the results rather than failing the sweep. `apt install ffmpeg` (or
 any real build on PATH) is what gets mp4.
 
@@ -118,7 +120,7 @@ By default the **operating system's cursor** moves and clicks, on both
 backends. Playwright's mouse API sends CDP input events: the page reacts as it
 would to a person, but they are delivered inside the renderer, so the desktop
 arrow never moves. Anything filming the screen — Camtasia included — records a
-panel operating itself. For an embedded web view inside a native application
+panel operating itself. For an assistant panel inside a desktop application
 that is the only kind of recording there is.
 
 So clicks go through `SetCursorPos`/`SendInput` on Windows, XTest on X11. The
@@ -168,37 +170,24 @@ still renders. `--embed-transcript` inlines the images as data URIs when it has 
 travel as a single file. `understudy transcript <run_dir>` rebuilds one for a past
 run.
 
-## Driving an embedded web view (WebView2 / CEF)
+## What the panel is made of does not change the approach
 
-An assistant panel inside a desktop application is usually Chromium. If the host
-exposes a debugging port, the panel is drivable as an ordinary page — **full DOM
-access, exact text reads, real selectors, no OCR** — and the native problem
-mostly evaporates.
+An assistant panel inside a desktop application is usually Chromium, and for a
+while this drove one over a debugging port -- full DOM access, exact reads, no
+OCR. That route is gone, because against the application this exists for it was
+not there.
 
-```yaml
-target_app:
-  web:
-    cdp_url: "http://127.0.0.1:9222"
-    page_title_pattern: "Assistant*"     # a host may run several web views
-```
+3DEXPERIENCE gives 17 UIAutomation nodes for a 1936x1096 window: the frame, and
+nothing inside it. Its WebViews report `about:blank` over an empty document, so
+there was nothing to attach to either. Both rungs were absent exactly where they
+were needed, and a rung that is missing when it matters is not a rung.
 
-Turning the port on is a host-side setting:
-
-```
-WebView2   set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
-CEF        --remote-debugging-port=9222 on the host executable
-```
-
-Check `http://127.0.0.1:9222/json` — if it lists pages, this works. When
-attached, the driver never closes the browser (it belongs to the host) and
-level-2 reset is refused for the same reason.
-
-Run `python3 tools/probe_native.py --title "*CATIA*"` on the target machine to
-find out which route is available. It checks for CDP endpoints, dumps the
-UIAutomation tree, screenshots the window, and prints a verdict with ready-made
-flow config. `--watch 30` reports the focused element once a second while you
-click around — the substitute for the right-click inspect an embedded view
-doesn't give you.
+So there is one route: pictures for the controls, OCR for the text. Run
+`python3 tools/probe_native.py --title "*CATIA*"` against a new application to
+see what its accessibility tree offers -- usually little -- and
+`--watch 30` reports the focused element once a second while you click around,
+which is the substitute for the right-click inspect an embedded view does not
+give you.
 
 ## Targets drift, so targets are ranked
 
@@ -209,11 +198,11 @@ string is still a CSS selector, as in the original spec.
 targets:
   send_button:
     intent: submits the message          # guidance for an agent resolver later
-    web:
-      - testid: send                     # survives everything but deletion
-      - role: button
-        name: Send                       # survives restyling and re-parenting
-      - css: "form > div:nth-child(2) > button"   # brittle, last resort
+    native:
+      - automation_id: send              # survives everything but deletion
+      - control_type: Button
+        name: Send                       # survives re-layout and re-parenting
+      - image: anchors/send.png          # survives having neither, and little else
 ```
 
 Two rules:
@@ -224,8 +213,8 @@ Two rules:
   result carries `used_fallbacks`. A run limping along on strategy 3 tells you
   the UI moved *before* it breaks.
 
-Verified: with `data-testid` stripped from every element, the fixture flow still
-completes on role and accessible name and reports all four fallbacks.
+Verified against Notepad with UIAutomation switched off entirely: the flow
+completes on pictures alone, and the OCR read matches what was typed.
 
 Steps take `optional: true` for dialogs that sometimes don't appear, and a flow
 can list `interstitials` — cookie banners and similar — dismissed before every
@@ -235,8 +224,8 @@ step without being part of the measured path.
 
 The worst case: no DOM, no accessibility tree, no element picking — a
 custom-drawn CAD toolbar, a canvas, an embedded view with debugging off. There
-is still a path, exercised end to end in `examples/cad_blind.yaml` against
-`fixtures/cad_app`.
+is still a path, and the one this tool takes: `examples/leo_3dx.yaml` drives
+3DEXPERIENCE with nothing else available.
 
 **Find controls by their picture.** An anchor is a small image of the control,
 captured when the flow was authored; at replay it is located in the *current*
@@ -245,7 +234,7 @@ screenshot and the click point is derived from where it is now.
 ```yaml
 targets:
   prompt_box:
-    web:
+    native:
       - image: anchors/assistant_label.png
         threshold: 0.95
         region: {x: 800, y: 40, width: 300, height: 200}
@@ -294,8 +283,8 @@ target's `intent`.
 targets:
   dialog_done:
     intent: the button that commits the rename and closes the dialog
-    web:
-      - testid: dlg-done          # tried first
+    native:
+      - automation_id: dlg-done   # tried first
       - image: anchors/done.png   # then this
       - agent: true               # then, and only then, the model
 ```
@@ -396,7 +385,7 @@ already have, so it behaves identically against GitHub, GitLab, a self-hosted
 GitLab or anything else that speaks git — and inherits your credential helper,
 your proxy and your SSH keys, none of which would work if this were a REST
 client. The provider only matters for the two things that genuinely differ:
-where a personal access token comes from, and what URL opens a file on the web.
+where a personal access token comes from, and what URL opens a file in a browser.
 
 ```bash
 python3 -m understudy.cli repo    --workspace ~/flows
@@ -467,17 +456,19 @@ key:
 
 ## Paths in a flow
 
-Anchor images and `target_app.web.url` both resolve **relative to the flow
-file**. A flow that hard-codes an absolute path only runs on the machine it was
-written on: a checkout in a different directory, a colleague's laptop, or a
-repository that has been renamed breaks every one of them. Anything with a
-scheme — `https://`, or a `file:///` you wrote deliberately — is left alone.
+Anchor images resolve **relative to the flow file**, so a flow directory can be
+moved, copied into a run folder, or checked out somewhere else intact. A flow
+that hard-codes an absolute path only runs on the machine it was written on.
 
 ```yaml
-target_app:
-  web:
-    url: "../fixtures/cad_app/index.html?viewport=spin"
+targets:
+  prompt_box:
+    native:
+      - image: anchors/leo/prompt_box.png
 ```
+
+Anchors themselves are not committed: they belong to a window size, a theme and
+a DPI, and one cut on your monitor is a near-miss on anyone else's.
 
 ## What was under test
 
@@ -608,7 +599,7 @@ tree is full of anonymous wrappers, and a flow naming every level breaks the
 first time a layout gains a container. `path: [Window, Filters]` means "inside
 something called Filters, inside a Window".
 
-The rules match the web driver's deliberately — ranked strategies, ambiguity is
+The rules are the same throughout — ranked strategies, ambiguity is
 not resolution, `nth` for a deliberate choice — because a flow that behaves
 differently per backend is worse than no flow.
 
@@ -617,7 +608,7 @@ click, type, read, screenshot. Reading follows a chain, because a CAD
 application answers "what does this say" three different ways: the UIA value
 (exact), then the clipboard via select-all-and-copy (exact, and often the only
 thing that works on a legacy custom-drawn panel), then OCR (approximate, last
-resort). The visual-anchor and agent rungs work exactly as on the web, because
+resort). The visual-anchor and agent rungs need no accessibility at all, because
 both operate on pixels.
 
 What is testable offline is tested: the tree walk against wrappers that throw

@@ -19,8 +19,11 @@ dependencies = [
 # different rasterizer from any environment's, so no layer shares a code path
 # with the reference it is scored against.
 authoring = ["cairosvg>=2.7"]
-dev = ["pytest>=8"]
-web = ["playwright>=1.40"]
+# Playwright is not for driving anything: Understudy drives Windows
+# applications. It opens Understudy's own page in the tests, and renders a
+# transcript to PDF.
+dev = ["pytest>=8", "playwright>=1.40"]
+pdf = ["playwright>=1.40"]
 agent = ["anthropic>=1.0"]
 ocr = ["pytesseract>=0.3"]
 native = ["pywinauto>=0.6", "pyperclip>=1.8"]

@@ -1,9 +1,9 @@
-"""The agent fallback rung.
+"""The agent rung: asking a model where a control is.
 
-Exercised end to end with a scripted resolver, so the whole path runs without
-spending an API call -- the same reason the abstraction harness built a mock
-agent before a real one. The live model path is covered separately by request
-shape, with a stub client.
+The request shape is covered here with a stub client, so the live path is
+exercised without spending a call. Whether the driver falls back to it, and
+whether the answer is cached, belongs with the driver and is tested there --
+the browser this used to drive is gone.
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from understudy.drivers.base import TargetNotFound
-from understudy.drivers.web import WebDriver
 from understudy.flow import Target, parse_flow
 from understudy.resolvers import (
     ClaudeResolver,
@@ -29,7 +27,6 @@ from harness.image import to_png_bytes
 
 pytest.importorskip("playwright", reason="needs playwright")
 
-FIXTURE = (Path(__file__).resolve().parents[2] / "fixtures" / "cad_app" / "index.html")
 VIEWPORT = {"width": 1100, "height": 700}
 INTENT = "the Measure tool in the toolbar"
 
@@ -45,24 +42,6 @@ def target(label: str, intent: str | None, *strategies) -> Target:
     }).target_for(label)
 
 
-def make_driver(tmp_path, resolver, mode):
-    driver = WebDriver(
-        resolver=resolver, agent_mode=mode, learned_dir=str(tmp_path / "learned")
-    )
-    driver.start({"url": f"file://{FIXTURE}?controls=unlabelled&viewport=static",
-                  "viewport": VIEWPORT})
-    return driver
-
-
-def box_of(driver, selector) -> ResolvedBox:
-    box = driver.page.locator(selector).bounding_box()
-    return ResolvedBox(
-        x=int(box["x"]), y=int(box["y"]),
-        width=int(box["width"]), height=int(box["height"]),
-        confidence=0.95, reasoning="the sixth toolbar control",
-    )
-
-
 class TestResolverProtocol:
     def test_the_null_resolver_finds_nothing(self):
         resolver = NullResolver()
@@ -76,158 +55,6 @@ class TestResolverProtocol:
         with pytest.raises(KeyError, match="unknown resolver"):
             build("gpt")
 
-
-class TestAgentModes:
-    def test_off_never_asks_the_model(self, tmp_path):
-        """The default. Nothing reaches a model by accident."""
-        resolver = ScriptedResolver({})
-        driver = make_driver(tmp_path, resolver, "off")
-        try:
-            with pytest.raises(TargetNotFound, match="agent resolution is off"):
-                driver.resolve(target("measure", INTENT, {"agent": True}), 300)
-        finally:
-            driver.stop()
-        assert resolver.calls == 0
-
-    def test_fallback_does_not_ask_when_a_selector_works(self, tmp_path):
-        """The agent costs money and introduces variance. It is a last resort,
-        not a first one."""
-        resolver = ScriptedResolver({})
-        driver = make_driver(tmp_path, resolver, "fallback")
-        try:
-            _, resolution = driver.resolve(
-                target("measure", INTENT,
-                       {"css": ".tool[data-index='5']"}, {"agent": True}),
-                2000,
-            )
-        finally:
-            driver.stop()
-
-        assert resolution.via == "selector"
-        assert resolver.calls == 0
-
-    def test_fallback_asks_when_everything_else_fails(self, tmp_path):
-        driver = make_driver(tmp_path, ScriptedResolver({}), "fallback")
-        try:
-            resolver = ScriptedResolver({INTENT: box_of(driver, ".tool[data-index='5']")})
-            driver.resolver = resolver
-            handle, resolution = driver.resolve(
-                target("measure", INTENT,
-                       {"css": ".does-not-exist"}, {"agent": True}),
-                1000,
-            )
-            expected = driver.page.locator(".tool[data-index='5']").bounding_box()
-            assert abs(handle.point[0] - (expected["x"] + expected["width"] / 2)) <= 2
-        finally:
-            driver.stop()
-
-        assert resolver.calls == 1
-        assert resolution.via == "agent"
-        assert "confidence 0.95" in resolution.note
-
-    def test_only_ignores_deterministic_strategies_entirely(self, tmp_path):
-        """This mode measures what the agent alone can do, so a working
-        selector must not quietly rescue it."""
-        driver = make_driver(tmp_path, ScriptedResolver({}), "only")
-        try:
-            resolver = ScriptedResolver({INTENT: box_of(driver, ".tool[data-index='5']")})
-            driver.resolver = resolver
-            _, resolution = driver.resolve(
-                target("measure", INTENT,
-                       {"css": ".tool[data-index='5']"}, {"agent": True}),
-                2000,
-            )
-        finally:
-            driver.stop()
-
-        assert resolution.via == "agent"
-        assert resolver.calls == 1, "the working selector should have been ignored"
-
-    def test_only_fails_clearly_with_nothing_to_guide_it(self, tmp_path):
-        driver = make_driver(tmp_path, ScriptedResolver({}), "only")
-        try:
-            with pytest.raises(TargetNotFound, match="no intent to guide"):
-                driver.resolve(target("mystery", None, {"css": ".tool"}), 300)
-        finally:
-            driver.stop()
-
-    def test_an_invalid_mode_is_rejected(self):
-        with pytest.raises(ValueError, match="agent_mode must be one of"):
-            WebDriver(agent_mode="sometimes")
-
-
-class TestCaching:
-    """The property that keeps agent assistance from destroying comparability:
-    the model is asked once, and every run after that is deterministic."""
-
-    def test_the_agent_is_asked_once_and_cached_thereafter(self, tmp_path):
-        driver = make_driver(tmp_path, ScriptedResolver({}), "fallback")
-        try:
-            resolver = ScriptedResolver({INTENT: box_of(driver, ".tool[data-index='5']")})
-            driver.resolver = resolver
-            spec = target("measure", INTENT, {"css": ".missing"}, {"agent": True})
-
-            _, first = driver.resolve(spec, 500)
-            _, second = driver.resolve(spec, 500)
-            _, third = driver.resolve(spec, 500)
-        finally:
-            driver.stop()
-
-        assert resolver.calls == 1, "the model should have been consulted once"
-        assert first.via == "agent"
-        assert second.via == "learned-anchor"
-        assert third.via == "learned-anchor"
-
-    def test_the_learned_anchor_is_written_where_it_can_be_inspected(self, tmp_path):
-        driver = make_driver(tmp_path, ScriptedResolver({}), "fallback")
-        try:
-            driver.resolver = ScriptedResolver(
-                {INTENT: box_of(driver, ".tool[data-index='5']")}
-            )
-            driver.resolve(target("measure", INTENT, {"agent": True}), 500)
-        finally:
-            driver.stop()
-
-        anchor = tmp_path / "learned" / "measure.png"
-        assert anchor.stat().st_size > 0
-        index = (tmp_path / "learned" / "index.json").read_text()
-        assert "measure" in index and "sixth toolbar control" in index
-
-    def test_a_cached_run_works_with_the_agent_switched_back_off(self, tmp_path):
-        """Learn once with the agent on, then run deterministically forever."""
-        learning = make_driver(tmp_path, ScriptedResolver({}), "fallback")
-        try:
-            learning.resolver = ScriptedResolver(
-                {INTENT: box_of(learning, ".tool[data-index='5']")}
-            )
-            learning.resolve(target("measure", INTENT, {"agent": True}), 500)
-        finally:
-            learning.stop()
-
-        offline = make_driver(tmp_path, NullResolver(), "off")
-        try:
-            _, resolution = offline.resolve(target("measure", INTENT, {"agent": True}), 500)
-        finally:
-            offline.stop()
-
-        assert resolution.via == "learned-anchor"
-
-    def test_a_stale_anchor_is_discarded_and_the_agent_asked_again(self, tmp_path):
-        """A cached anchor that stops matching must not be carried forever."""
-        (tmp_path / "learned").mkdir(parents=True)
-        junk = np.random.default_rng(0).integers(0, 255, (20, 20, 3), dtype=np.uint8)
-        (tmp_path / "learned" / "measure.png").write_bytes(to_png_bytes(junk))
-
-        driver = make_driver(tmp_path, ScriptedResolver({}), "fallback")
-        try:
-            resolver = ScriptedResolver({INTENT: box_of(driver, ".tool[data-index='5']")})
-            driver.resolver = resolver
-            _, resolution = driver.resolve(target("measure", INTENT, {"agent": True}), 500)
-        finally:
-            driver.stop()
-
-        assert resolver.calls == 1
-        assert resolution.via == "agent"
 
 
 class TestClaudeResolver:

@@ -12,7 +12,7 @@ MINIMAL = {
     "version": 1,
     "name": "demo",
     "prompts": [{"id": "a", "prompt": "hello"}],
-    "targets": {"box": {"web": "textarea"}},
+    "targets": {"box": {"native": "Message"}},
     "steps": [{"action": "click", "target": "box"}],
 }
 
@@ -22,32 +22,32 @@ def flow(**overrides) -> Flow:
 
 
 class TestTargets:
-    def test_a_bare_string_is_a_css_selector(self):
-        strategies = flow().target_for("box").for_backend("web")
+    def test_a_bare_string_is_a_control_name(self):
+        strategies = flow().target_for("box").for_backend("native")
         assert len(strategies) == 1
-        assert strategies[0].fields == {"css": "textarea"}
+        assert strategies[0].fields == {"name": "Message"}
 
     def test_a_single_mapping_is_one_strategy(self):
-        parsed = flow(targets={"box": {"web": {"testid": "prompt"}}})
-        assert parsed.target_for("box").for_backend("web")[0].kind == "testid"
+        parsed = flow(targets={"box": {"native": {"automation_id": "prompt"}}})
+        assert parsed.target_for("box").for_backend("native")[0].kind == "automation_id"
 
     def test_a_list_is_tried_in_order(self):
-        """Most stable first: a portalled dialog breaks the CSS path but not the
-        role/name lookup."""
+        """Most stable first: an id survives a redesign, a picture of the
+        control survives the id being dropped, and nothing survives both."""
         parsed = flow(
             targets={
                 "dialog": {
-                    "web": [
-                        {"testid": "confirm"},
-                        {"role": "button", "name": "Confirm send"},
-                        {"css": "#inline-slot button"},
+                    "native": [
+                        {"automation_id": "confirm"},
+                        {"control_type": "Button", "name": "Confirm send"},
+                        {"class_name": "Button"},
                     ]
                 }
             },
             steps=[{"action": "click", "target": "dialog"}],
         )
-        kinds = [s.kind for s in parsed.target_for("dialog").for_backend("web")]
-        assert kinds == ["testid", "role", "css"]
+        kinds = [s.kind for s in parsed.target_for("dialog").for_backend("native")]
+        assert kinds == ["automation_id", "control_type", "class_name"]
 
     def test_native_strategies_are_mappings(self):
         parsed = flow(
@@ -59,20 +59,21 @@ class TestTargets:
         }
 
     def test_a_target_can_carry_its_intent(self):
-        parsed = flow(targets={"box": {"web": "textarea", "intent": "the message box"}})
+        parsed = flow(targets={"box": {"native": "Message", "intent": "the message box"}})
         assert parsed.target_for("box").intent == "the message box"
 
     def test_unknown_strategy_keys_are_rejected(self):
         with pytest.raises(FlowError, match="unknown key 'colour'"):
-            flow(targets={"box": {"web": {"colour": "red"}}})
+            flow(targets={"box": {"native": {"colour": "red"}}})
 
     def test_a_strategy_needs_something_to_match_on(self):
         with pytest.raises(FlowError, match="needs one of"):
-            flow(targets={"box": {"web": {"exact": True}}})
+            flow(targets={"box": {"native": {"exact": True}}})
 
-    def test_asking_for_an_undefined_backend_is_a_clear_error(self):
-        with pytest.raises(FlowError, match="no native strategy"):
-            flow().target_for("box").for_backend("native")
+    def test_asking_a_target_for_a_backend_it_does_not_define(self):
+        parsed = flow(targets={"box": {"native": "Message"}})
+        with pytest.raises(FlowError, match="no web strategy"):
+            parsed.target_for("box").for_backend("web")
 
 
 class TestValidation:
@@ -104,18 +105,18 @@ class TestValidation:
             flow(steps=[{"action": "wait_for_stable", "target": "box",
                          "stable_ms": 500}])
 
-    def test_a_backend_check_runs_before_the_run_does(self):
-        parsed = flow()
-        parsed.validate_for_backend("web")
-        with pytest.raises(FlowError, match="no native strategy: box"):
-            parsed.validate_for_backend("native")
+    def test_a_target_with_no_strategy_is_refused_when_the_flow_loads(self):
+        """Earlier than it used to be caught: the schema will not accept a
+        target that says nothing about how to find it."""
+        with pytest.raises(FlowError, match="targets/box"):
+            flow(targets={"box": {"intent": "nothing defines me"}})
 
     def test_unused_targets_do_not_block_a_backend(self):
         """Only what the flow actually touches has to resolve."""
         parsed = flow(
-            targets={"box": {"web": "textarea"}, "spare": {"native": {"name": "x"}}}
+            targets={"box": {"native": "Message"}, "spare": {"native": {"name": "x"}}}
         )
-        parsed.validate_for_backend("web")
+        parsed.validate_for_backend("native")
 
     def test_bad_yaml_is_reported_with_the_path(self, tmp_path):
         path = tmp_path / "flow.yaml"
@@ -183,163 +184,101 @@ def test_a_realistic_flow_round_trips(tmp_path):
     path = tmp_path / "flow.yaml"
     path.write_text(textwrap.dedent("""
         version: 1
-        name: chat-app-basic-flow
-        title: Chat app basic flow
+        name: assistant-basic-flow
+        title: Assistant basic flow
         description: A worked example
         prompts:
           - id: baseline
             prompt: Summarise this.
         target_app:
-          web:
-            url: https://example.com/chat
+          native:
+            window_title_pattern: "*Assistant*"
         targets:
           prompt_box:
             intent: the main message input
-            web:
-              - testid: prompt-input
-              - role: textbox
+            native:
+              - automation_id: prompt-input
+              - control_type: Edit
                 name: Message
           send_button:
-            web:
-              - testid: send
-              - role: button
+            native:
+              - automation_id: send
+              - control_type: Button
                 name: Send
-          response_area:
-            web: "div[data-testid=response]"
-        reset:
-          - action: click
-            target: send_button
+          response:
+            intent: where the reply appears
+            native:
+              - control_type: Text
+                name: Response
+        defaults:
+          timeout_ms: 8000
         steps:
+          - action: click
+            target: prompt_box
           - action: type
             target: prompt_box
             text: "{{prompt}}"
           - action: click
             target: send_button
-          - action: wait_for_stable
-            target: response_area
-            stable_for_ms: 800
-            timeout_ms: 30000
-          - action: capture
-            label: after-response
           - action: read
-            target: response_area
+            target: response
             store_as: response
     """).strip())
 
     parsed = load_flow(path)
-    assert parsed.name == "chat-app-basic-flow"
-    assert parsed.title == "Chat app basic flow"
-    assert [dict(entry)["id"] for entry in parsed.embedded_prompts] == ["baseline"]
+    assert parsed.name == "assistant-basic-flow"
+    assert parsed.defaults.timeout_ms == 8000
     assert parsed.variables() == {"prompt"}
-    assert len(parsed.steps) == 5
-    assert parsed.source_text
-    parsed.validate_for_backend("web")
-
-
-class TestPortablePaths:
-    """A flow that hard-codes an absolute path only runs on the machine it was
-    written on. A checkout in a different directory -- or a repository that has
-    been renamed -- breaks every example that does it.
-    """
-
-    def write(self, tmp_path, url):
-        flow = tmp_path / "flows" / "demo.yaml"
-        flow.parent.mkdir(parents=True, exist_ok=True)
-        flow.write_text(
-            "version: 1\nname: demo\n"
-            "prompts:\n  - id: a\n    prompt: hello\n"
-            f'target_app:\n  web:\n    url: "{url}"\n'
-            "targets:\n  box:\n    web: \"#box\"\n"
-            "steps:\n  - action: click\n    target: box\n"
-        )
-        return flow
-
-    def test_a_relative_path_resolves_against_the_flow_file(self, tmp_path):
-        from understudy.flow import load_flow
-
-        (tmp_path / "fixtures").mkdir()
-        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
-        flow = load_flow(self.write(tmp_path, "../fixtures/app.html"))
-
-        url = flow.app_config("web")["url"]
-        assert url.startswith("file:///")
-        assert url.endswith("/fixtures/app.html")
-
-    def test_the_query_string_survives_the_resolution(self, tmp_path):
-        from understudy.flow import load_flow
-
-        (tmp_path / "fixtures").mkdir()
-        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
-        flow = load_flow(self.write(tmp_path, "../fixtures/app.html?mode=stream&delay=25"))
-        assert flow.app_config("web")["url"].endswith("app.html?mode=stream&delay=25")
-
-    def test_a_real_url_is_left_exactly_as_written(self, tmp_path):
-        from understudy.flow import load_flow
-
-        for url in ("https://example.com/app?a=1", "file:///opt/app/index.html"):
-            flow = load_flow(self.write(tmp_path, url))
-            assert flow.app_config("web")["url"] == url
-
-    def test_the_same_flow_works_from_two_different_directories(self, tmp_path):
-        """The point of the exercise: rename the checkout, nothing changes."""
-        import shutil
-
-        from understudy.flow import load_flow
-
-        (tmp_path / "fixtures").mkdir()
-        (tmp_path / "fixtures" / "app.html").write_text("<p>hi</p>")
-        self.write(tmp_path, "../fixtures/app.html")
-
-        renamed = tmp_path.parent / (tmp_path.name + "-renamed")
-        shutil.copytree(tmp_path, renamed)
-
-        first = load_flow(tmp_path / "flows" / "demo.yaml").app_config("web")["url"]
-        second = load_flow(renamed / "flows" / "demo.yaml").app_config("web")["url"]
-        assert first != second, "each resolves to its own checkout"
-        assert first.endswith("/fixtures/app.html")
-        assert second.endswith("/fixtures/app.html")
+    assert [step.action for step in parsed.steps] == [
+        "click", "type", "click", "read"]
+    assert parsed.target_for("prompt_box").intent == "the main message input"
+    parsed.validate_for_backend("native")
 
 
 class TestExamplesArePortable:
-    def test_no_shipped_example_hard_codes_an_absolute_path(self):
+    def test_no_shipped_example_hard_codes_a_machine_path(self):
+        """An absolute path baked into an example is an example that only runs
+        on the machine it was written on."""
         from pathlib import Path
 
         repo = Path(__file__).resolve().parents[2]
         offenders = [
             path.name for path in sorted((repo / "examples").glob("*.yaml"))
-            if "file:///" in path.read_text()
+            if "C:\\" in path.read_text() or "file:///" in path.read_text()
         ]
         assert offenders == []
 
 
 class TestTheWindowsPathTrap:
-    """`url: "C:\\Users\\me\\app.html"` is not a broken URL, it is broken YAML:
-    inside double quotes those backslashes are escape sequences. The scanner's
-    own message points at a column and says nothing about why."""
+    """`executable: "C:\\Program Files\\app.exe"` is not a broken path, it is
+    broken YAML: inside double quotes those backslashes are escape sequences.
+    The scanner's own message points at a column and says nothing about why --
+    and every flow this tool writes is written on Windows."""
 
-    def write(self, tmp_path, url_line):
+    def write(self, tmp_path, line):
         flow = tmp_path / "flow.yaml"
         flow.write_text(
             "version: 1\nname: x\n"
             "prompts:\n  - id: a\n    prompt: hello\n"
             "steps:\n  - action: capture\n    label: shot\n"
-            f"target_app:\n  web:\n    {url_line}\n")
+            f"target_app:\n  native:\n    window_title_pattern: \"*x*\"\n"
+            f"    {line}\n")
         return flow
 
     def test_the_error_names_the_actual_problem(self, tmp_path):
         from understudy.flow import FlowError, load_flow
 
         with pytest.raises(FlowError) as caught:
-            load_flow(self.write(tmp_path, r'url: "file://C:\Users\me\app.html"'))
+            load_flow(self.write(tmp_path, r'executable: "C:\Users\me\app.exe"'))
         message = str(caught.value)
         assert "backslashes are read as escape sequences" in message
-        assert r"C:\Users\me\app.html" in message, "it should quote the line"
+        assert r"C:\Users\me\app.exe" in message, "it should quote the line"
 
     def test_single_quotes_are_fine(self, tmp_path):
         from understudy.flow import load_flow
 
-        flow = load_flow(self.write(tmp_path, r"url: 'file:///C:/Users/me/app.html'"))
-        assert flow.app_config("web")["url"].endswith("app.html")
+        flow = load_flow(self.write(tmp_path, r"executable: 'C:\Users\me\app.exe'"))
+        assert flow.app_config()["executable"].endswith("app.exe")
 
     def test_an_unrelated_yaml_error_gets_no_spurious_hint(self, tmp_path):
         from understudy.flow import FlowError, load_flow
@@ -400,49 +339,3 @@ def test_an_ordinary_flow_error_still_reads_as_one_problem(tmp_path):
     with pytest.raises(FlowError) as raised:
         load_flow(tmp_path / "missing.yaml")
     assert raised.value.problems == [str(raised.value)]
-
-
-class TestWhichBackendAFlowDrives:
-    """The flow file declares what it drives, so asking again on the command
-    line is a question with one right answer -- and defaulting to web turned a
-    native-only flow into "these targets have no web strategy"."""
-
-    def _flow(self, tmp_path, target_app):
-        from understudy.flow import load_flow
-
-        path = tmp_path / "flow.yaml"
-        path.write_text(f"""version: 1
-name: picky
-{target_app}
-targets:
-  box:
-    native:
-      - control_type: Edit
-    web:
-      - testid: box
-prompts:
-  - id: one
-    prompt: hello
-steps:
-  - {{action: type, target: box, text: "{{{{prompt}}}}"}}
-""")
-        return load_flow(path)
-
-    def test_a_flow_with_one_target_needs_no_backend_flag(self, tmp_path):
-        from understudy.cli import backend_of
-
-        flow = self._flow(tmp_path, 'target_app:\n  native:\n'
-                                    '    window_title_pattern: "*App*"\n')
-        assert backend_of(flow) == "native"
-
-    def test_a_flow_that_drives_both_asks(self, tmp_path):
-        from understudy.cli import backend_of
-        from understudy.flow import FlowError
-
-        flow = self._flow(tmp_path, 'target_app:\n  native:\n'
-                                    '    window_title_pattern: "*App*"\n'
-                                    '  web:\n    url: "https://example.com/"\n')
-        with pytest.raises(FlowError, match="--backend"):
-            backend_of(flow)
-        with pytest.raises(FlowError, match="native or web"):
-            backend_of(flow)

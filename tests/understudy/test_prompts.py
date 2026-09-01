@@ -16,7 +16,7 @@ ENTRIES = [
 def flow_with(prompts):
     return parse_flow({
         "version": 1, "name": "t", "prompts": prompts,
-        "targets": {"box": {"web": "textarea"}},
+        "targets": {"box": {"native": "Message"}},
         "steps": [{"action": "click", "target": "box"}],
     })
 

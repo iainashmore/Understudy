@@ -278,6 +278,15 @@ class Runner:
             result.status = Status.ERROR
             result.error = f"{type(exc).__name__}: {exc}"
 
+        # Why it failed, on the result itself. It was only ever on the step,
+        # so a failed prompt run answered "what went wrong?" with nothing and
+        # the reason had to be dug out of step_statuses.
+        if result.error is None:
+            failed = next((status for status in result.step_statuses
+                           if status.status is Status.ERROR and status.error), None)
+            if failed is not None:
+                result.error = f"{failed.action}: {failed.error}"
+
         worst = {status.status for status in result.step_statuses}
         if result.status is Status.OK:
             if Status.ERROR in worst:

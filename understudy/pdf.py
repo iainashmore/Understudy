@@ -45,7 +45,7 @@ def write_pdf(run_dir: Path | str, filename: str = "transcript.pdf") -> PdfResul
     try:
         from playwright.sync_api import sync_playwright
 
-        from understudy.drivers.web import find_chromium
+        from understudy.chromium import find_chromium
     except ImportError:
         return PdfResult(None, "PDF export needs playwright (pip install "
                                "understudy[web])")

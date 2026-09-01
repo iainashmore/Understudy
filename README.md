@@ -43,7 +43,7 @@ server.
 ```bash
 git clone https://github.com/iainashmore/understudy && cd understudy
 python3 -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -e ".[web,agent,ocr]"                     # add ,native on Windows
+pip install -e ".[native,ocr,agent,pdf]"             # native needs Windows
 python3 -m playwright install chromium                # web targets only
 
 python3 -m understudy.cli ui --workspace ~/flows

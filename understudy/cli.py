@@ -29,42 +29,22 @@ from understudy.runner import Runner, Status, run_directory, write_csv
 from understudy.suite import SuiteError, load_suite
 
 
-def _load(flow_path: str, backend: str | None):
+def _load(flow_path: str):
     flow = load_flow(flow_path)
     prompts = prompts_for(flow)
-    backend = backend or backend_of(flow)
-    flow.validate_for_backend(backend)
+    flow.validate_for_backend("native")
     prompts.check_provides(flow.variables())
-    return flow, prompts, backend
-
-
-def backend_of(flow) -> str:
-    """What the flow drives, when nobody said.
-
-    The flow file already declares it, so defaulting to "web" turns a flow
-    that could only ever have been native into "these targets have no web
-    strategy" -- a question with one right answer, asked of somebody who
-    already answered it in the file. Only an ambiguous flow needs --backend.
-    """
-    declared = sorted(flow.target_app)
-    if len(declared) == 1:
-        return declared[0]
-    if not declared:
-        raise FlowError(f"{flow.name} declares no target_app")
-    raise FlowError(
-        f"{flow.name} can be driven as {' or '.join(declared)}; "
-        f"say which with --backend"
-    )
+    return flow, prompts
 
 
 def command_validate(args) -> int:
-    flow, prompts, backend = _load(args.flow, args.backend)
+    flow, prompts = _load(args.flow)
     print(f"flow      {flow.title} ({flow.name}): {len(flow.steps)} step(s), "
           f"{len(flow.reset)} reset step(s), {len(flow.targets)} target(s)")
     print(f"variables {', '.join(sorted(flow.variables())) or 'none'}")
     print(f"prompts   {len(prompts)} prompt run(s): "
           f"{', '.join(v.id for v in prompts)}")
-    print(f"backend   {backend}: ok")
+    print("targets   ok")
     return 0
 
 
@@ -129,9 +109,9 @@ def command_suite(args) -> int:
 
         child = argparse.Namespace(
             flow=str(entry.flow_path),
-            backend=args.backend, only=",".join(entry.only) if entry.only else None,
+            only=",".join(entry.only) if entry.only else None,
             repeat=1, out=str(out_dir / entry.slug), runs_root=args.runs_root,
-            headed=args.headed, csv=True, reset_level=1, strict=False,
+            csv=True, reset_level=1, strict=False,
             agent="off", learned_dir=None, no_transcript=False, embed_transcript=False,
             pdf=False, app="", app_version="", model_under_test="",
             model_version="", release="",
@@ -339,7 +319,7 @@ def command_record(args) -> int:
 
 
 def command_run(args) -> int:
-    flow, prompts, backend = _load(args.flow, args.backend)
+    flow, prompts = _load(args.flow)
     only = args.only.split(",") if args.only else None
     prompts = prompts.select([name.strip() for name in only] if only else None)
 
@@ -353,15 +333,14 @@ def command_run(args) -> int:
             file=sys.stderr,
         )
     driver = build_driver(
-        backend,
-        headless=not args.headed,
+        "native",
         resolver=build_resolver("claude" if args.agent != "off" else "off"),
         agent_mode=args.agent,
         learned_dir=args.learned_dir or str(Path(args.flow).parent / "learned"),
     )
 
     print(f"{flow.name}: {len(prompts)} prompt run(s) x {args.repeat} -> {out_dir}")
-    driver.start(flow.app_config(backend))
+    driver.start(flow.app_config("native"))
     for note in getattr(driver, "warnings", []):
         print(f"note: {note}")
     try:
@@ -479,10 +458,8 @@ def main(argv: list[str] | None = None) -> int:
     suite.add_argument("--run", action="store_true", help="run every flow in the suite")
     suite.add_argument("--tag", action="append", default=None)
     suite.add_argument("--flow", action="append", default=None, dest="flows")
-    suite.add_argument("--backend", default="web", choices=["web", "native"])
     suite.add_argument("--out", default=None)
     suite.add_argument("--runs-root", default="runs")
-    suite.add_argument("--headed", action="store_true")
     suite.set_defaults(handler=command_suite)
 
     record = sub.add_parser("record", help="record a click path as a flow")
@@ -496,8 +473,6 @@ def main(argv: list[str] | None = None) -> int:
     for name, handler in (("run", command_run), ("validate", command_validate)):
         child = sub.add_parser(name)
         child.add_argument("flow")
-        child.add_argument("--backend", default=None, choices=["web", "native"],
-                           help="only needed when the flow declares both")
         child.set_defaults(handler=handler)
         if name == "run":
             child.add_argument(
@@ -506,7 +481,6 @@ def main(argv: list[str] | None = None) -> int:
             child.add_argument("--repeat", type=int, default=1)
             child.add_argument("--out", default=None)
             child.add_argument("--runs-root", default="runs")
-            child.add_argument("--headed", action="store_true")
             child.add_argument("--csv", action="store_true")
             child.add_argument("--reset-level", type=int, default=1, choices=[1, 2])
             child.add_argument("--strict", action="store_true",

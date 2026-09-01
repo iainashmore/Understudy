@@ -1,47 +1,37 @@
 #!/usr/bin/env python3
-"""Find out how a Windows application can be driven, before writing a driver.
+"""Find out how a Windows application can be driven, before writing a flow.
 
-Run this on the machine with CATIA V5 / 3DEXPERIENCE, with the application open
-and the panel of interest visible. It answers the three questions that decide
-the whole approach, and writes the evidence to a folder:
+Run this on the machine with the application open and the panel of interest
+visible. It answers the two questions that decide the approach, and writes the
+evidence to a folder:
 
-  1. Is there a Chrome DevTools endpoint?  -- an embedded WebView2/CEF panel with
-     remote debugging on is drivable as an ordinary web page, with full DOM
-     access. By far the best outcome.
-  2. What does UIAutomation actually see?  -- dumps the control tree. CAD apps
+  1. What does UIAutomation see?  -- dumps the control tree. CAD applications
      commonly expose menus and dialogs but nothing about the canvas, and an
-     embedded browser may or may not surface its content as accessible text.
-  3. What does it look like?               -- a screenshot, so the tree can be
-     read against the pixels.
+     embedded panel may surface nothing at all. Against 3DEXPERIENCE it was 17
+     nodes for the whole window: the frame, and nothing in it.
+  2. What does it look like?      -- a screenshot, so the tree can be read
+     against the pixels.
 
 It also reports the monitor layout and DPI scaling, because anchors and regions
 are captured per monitor: a second screen at a different scale, or one placed
 left of the primary so its coordinates are negative, changes what a recorded
 flow means.
 
-Nothing here modifies the application. It only reads.
-
 It does not launch anything and does not know where the application is
-installed. It attaches to what is already running: a debugging port on
-localhost, and a top-level window matched by title. If you do not know the
-title, ask it:
+installed. It attaches to a top-level window matched by title. If you do not
+know the title, ask it:
 
     python probe_native.py --list
 
-which lists the open top-level windows with the process that owns each and
-how big it is -- because 3DEXPERIENCE is a crowd of processes, several of
-which own a window and answer to the same name, and the title alone cannot
-separate the client from its splash screen or a hidden helper.
+which lists the open top-level windows with the process that owns each and how
+big it is -- because 3DEXPERIENCE is a crowd of processes, several of which own
+a window and answer to the same name, and the title alone cannot separate the
+client from its splash screen or a hidden helper.
 
     python probe_native.py --title "*CATIA*"
-    python probe_native.py --title "*3DEXPERIENCE*" --ports 9222,9223 --watch 20
+    python probe_native.py --title "*3DEXPERIENCE*" --watch 20
 
-If step 1 finds nothing, try relaunching the host with remote debugging on:
-
-    WebView2   set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
-    CEF        add --remote-debugging-port=9222 to the host command line
-
-then run this again.
+Nothing here modifies the application. It only reads.
 """
 
 from __future__ import annotations
@@ -74,119 +64,11 @@ except ImportError:  # pragma: no cover - a copied file, not a checkout
         "there."
     ) from None
 
-DEFAULT_PORTS = [9222, 9223, 9229, 8888, 1337]
 MAX_TREE_DEPTH = 12
 MAX_TREE_NODES = 4000
 
 
-# -- 1. Chrome DevTools Protocol ----------------------------------------------
-
-
-def fetch_json(url: str, timeout: float = 1.5) -> Any:
-    with urllib.request.urlopen(url, timeout=timeout) as response:
-        return json.loads(response.read())
-
-
-def probe_cdp(ports: list[int], owners: dict[int, int] | None = None,
-              names: dict[int, str] | None = None,
-              timeout: float = 1.5) -> list[dict[str, Any]]:
-    """Look for a debugging endpoint. Pure stdlib so it runs anywhere."""
-    owners = owners or {}
-    names = names or {}
-    found = []
-    for port in ports:
-        base = f"http://127.0.0.1:{port}"
-        try:
-            version = fetch_json(f"{base}/json/version", timeout)
-        except Exception:
-            continue
-        if not looks_like_cdp(version):
-            continue
-        try:
-            targets = fetch_json(f"{base}/json/list", timeout)
-        except Exception:
-            targets = []
-        pid = owners.get(port, 0)
-        found.append({
-            "port": port,
-            "cdp_url": base,
-            "pid": pid,
-            "process": names.get(pid, ""),
-            "browser": version.get("Browser", "?"),
-            "webkit_version": version.get("WebKit-Version", "?"),
-            "pages": [
-                {"title": target.get("title", ""), "url": target.get("url", ""),
-                 "type": target.get("type", "")}
-                for target in (targets if isinstance(targets, list) else [])
-                if isinstance(target, dict) and target.get("type") == "page"
-            ],
-        })
-    return found
-
-
-def looks_like_cdp(version: Any) -> bool:
-    """Whether what answered is a DevTools endpoint or some other JSON service.
-
-    Scanning every listening port means asking things that were never meant
-    for us -- a licence daemon, a telemetry agent, an update service -- and
-    plenty of them answer /json/version with perfectly valid JSON of an
-    entirely different shape. One returning a bare string is what took the
-    probe down mid-scan, on the workstation the probe exists for.
-    """
-    return isinstance(version, dict) and bool(
-        {"Browser", "webSocketDebuggerUrl"} & set(version)
-    )
-
-
-def listening_ports() -> dict[int, int]:
-    """Loopback TCP ports that something is listening on -> owning pid.
-
-    3DEXPERIENCE is not one process, so guessing five well-known debug ports
-    is a poor bet: if any of its hosts has remote debugging on, it may be on
-    whatever port it was given. netstat already knows.
-    """
-    try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                             capture_output=True, text=True, timeout=20).stdout
-    except Exception:
-        return {}
-    local_hosts = {"127.0.0.1", "0.0.0.0", "[::1]", "[::]"}
-    ports: dict[int, int] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) < 5 or parts[3].upper() != "LISTENING":
-            continue
-        host, _, port = parts[1].rpartition(":")
-        if host not in local_hosts:
-            continue
-        try:
-            ports.setdefault(int(port), int(parts[4]))
-        except ValueError:
-            continue
-    return ports
-
-
-EMBEDDED_HOSTS = ("msedgewebview2", "cefsharp", "libcef", "chrome_child",
-                  "electron", "qtwebengine", "awesomium")
-
-
-def browser_hosts(names: dict[int, str]) -> list[str]:
-    """Running processes that host an embedded browser.
-
-    Decides what "no CDP endpoint" means. If msedgewebview2.exe is running,
-    the panel *is* a web page and only the debug port is missing, which is one
-    environment variable away. If nothing like it is running, the panel is
-    native and no amount of relaunching will produce an endpoint -- so don't
-    spend Monday morning on it.
-    """
-    hits = {
-        name for name in names.values()
-        if any(host in name.lower() for host in EMBEDDED_HOSTS)
-    }
-    return sorted(hits)
-
-
-# -- 2. UIAutomation -----------------------------------------------------------
+# -- UIAutomation -----------------------------------------------------------
 
 
 def describe_element(element) -> dict[str, Any]:
@@ -375,36 +257,12 @@ def _glob_to_regex(pattern: str) -> str:
 # -- report --------------------------------------------------------------------
 
 
-def verdict(cdp: list[dict[str, Any]], uia: dict[str, Any]) -> list[str]:
+def verdict(uia: dict[str, Any]) -> list[str]:
     lines = []
-    if cdp:
-        pages = sum(len(endpoint["pages"]) for endpoint in cdp)
-        lines.append(
-            f"BEST ROUTE: attach over CDP. {len(cdp)} endpoint(s), {pages} page(s). "
-            f"Put this in the flow's target_app.web:"
-        )
-        lines.append(f"    cdp_url: \"{cdp[0]['cdp_url']}\"")
-        if cdp[0]["pages"]:
-            lines.append(f"    page_title_pattern: \"{cdp[0]['pages'][0]['title']}*\"")
-        lines.append("  Full DOM access: exact text reads, real selectors, no OCR.")
-        return lines
-
-    hosts = uia.get("browser_hosts") or []
-    if hosts:
-        lines.append(f"No CDP endpoint, but an embedded browser host is running "
-                     f"({', '.join(hosts)}). The panel is a web page with remote "
-                     f"debugging off, which is worth fixing before anything else:")
-    else:
-        lines.append("No CDP endpoint found, and nothing that hosts an embedded")
-        lines.append("browser is running, so the panel is probably native drawing.")
-        lines.append("Still cheap to rule out:")
-    lines.append("    WebView2  set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222")
-    lines.append("    CEF       --remote-debugging-port=9222 on the host command line")
-    lines.append("  then restart the application and run this again.")
-
     if not uia.get("available"):
         lines.append(f"UIA not checked: {uia.get('error')}")
-    elif uia.get("error"):
+        return lines
+    if uia.get("error"):
         if uia.get("open_windows"):
             lines.append("UIA found no window with that title. What is open:")
             lines.extend(f"    {format_window(OpenWindow(**row))}"
@@ -412,23 +270,24 @@ def verdict(cdp: list[dict[str, Any]], uia: dict[str, Any]) -> list[str]:
             lines.append("  Pick one and re-run. Globs are fine: '*3DEXPERIENCE*'.")
         else:
             lines.append(f"UIA failed: {uia['error']}")
-    else:
-        named = uia.get("with_name", 0)
-        identified = uia.get("with_automation_id", 0)
+        return lines
+
+    named = uia.get("with_name", 0)
+    identified = uia.get("with_automation_id", 0)
+    lines.append(
+        f"UIA sees {uia['nodes']} node(s); {identified} have an AutomationId, "
+        f"{named} have a Name."
+    )
+    if uia.get("others"):
+        lines.append(f"  {len(uia['others']) + 1} windows matched that title; this is "
+                     f"the largest visible one. If it is the wrong one, re-run with "
+                     f"an exact --title from the list above.")
+    if identified < 5:
         lines.append(
-            f"UIA sees {uia['nodes']} node(s); {identified} have an AutomationId, "
-            f"{named} have a Name."
+            "  Very few AutomationIds: expect the panel to be opaque, and the "
+            "flow to be recorded as pictures and read with OCR. Which is the "
+            "path this tool takes anyway -- record against it and see."
         )
-        if uia.get("others"):
-            lines.append(f"  {len(uia['others']) + 1} windows matched that title; this is "
-                         f"the largest visible one. If it is the wrong one, re-run with "
-                         f"an exact --title from the list above.")
-        if identified < 5:
-            lines.append(
-                "  Very few AutomationIds: expect to target by control type and "
-                "name, and expect the canvas to be opaque. Pixel-stability and "
-                "OCR are likely needed for reading responses."
-            )
     return lines
 
 
@@ -436,13 +295,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--title", default="*", help="window title glob, e.g. '*CATIA*'")
-    parser.add_argument("--ports", default=",".join(str(p) for p in DEFAULT_PORTS))
     parser.add_argument("--watch", type=int, default=0,
                         help="seconds to report the focused element, once a second")
     parser.add_argument("--out", default=None)
-    parser.add_argument("--no-scan", action="store_true",
-                        help="do not scan the machine's listening ports when the "
-                             "usual debug ports come back empty")
     parser.add_argument("--list", action="store_true",
                         help="just list the open top-level windows and stop, to "
                              "find the title to pass to --title")
@@ -462,36 +317,6 @@ def main(argv: list[str] | None = None) -> int:
     stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
     out_dir = Path(args.out or f"probe-{stamp}")
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    ports = [int(p) for p in args.ports.split(",") if p.strip()]
-    print(f"probing ports {ports} ...")
-    names = process_names()
-    owners = listening_ports()
-    cdp = probe_cdp(ports, owners=owners, names=names)
-
-    if not cdp and not args.no_scan:
-        # 3DEXPERIENCE is a crowd of processes and any of them could be the
-        # one hosting the panel, on any port it was handed. Five guesses is a
-        # poor substitute for asking the machine what is listening.
-        rest = sorted(set(owners) - set(ports))
-        if rest:
-            print(f"nothing on the usual ports; scanning {len(rest)} listening "
-                  f"loopback port(s) ...")
-            cdp = probe_cdp(rest, owners=owners, names=names, timeout=0.5)
-
-    for endpoint in cdp:
-        owner = (f"  [{endpoint['process']} pid {endpoint['pid']}]"
-                 if endpoint.get("pid") and endpoint.get("process") else "")
-        print(f"  FOUND {endpoint['cdp_url']}  {endpoint['browser']}{owner}")
-        for page in endpoint["pages"]:
-            print(f"        page {page['title']!r}  {page['url'][:90]}")
-    if not cdp:
-        print("  none")
-
-    hosts = browser_hosts(names)
-    if hosts and not cdp:
-        print(f"  embedded browser host(s) running: {', '.join(hosts)} "
-              f"-- the panel is web, the debug port is just off")
 
     display = probe_display()
     print("display:")
@@ -513,7 +338,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"walking the UIA tree for windows matching {args.title!r} ...")
     uia = probe_uia(args.title, out_dir)
-    uia["browser_hosts"] = hosts
     if uia.get("error"):
         print(f"  {uia['error']}")
         for row in uia.get("open_windows") or []:
@@ -536,8 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         watch_focus(args.watch, out_dir)
 
     report = {"timestamp": stamp, "title_pattern": args.title,
-              "display": display, "cdp": cdp, "uia": uia,
-              "verdict": verdict(cdp, uia)}
+              "display": display, "uia": uia, "verdict": verdict(uia)}
     (out_dir / "probe.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print("\n" + "\n".join(report["verdict"]))
