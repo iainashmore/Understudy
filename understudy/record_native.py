@@ -345,8 +345,13 @@ def record(title: str, process: str | None, name: str, out_dir: Path,
     session.finish()
     name_clicks(session)
     path = write(session, name, title, out_dir, app_config_for(title, process))
+    anchors = out_dir / "anchors" / name
     print(f"\n{len(session.recorder.anchors)} anchor(s), "
-          f"{len(session.recorder.steps)} step(s) -> {path}")
+          f"{len(session.recorder.steps)} step(s), "
+          f"{session.counts['keys']} keystroke(s)")
+    print(f"  flow      {path}")
+    print(f"  anchors   {anchors}")
+    print(f"  screens   {anchors / 'screens'}   (the whole window, per click)")
     for warning in session.recorder.warnings:
         print(f"note: {warning}")
     if not session.read_region:

@@ -156,6 +156,24 @@ class TestWhatItWrites:
         assert flow.variables() == {"prompt"}
         assert [s.action for s in flow.steps][-1] == "read"
 
+    def test_the_whole_window_is_kept_beside_each_anchor(self, session, tmp_path):
+        """The anchor is what the driver matches on; the screen is what makes
+        the recording reviewable afterwards. Only the first was checked, and
+        "no screenshots in the folder" was the first thing asked about it."""
+        click(session, 280, 130)
+        record_native.write(session, "leo-recorded", "LEO", tmp_path,
+                            {"window_title_pattern": "x"})
+        anchors = tmp_path / "anchors" / "leo-recorded"
+        assert (anchors / "screens" / "target_1.png").exists()
+        assert (anchors / "recording.json").exists()
+
+        import json
+
+        entry = json.loads((anchors / "recording.json").read_text())[0]
+        assert entry["point"] == [280, 130]
+        assert (anchors / entry["screen"]).exists(), \
+            "the manifest points at a file that is really there"
+
     def test_the_anchors_land_where_the_flow_looks_for_them(self, session, tmp_path):
         click(session, 280, 130)
         record_native.write(session, "leo-recorded", "LEO", tmp_path,
