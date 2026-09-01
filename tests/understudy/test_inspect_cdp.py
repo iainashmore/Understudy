@@ -138,6 +138,23 @@ class TestTheSuggestedFlow:
         assert "prompt_box:" in block and "[data-testid='prompt-input']" in block
         assert "send:" in block and "answer:" in block
 
-    def test_finding_nothing_says_the_likely_reason(self):
-        lines = inspect_cdp.suggest({"frames": []})
-        assert any("panel was not open" in line for line in lines)
+    def test_blank_frames_only_names_the_port_collision(self):
+        """What the workstation actually hit: several WebView2 hosts told to
+        use one debugging port, only the first getting it, and the endpoint
+        that answered belonging to some other part of the UI."""
+        lines = "\n".join(inspect_cdp.suggest({"frames": [
+            {"frame_url": "about:blank", "entry": [], "submit": [], "output": []},
+        ]}))
+        assert "not the panel" in lines
+        assert "--remote-debugging-port=0" in lines
+
+    def test_real_frames_with_nothing_in_them_is_a_different_answer(self):
+        """A frame that loaded something but offers no controls we recognise
+        is not the same finding, and must not be reported as the same one."""
+        lines = "\n".join(inspect_cdp.suggest({"frames": [
+            {"frame_url": "https://example.com/leo", "entry": [], "submit": [],
+             "output": []},
+        ]}))
+        assert "nothing in them takes typing" in lines
+        assert "--remote-debugging-port=0" not in lines, \
+            "that is the other diagnosis, and offering both is offering neither"

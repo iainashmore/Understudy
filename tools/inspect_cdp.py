@@ -146,7 +146,7 @@ def inspect(cdp_url: str, out_dir: Path, shots: bool) -> dict[str, Any]:
                 page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
-            print(f"\npage {index}: {page.url}")
+            print(f"\npage {index}: {page.url}  ({len(page.frames)} frame(s))")
             if shots:
                 try:
                     page.screenshot(path=str(out_dir / f"page-{index}.png"))
@@ -164,10 +164,22 @@ def inspect(cdp_url: str, out_dir: Path, shots: bool) -> dict[str, Any]:
 
                 counts = {role: len(found.get(role) or []) for role in
                           ("entry", "submit", "output")}
+                where = "  main frame" if frame is page.main_frame else "  iframe"
                 if not any(counts.values()):
+                    # Said out loud. "No frames at all" and "frames holding
+                    # nothing I recognise" are completely different findings,
+                    # and staying silent about the second makes them look the
+                    # same to whoever is reading this on the workstation.
+                    print(f"{where}  {found['url'][:90]}  "
+                          f"-- nothing recognisable in it")
+                    report["frames"].append({
+                        "page": index, "page_url": page.url,
+                        "frame_url": found["url"], "title": found.get("title", ""),
+                        "is_main_frame": frame is page.main_frame,
+                        "entry": [], "submit": [], "output": [], "empty": True,
+                    })
                     continue
 
-                where = "  main frame" if frame is page.main_frame else "  iframe"
                 print(f"{where}  {found['url'][:90]}")
                 if found.get("title"):
                     print(f"    title: {found['title']!r}")
@@ -203,10 +215,19 @@ def suggest(report: dict[str, Any]) -> list[str]:
     a starting point to write.
     """
     frame = next((f for f in report["frames"] if f.get("entry")), None)
-    if not frame:
-        return ["Nothing that takes typing was found. If LEO's panel was not open",
-                "when this ran, open it and run again -- an unopened panel has no",
-                "DOM to inspect."]
+    if frame:
+        pass
+    elif any(f.get("frame_url") not in ("", "about:blank")
+             for f in report["frames"]):
+        return ["Frames were found, but nothing in them takes typing. Either the",
+                "panel is not one of these, or its controls are drawn in a way",
+                "this does not recognise -- send elements.json and a screenshot."]
+    else:
+        return ["Nothing but blank frames here, so this endpoint is not the panel.",
+                "If several WebView2 hosts were told to use one debugging port,",
+                "only the first got it and the rest have none. Relaunch with",
+                "--remote-debugging-port=0 so each takes its own, then run",
+                "probe_native.py to find them all."]
 
     lines = ["targets:"]
     lines += ["  prompt_box:", "    intent: the box the question is typed into",
