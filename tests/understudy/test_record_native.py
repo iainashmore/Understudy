@@ -350,3 +350,18 @@ class TestSeeingBothEnds:
         session.finish()
         assert (screens / "before-reply.png").read_bytes() != \
                (screens / "end.png").read_bytes()
+
+
+def test_the_description_names_the_window_not_the_flow(session, tmp_path):
+    """The title is what the flow is about; the description is what it was
+    recorded against. Both were the same string, so it read "Leo basics,
+    recorded against Leo basics"."""
+    import yaml
+
+    click(session, 280, 130)
+    path = record_native.write(session, "leo-basics", "Leo basics", tmp_path,
+                               {"window_title_pattern": "3DEXPERIENCE"},
+                               description="Recorded against 3DEXPERIENCE")
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert document["title"] == "Leo basics"
+    assert document["description"] == "Recorded against 3DEXPERIENCE"

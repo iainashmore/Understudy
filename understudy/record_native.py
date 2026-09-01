@@ -347,14 +347,15 @@ def saver(out_dir: Path, name: str):
 
 
 def write(session: Session, name: str, title: str, out_dir: Path,
-          app_config: dict[str, Any]) -> Path:
+          app_config: dict[str, Any], description: str = "") -> Path:
     """The flow, and its anchors beside it where the flow looks for them."""
     import json
 
     import yaml
 
     document = session.recorder.flow(name, title, app_config,
-                                     read_region=session.read_region)
+                                     read_region=session.read_region,
+                                     description=description)
     out_dir.mkdir(parents=True, exist_ok=True)
     anchors = out_dir / "anchors" / name
     anchors.mkdir(parents=True, exist_ok=True)
@@ -402,7 +403,8 @@ def finish_and_write(session: Session, name: str, title: str,
     session.finish()
     name_clicks(session)
     return write(session, name, readable(name), out_dir,
-                 app_config_for(title, process))
+                 app_config_for(title, process),
+                 description=f"Recorded against {title}")
 
 
 def record(title: str, process: str | None, name: str, out_dir: Path,
